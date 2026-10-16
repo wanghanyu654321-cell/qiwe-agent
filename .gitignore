@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.local/
+data/
+.env
+.env.*
+*.sqlite
+*.sqlite-*
+*.log

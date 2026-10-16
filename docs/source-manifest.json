@@ -1,0 +1,78 @@
+{
+  "recordedAt": "2026-10-17",
+  "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
+  "sourceState": "baseline plus reviewed T0/T1 working-tree changes; no source history imported",
+  "normalization": "CRLF normalized to LF; source and export content otherwise identical",
+  "files": [
+    {
+      "path": "src/role-eval/file-journal.ts",
+      "sha256": "a053379774e49a7e5d3fad8bfe0579e95f781cb331b07aaa51049cf9b7dbcc91",
+      "sourceSha256": "ab0cd782aae292a235d982d01e2b594eb261ea0dcc3030ce6a109719b968a209"
+    },
+    {
+      "path": "src/role-eval/install.ts",
+      "sha256": "9d2e221aebbc115546cd233e53391b630fae28a8d846fdabfbbf6631ee8fad50",
+      "sourceSha256": "92f893d7c24e8f3d9e467f653666310b5000ff6327467d0f071bc9bfe9163137"
+    },
+    {
+      "path": "src/role-eval/native-bot-identity.ts",
+      "sha256": "cabf7176e1ca18cb8ed1d2dc1b3e34f6967b4f497a23148f00ef873d1199499f",
+      "sourceSha256": "cabf7176e1ca18cb8ed1d2dc1b3e34f6967b4f497a23148f00ef873d1199499f"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-bindings.ts",
+      "sha256": "8722bed9135c6f1ab350ba5d38a124afc2ad2019ba4018c36c9f94e91407b288",
+      "sourceSha256": "8722bed9135c6f1ab350ba5d38a124afc2ad2019ba4018c36c9f94e91407b288"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-context.ts",
+      "sha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71",
+      "sourceSha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71"
+    },
+    {
+      "path": "src/role-eval/workbench-access.ts",
+      "sha256": "28946f71d4b25344dd9bb4a282ac894ea5d7a7e639ec3481eb377a22f61d20ee",
+      "sourceSha256": "cd041d5c65c85066572b8ebdb6d51ed91296a8d5b20fd3cfca26977b4c346390"
+    },
+    {
+      "path": "src/role-eval/workbench-authority.ts",
+      "sha256": "d7a1d4c1617b0dbeb49be707c93a6b1148841e39dfb92a8f3284c3662bc30623",
+      "sourceSha256": "78f086b9182d637608fa0f86061eb10f9ca6af0e7bd439bcb715e4aa966fee47"
+    },
+    {
+      "path": "src/role-eval/workbench-opening.ts",
+      "sha256": "595407cfe276336519d35acd86f7f18a9ef47b9621a8388ae231912ede5c2f0c",
+      "sourceSha256": "66a906008f7d68c1c465493624eaf0fd80aa92d4cc3f1769aa75bf673bdcdbe2"
+    },
+    {
+      "path": "src/role-eval/workspace-access.ts",
+      "sha256": "887c62068533adc1501214467266988e9b114cc597d3f8aa449af18eb9c5404b",
+      "sourceSha256": "b7f07dab43fbd0c8bc91af8b6047d06ef2bb987821e4e107bc3483785c3bde6d"
+    },
+    {
+      "path": "tests/role-eval/native-bot-identity.test.ts",
+      "sha256": "a333b284ebb1b340a074b7c0a66d8ff78545126d1048df40f3d5572d1ff4dc92",
+      "sourceSha256": "a333b284ebb1b340a074b7c0a66d8ff78545126d1048df40f3d5572d1ff4dc92"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-context.test.ts",
+      "sha256": "3238218db1dc687fd3e9b6a2dad2eabf48f83690a94f4f028c9eb751034e8812",
+      "sourceSha256": "fe7b7e8bfc02dcf29354f09de34bc17edf7a45772ad6b11dc6072097c67bb1c8"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-identity-integration.test.ts",
+      "sha256": "c568d40fa530577715d74b8d3f62443c3f47d70ecc068990385cec0be7e2c847",
+      "sourceSha256": "c568d40fa530577715d74b8d3f62443c3f47d70ecc068990385cec0be7e2c847"
+    },
+    {
+      "path": "tests/role-eval/workbench-access.test.ts",
+      "sha256": "77be3cc0f19b90a5d47116def579c707f7192f81058e5b1a92ad386bb276dad0",
+      "sourceSha256": "5a45fa8e3857ec189fa577dbc3ebcdcad1e7709ad51dd284551de9aca219ebdd"
+    },
+    {
+      "path": "tests/role-eval/workbench-opening.test.ts",
+      "sha256": "bd424647f8ef1cf7285faa10bad31abc52ff935534bae703a3f86434115f9452",
+      "sourceSha256": "b404912c496d44f82ce3a847c1c843030158e35246609a2be6a3cf18f98d3445"
+    }
+  ]
+}
