@@ -40,6 +40,6 @@ it('reopens the explicit original ledger, grant and Native databases and queries
   writer.exec("UPDATE users SET status='active',must_change_password=1 WHERE id='account'");await expect(app.handler.handle(request())).rejects.toThrow('access_denied');
   writer.exec("UPDATE users SET must_change_password=0 WHERE id='account'; UPDATE registered_groups SET execution_mode='host'");await expect(app.handler.handle(request())).rejects.toThrow('authority_unavailable');
   writer.exec("UPDATE registered_groups SET execution_mode='container'");
-  const inspector=new DatabaseSync(join(directory,'existing-reports.sqlite'),{readOnly:true});try{expect(inspector.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([{name:'employee_reports'}]);}finally{inspector.close();}
+  const inspector=new DatabaseSync(join(directory,'existing-reports.sqlite'),{readOnly:true});try{expect(inspector.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()).toEqual([{name:'bot_reply_intents'},{name:'employee_reports'}]);}finally{inspector.close();}
  }finally{app.close();writer.close();rmSync(directory,{recursive:true,force:true});}
 });

@@ -2,6 +2,8 @@
 
 时间：2026-10-17，UTC+8。仓库：`wanghanyu654321-cell/qiwe-agent`；分支：`feat/wecom-report-t2`；基线：`2590fa5f7dcca42a31ded5daf5ed2dbcc23da643`。当前源码指纹见[source-manifest.json](source-manifest.json)。
 
+本记录保留T2交付时点结果。后续T3同库回复元数据、发送合成适配和当前验证见[t3-acceptance.md](t3-acceptance.md)；来源清单记录当前版本，旧哈希通过Git基线及清单历史字段追溯。
+
 ## 已验证的范围
 
 | 条件 | 本地证据 |
