@@ -1,22 +1,28 @@
 import {createHash} from 'node:crypto';
-import type {ManagerStore,StaffContext,StaffReport} from './manager-store.js';
+import type {ManagerStore,StaffContext,StaffReport,BotReplyAttachment} from './manager-store.js';
+import type {ManagerArtifactStore,ManagerSnapshot,ManagerArtifact} from './manager-artifacts.js';
+import {parseManagerCommand} from './manager-commands.js';
+import {botDeliveryNotice} from './wecom-bot-notice.js';
 import type {BotContextRequest,WecomBotContext,createWecomBotContext} from './wecom-bot-context.js';
 import {normalizeBotFrame,type BotEvent,type BotReplyPlan} from './wecom-bot-transport.js';
 export interface BotReportOptions {
  mode:'isolated-synthetic';authority:ReturnType<typeof createWecomBotContext>;ledger:ManagerStore;
+ artifacts?:ManagerArtifactStore;
  scope:{tenant:string;store:string;workspace:string};
  employees:readonly {accountId:string;employeeId:string;employeeName:string}[];
  /** Already authenticated SDK callback snapshot, never an HTTP/client payload. Synchronous and bounded by caller. */
  readEvent():unknown;now?:()=>Date;
- /** Trusted synchronous event reservation, after authority and before any business work. */
- beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):void;
+ /** Trusted synchronous reservation; a persisted file result can short-circuit regeneration on replay. */
+ beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):BotReportResult|void;
 }
-export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict';reportId?:string;reply:BotReplyPlan;}
+export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;reply:BotReplyPlan;}
 export interface BotReplyExecution {context:WecomBotContext;event:BotEvent;actor:StaffContext;result:BotReportResult;}
 export function createBotReportHandler(options:BotReportOptions){
  const valid=(s:unknown):s is string=>typeof s==='string'&&!!s.trim()&&s.length<=120&&!/[\u0000-\u001f]/.test(s);
  if(options.mode!=='isolated-synthetic'||!options.scope||Object.values(options.scope).length!==3||!['tenant','store','workspace'].every(k=>valid(Reflect.get(options.scope,k)))||!Array.isArray(options.employees)||!options.employees.length||options.employees.some(p=>!p||![p.accountId,p.employeeId,p.employeeName].every(valid))||new Set(options.employees.map(p=>p.accountId)).size!==options.employees.length||new Set(options.employees.map(p=>p.employeeId)).size!==options.employees.length)throw Error('invalid_report_catalog');
- const scope={...options.scope},employees=structuredClone(options.employees),{authority,ledger,readEvent,beforeWork}=options,now=options.now??(()=>new Date());
+ const scope={...options.scope},employees=structuredClone(options.employees),{authority,ledger,artifacts,readEvent,beforeWork}=options,now=options.now??(()=>new Date());
+ const roster=employees.map(e=>({...scope,employeeId:e.employeeId,employeeName:e.employeeName}));
+ const money=(cents:number|null)=>cents===null?'未知':`${cents<0?'-':''}${Math.trunc(Math.abs(cents)/100)}.${String(Math.abs(cents)%100).padStart(2,'0')}元`;
  const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
  const issued=new WeakMap<object,BotReplyExecution>();
  const resolveActor=(context:WecomBotContext):StaffContext=>{
@@ -47,14 +53,22 @@ export function createBotReportHandler(options:BotReportOptions){
   const view=(r:StaffReport):BotReportResult=>{
    const complete=r.proposed.items.length>0&&r.proposed.items.length<=10&&r.proposed.missing.length===0;
    const items=r.state==='confirmed'?r.entries:r.proposed.items;
-   const content=[r.state==='confirmed'?'已入账':'待核对，尚未入账',...items.map(i=>`${i.kind==='sales'?'销售成交':'目标'} ${i.start}至${i.end} ${Math.trunc(i.amountCents/100)+'.'+String(i.amountCents%100).padStart(2,'0')}元（${i.mode==='increment'?'新增':'期间快照'}）`),...(!complete&&r.state==='pending'?['缺少或需核对：'+(r.proposed.missing.join('、')||'有效报数项目'),'请发送完整新报数；此条不会自动入账。']:[]),`报告编号：${r.id}`,`查回：查询 ${r.id}`].join('\n');
+   const replaced=r.state==='confirmed'?ledger.supersededEntryIds(actor,r.id):[];
+   const content=[r.state==='confirmed'?'已入账':'待核对，尚未入账',...(replaced.length?['部分或全部原明细已更正，原金额为历史记录，不再重复累计。']:[]),...(r.correction?[`更正原金额：${money(r.correction.previousAmountCents)}；新金额：${money(items[0]!.amountCents)}`]:[]),...items.map((i,index)=>`${index+1}. ${i.kind==='sales'?'销售成交':'目标'} ${i.start}至${i.end} ${money(i.amountCents)}（${i.mode==='increment'?'新增':'期间快照'}）`),...(!complete&&r.state==='pending'?['缺少或需核对：'+(r.proposed.missing.join('、')||'有效报数项目'),'请发送完整新报数；此条不会自动入账。']:[]),`报告编号：${r.id}`,`查回：查询 ${r.id}`].join('\n');
    return plan(r.state==='confirmed'?'confirmed':complete?'pending':'needs-input',content,r,r.state==='pending'&&complete);
   };
   const owned=(id:string)=>{const r=ledger.getReport(actor,id);return r&&(!r.botSource||r.botSource.accountId===context.identity.accountId)&&(!r.source||r.source.accountId===context.identity.accountId)?r:undefined;};
+  const owner={accountId:context.identity.accountId,actor};
+  const summaryView=(s:ManagerSnapshot):BotReportResult=>{
+   const file=ledger.getBotFileReply(actor,s.snapshotHash,{...context.channel,accountId:context.identity.accountId,workspaceJid:context.identity.workspaceJid,storeId:context.identity.storeId});
+   return {...plan('summary',[`经营汇总 ${s.period.start}至${s.period.end}`,'口径：销售成交额；不等于实收、充值或余额消耗。',`销售成交：${money(s.salesCents)}`,`目标：${money(s.targetCents)}`,`达成率：${s.rate===null?'未知':(s.rate*100).toFixed(2)+'%'}`,`差额：${money(s.varianceCents)}`,`期间覆盖：${s.coverage==='complete'?'完整':'部分，请核对缺报及跨期数据'}`,`快照编号：${s.snapshotHash}`,`文件投递：${file?botDeliveryNotice(file.delivery):'尚无当前成员的投递记录'}`,`查询汇总 ${s.snapshotHash}（查回汇总及文件投递状态，不会重发文件）`,`导出Excel ${s.snapshotHash}`,`查询文件 ${s.snapshotHash}（明确请求再次取得已有文件）`].join('\n')),snapshotId:s.snapshotHash};
+  };
+  const fileView=(info:ManagerArtifact):BotReportResult=>({...plan('file',`文件：${info.filename}\n快照编号：${info.snapshotHash}\n查询文件 ${info.snapshotHash}`),snapshotId:info.snapshotHash,attachment:{...info}});
+  let exportSnapshot:string|undefined;
   let result:BotReportResult;
   try{
    result=await authority.withCurrent(context,checkActive=>{
-    beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();
+    const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay)return structuredClone(replay);
     if(event.action.kind==='confirm'){
      const r=owned(event.action.reportId);if(!r)return plan('not-found','未找到你有权访问的报告，请核对报告编号。');
      if(r.hash!==event.action.hash)return plan('conflict',`报告版本不一致，未变更入账结果。请发送：查询 ${r.id}`);
@@ -62,6 +76,16 @@ export function createBotReportHandler(options:BotReportOptions){
      return view(ledger.confirm(actor,r.id,r.hash,r.proposed.items,checkActive));
     }
     const text=event.action.text.trim();
+    const command=parseManagerCommand(text);
+    if(command?.kind==='invalid')return plan('needs-input',command.message);
+    if(command&&command.kind!=='correction'){
+     if(!artifacts)return plan('needs-input','汇总和文件服务暂不可用，请稍后重试。');
+     if(command.kind==='summary')return summaryView(artifacts.save(owner,ledger.summary(actor,command.date,command.period,roster),checkActive));
+     const saved=artifacts.read(owner,command.snapshotId);if(!saved)return plan('not-found','未找到你有权访问的汇总快照，请核对完整编号。');
+     if(command.kind==='snapshot')return summaryView(saved);
+     if(command.kind==='file'){const file=artifacts.artifact(owner,command.snapshotId);return file?fileView(file.info):plan('not-found','此快照尚无可用文件，请先发送“导出Excel 快照编号”；已有文件不可用时请联系管理员核实。');}
+     exportSnapshot=command.snapshotId;return plan('needs-input','文件正在生成。');
+    }
     if(/^查询(?:\s|$)/.test(text)){
      const match=/^查询\s+([a-f0-9]{64})$/.exec(text);if(!match)return plan('needs-input','请发送“查询 报告编号”，使用原消息中的完整编号。');
      const r=owned(match[1]!);checkActive();return r?view(r):plan('not-found','未找到你有权访问的报告，请核对报告编号。');
@@ -69,11 +93,19 @@ export function createBotReportHandler(options:BotReportOptions){
     const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(event.createTime===undefined?now():new Date(event.createTime*1000));
     const channel=context.channel,source={kind:'wecom-bot' as const,corpId:channel.corpId,botId:channel.botId,memberId:channel.memberId,messageId:event.messageId,accountId:context.identity.accountId,workspaceJid:context.identity.workspaceJid,storeId:context.identity.storeId,bindingVersion:channel.bindingVersion,...(event.createTime!==undefined?{createTime:event.createTime}:{})};
     const key='bot-'+hash(JSON.stringify([source.corpId,source.botId,source.memberId,source.messageId]));
+    if(command?.kind==='correction')return view(ledger.receiveBotCorrection(actor,key,text,date,source,command.reportId,command.entryIndex,command.amountCents,checkActive));
     return view(ledger.receiveBot(actor,key,event.action.text,date,source,checkActive));
    });
+   if(exportSnapshot){const id=exportSnapshot;result=fileView(await artifacts!.export(owner,id,input,async()=>{
+    await authority.assertCurrent(context);
+    await authority.withCurrent(context,guard=>{const saved=artifacts!.read(owner,id);if(!saved)throw Error('artifact_unavailable');if(ledger.summary(actor,saved.period.start,saved.kind,roster).snapshotHash!==id)throw Error('snapshot_changed');guard();});
+   }));}
   }catch(error){
    const code=error instanceof Error?error.message:'';
-   if(['message_conflict','overlapping_report','confirmation_conflict','correction_conflict','report_version_conflict'].includes(code))result=plan('conflict','该消息或期间与已有记录冲突，未重复入账。请查询原报告；更正流程尚未在本阶段接入。');
+   if(['message_conflict','overlapping_report','confirmation_conflict','correction_conflict','report_version_conflict'].includes(code))result=plan('conflict','该消息或期间与已有记录冲突，未重复入账。请查询原报告，使用当前有效报告编号与明细序号发起更正。');
+   else if(code==='invalid_correction_reference')result=plan('needs-input','请核对本人已确认报告的完整编号、明细序号和新金额。');
+   else if(code==='snapshot_changed')result=plan('conflict','原汇总之后账本已变化，未发送文件。请重新发送经营汇总指令，按新快照导出；旧汇总仍可查询。');
+   else if(['artifact_unavailable','artifact_snapshot_conflict','workbook_failed','invalid_workbook','invalid_workbook_size','no_confirmed_sales_data'].includes(code))result=plan('needs-input','文件尚未发送。请核对已确认报数；汇总或文件不可用时联系管理员核实，可继续在企微查询原报告和汇总。');
    else if(['authority_cancelled','authority_timeout','context_closed','access_changed','access_denied','authority_unavailable','bot_reply_conflict','invalid_bot_reply'].includes(code))throw Error(code);
    else throw Error('report_unavailable');
   }

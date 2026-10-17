@@ -11,12 +11,14 @@ export interface ReportDelivery {id:string;confirmationHash:string;state:'prepar
 export type DeliveryOutcome=Pick<ReportDelivery,'state'|'apiErrorCode'|'msgid'|'detail'>&{ackReqId?:string};
 export interface BotReplyTarget {corpId:string;botId:string;memberId:string;accountId:string;workspaceJid:string;storeId:string;bindingVersion:number;}
 export interface BotReplyReservation {id:string;fingerprint:string;target:BotReplyTarget;reqId:string;}
-export interface BotReplySeed {id:string;fingerprint:string;target:BotReplyTarget;reply:BotReplyPlan;reportId?:string;confirmation?:{reportId:string;deliveryId:string};}
+export interface BotReplyAttachment {snapshotHash:string;sha256:string;filename:string;byteLength:number;}
+export interface BotReplySeed {id:string;fingerprint:string;target:BotReplyTarget;reply:BotReplyPlan;reportId?:string;confirmation?:{reportId:string;deliveryId:string};attachment?:BotReplyAttachment;}
 export interface BotReplyIntent extends BotReplySeed {actor:StaffContext;delivery:ReportDelivery;reportAttempt?:number;}
 interface ReservedBotReply {phase:'reserved';id:string;fingerprint:string;target:BotReplyTarget;actor:StaffContext;reply:{reqId:string};}
 type StoredBotReply=BotReplyIntent|ReservedBotReply;
 const reserved=(row:StoredBotReply):row is ReservedBotReply=>'phase' in row&&row.phase==='reserved';
-export interface StaffReport {id:string;actor:StaffContext;messageId:string;text:string;date:string;hash:string;state:'pending'|'confirmed';proposed:ReturnType<typeof parseStaffReport>;entries:ConfirmedEntry[];createdAt:string;confirmationHash?:string;source?:StaffReportSource;botSource?:BotReportSource;delivery?:ReportDelivery;}
+export interface StaffReport {id:string;actor:StaffContext;messageId:string;text:string;date:string;hash:string;state:'pending'|'confirmed';proposed:ReturnType<typeof parseStaffReport>;entries:ConfirmedEntry[];createdAt:string;confirmationHash?:string;source?:StaffReportSource;botSource?:BotReportSource;delivery?:ReportDelivery;correction?:{reportId:string;entryId:string;previousAmountCents:number};}
+interface CorrectionReference {reportId:string;entryIndex:number;amountCents:number;}
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const digest=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const bounded=(v:unknown,max:number):v is string=>typeof v==='string'&&!!v.trim()&&v.length<=max&&!/[\u0000-\u001f]/.test(v);
@@ -31,7 +33,7 @@ function replyReservation(raw:BotReplyReservation):BotReplyReservation {
 }
 function replySeed(raw:BotReplySeed):BotReplySeed {
  let input:BotReplySeed;try{input=structuredClone(raw);}catch{throw Error('invalid_bot_reply');}
- if(!onlyKeys(input,['id','fingerprint','target','reply','reportId','confirmation'])||!digest(input.id)||!digest(input.fingerprint)||input.reportId!==undefined&&!digest(input.reportId))throw Error('invalid_bot_reply');
+ if(!onlyKeys(input,['id','fingerprint','target','reply','reportId','confirmation','attachment'])||!digest(input.id)||!digest(input.fingerprint)||input.reportId!==undefined&&!digest(input.reportId))throw Error('invalid_bot_reply');
  const target=input.target,reply=input.reply;
  validReplyTarget(target);
  if(!onlyKeys(reply,['reqId','body'])||!bounded(reply.reqId,200)||!onlyKeys(reply.body,['msgtype','stream','template_card']))throw Error('invalid_bot_reply');
@@ -41,7 +43,15 @@ function replySeed(raw:BotReplySeed):BotReplySeed {
   if(!onlyKeys(card,['card_type','main_title','task_id','button_list'])||card.card_type!=='button_interaction'||!onlyKeys(card.main_title,['title'])||!bounded(card.main_title.title,200)||!bounded(card.task_id,200)||!Array.isArray(card.button_list)||card.button_list.length<1||card.button_list.length>6||card.button_list.some(b=>!onlyKeys(b,['text','key','style'])||!bounded(b.text,200)||!bounded(b.key,200)||b.style!==1))throw Error('invalid_bot_reply');
  }else if(card!==undefined)throw Error('invalid_bot_reply');
  if(input.confirmation!==undefined&&(!onlyKeys(input.confirmation,['reportId','deliveryId'])||!digest(input.confirmation.reportId)||!digest(input.confirmation.deliveryId)||input.confirmation.reportId!==input.reportId))throw Error('delivery_conflict');
+ const file=input.attachment;
+ if(file!==undefined&&(!onlyKeys(file,['snapshotHash','sha256','filename','byteLength'])||!digest(file.snapshotHash)||!digest(file.sha256)||file.filename!=='sales-'+file.snapshotHash+'.xlsx'||!Number.isSafeInteger(file.byteLength)||file.byteLength<5||file.byteLength>20_000_000))throw Error('invalid_bot_reply');
  return input;
+}
+function botReportSource(raw:BotReportSource):BotReportSource {
+ let source:BotReportSource;try{source=structuredClone(raw);}catch{throw Error('invalid_bot_source');}
+ const keys=['kind','corpId','botId','memberId','messageId','accountId','workspaceJid','storeId','bindingVersion','createTime'];
+ if(!source||source.kind!=='wecom-bot'||Object.keys(source).some(k=>!keys.includes(k))||[source.corpId,source.botId,source.memberId,source.messageId,source.accountId,source.workspaceJid,source.storeId].some(v=>typeof v!=='string'||!v.trim())||!Number.isSafeInteger(source.bindingVersion)||source.bindingVersion<1||source.createTime!==undefined&&(!Number.isSafeInteger(source.createTime)||source.createTime<0))throw Error('invalid_bot_source');
+ return source;
 }
 function deliveryOutcome(raw:DeliveryOutcome):DeliveryOutcome {
  let result:DeliveryOutcome;try{result=structuredClone(raw);}catch{throw Error('delivery_conflict');}
@@ -73,11 +83,13 @@ export class ManagerStore {
   return this.receiveInternal(actor,messageId,text,date,source,checkActive);
  }
  receiveBot(actor:StaffContext,messageId:string,text:string,date:string,source:BotReportSource,checkActive?:()=>void):StaffReport {
-  const keys=['kind','corpId','botId','memberId','messageId','accountId','workspaceJid','storeId','bindingVersion','createTime'];
-  if(!source||source.kind!=='wecom-bot'||Object.keys(source).some(k=>!keys.includes(k))||[source.corpId,source.botId,source.memberId,source.messageId,source.accountId,source.workspaceJid,source.storeId].some(v=>typeof v!=='string'||!v.trim())||!Number.isSafeInteger(source.bindingVersion)||source.bindingVersion<1||source.createTime!==undefined&&(!Number.isSafeInteger(source.createTime)||source.createTime<0))throw Error('invalid_bot_source');
-  return this.receiveInternal(actor,messageId,text,date,undefined,checkActive,{...source});
+  return this.receiveInternal(actor,messageId,text,date,undefined,checkActive,botReportSource(source));
  }
- private receiveInternal(actor:StaffContext,messageId:string,text:string,date:string,source?:StaffReportSource,checkActive?:()=>void,botSource?:BotReportSource):StaffReport {
+ receiveBotCorrection(actor:StaffContext,messageId:string,text:string,date:string,source:BotReportSource,originalId:string,entryIndex:number,amountCents:number,checkActive?:()=>void):StaffReport {
+  if(!digest(originalId)||!Number.isSafeInteger(entryIndex)||entryIndex<0||entryIndex>9||!Number.isSafeInteger(amountCents)||amountCents<0)throw Error('invalid_correction_reference');
+  return this.receiveInternal({...actor},messageId,text,date,undefined,checkActive,botReportSource(source),{reportId:originalId,entryIndex,amountCents});
+ }
+ private receiveInternal(actor:StaffContext,messageId:string,text:string,date:string,source?:StaffReportSource,checkActive?:()=>void,botSource?:BotReportSource,reference?:CorrectionReference):StaffReport {
   const s=scope(actor);if(!/^[A-Za-z0-9_-]{1,100}$/.test(messageId))throw Error('invalid_message_id');
   const id=hash(s+'|'+actor.employeeId+'|'+messageId);
   checkActive?.();this.db.exec('BEGIN IMMEDIATE');try{
@@ -87,13 +99,32 @@ export class ManagerStore {
    const originals=botSource?this.db.prepare("SELECT body FROM employee_reports WHERE json_extract(body,'$.botSource.kind')=? AND json_extract(body,'$.botSource.corpId')=? AND json_extract(body,'$.botSource.botId')=? AND json_extract(body,'$.botSource.memberId')=? AND json_extract(body,'$.botSource.messageId')=?").all(botSource.kind,botSource.corpId,botSource.botId,botSource.memberId,botSource.messageId) as {body:string}[]:source?this.db.prepare("SELECT body FROM employee_reports WHERE scope=? AND json_extract(body,'$.source.kind')=? AND json_extract(body,'$.source.corpId')=? AND json_extract(body,'$.source.agentId')=? AND json_extract(body,'$.source.memberId')=? AND json_extract(body,'$.source.messageId')=?").all(s,source.kind,source.corpId,source.agentId,source.memberId,source.messageId) as {body:string}[]:[];
    if(originals.length>1)throw Error('message_conflict');
    const original=originals[0],existing=original?JSON.parse(original.body) as StaffReport:this.get(actor,id);
-   if(existing){if(existing.actor.employeeId!==actor.employeeId||existing.messageId!==messageId||existing.text!==text||!isDeepStrictEqual(existing.source,source)||botSource&&(scope(existing.actor)!==s||!existing.botSource||!isDeepStrictEqual({...existing.botSource,bindingVersion:0},{...botSource,bindingVersion:0}))||!botSource&&existing.botSource!==undefined)throw Error('message_conflict');checkActive?.();this.db.exec('COMMIT');return existing;}
-   const proposed=parseStaffReport(text,date),digest=hash(JSON.stringify({text,date}));
-   const r:StaffReport={id,actor:{...actor},messageId,text,date,hash:digest,state:'pending',proposed,entries:[],createdAt:new Date().toISOString(),...(source?{source:{...source}}:{}),...(botSource?{botSource:{...botSource}}:{})};
+   if(existing){if(existing.actor.employeeId!==actor.employeeId||existing.messageId!==messageId||existing.text!==text||!isDeepStrictEqual(existing.source,source)||botSource&&(scope(existing.actor)!==s||!existing.botSource||!isDeepStrictEqual({...existing.botSource,bindingVersion:0},{...botSource,bindingVersion:0}))||!botSource&&existing.botSource!==undefined||(reference?!this.matchesCorrection(existing,reference):existing.correction!==undefined))throw Error('message_conflict');checkActive?.();this.db.exec('COMMIT');return existing;}
+   // Parsing validates the shared report envelope even when correction items
+   // are constructed from an immutable, confirmed ledger entry below.
+   let proposed=parseStaffReport(text,date),correction:StaffReport['correction'];
+   if(reference){
+    const original=this.get(actor,reference.reportId),entry=original?.entries[reference.entryIndex];
+    if(!original||original.state!=='confirmed'||!entry||entry.employeeId!==actor.employeeId||(original.source||original.botSource)&&![original.source,original.botSource].some(src=>src?.accountId===botSource!.accountId)||!this.active(actor).some(e=>e.id===entry.id))throw Error('correction_conflict');
+    const items=validItems([{kind:entry.kind,start:entry.start,end:entry.end,mode:entry.mode,amountCents:reference.amountCents,supersedes:entry.id}]);
+    proposed={items,missing:[],parser:'offline-rules'};correction={reportId:original.id,entryId:entry.id,previousAmountCents:entry.amountCents};
+   }
+   const reportHash=hash(JSON.stringify(correction?{text,date,proposed,correction}:{text,date}));
+   const r:StaffReport={id,actor:{...actor},messageId,text,date,hash:reportHash,state:'pending',proposed,entries:[],createdAt:new Date().toISOString(),...(source?{source:{...source}}:{}),...(botSource?{botSource:{...botSource}}:{}),...(correction?{correction}:{})};
    this.db.prepare('INSERT INTO employee_reports VALUES (?,?,?,?)').run(id,s,actor.employeeId,JSON.stringify(r));checkActive?.();this.db.exec('COMMIT');return r;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
+ private matchesCorrection(report:StaffReport,reference:CorrectionReference):boolean {
+  const entryId=reference.reportId+':'+reference.entryIndex;
+  return report.correction?.reportId===reference.reportId&&report.correction.entryId===entryId&&report.proposed.items.length===1&&report.proposed.items[0]?.supersedes===entryId&&report.proposed.items[0].amountCents===reference.amountCents;
+ }
  getReport(actor:StaffContext,id:string):StaffReport|undefined {return this.get(actor,id);}
+ supersededEntryIds(actor:StaffContext,reportId:string):string[]{
+  if(!digest(reportId))throw Error('invalid_correction_reference');
+  const s=scope(actor);
+  const rows=this.db.prepare("SELECT json_extract(original_entry.value,'$.id') AS id FROM employee_reports original,json_each(original.body,'$.entries') original_entry WHERE original.id=? AND original.scope=? AND original.employee=? AND json_extract(original.body,'$.state')='confirmed' AND EXISTS (SELECT 1 FROM employee_reports correction,json_each(correction.body,'$.entries') correction_entry WHERE correction.scope=original.scope AND correction.employee=original.employee AND json_extract(correction.body,'$.state')='confirmed' AND json_extract(correction_entry.value,'$.supersedes')=json_extract(original_entry.value,'$.id'))").all(reportId,s,actor.employeeId) as {id:string}[];
+  return rows.map(row=>row.id);
+ }
  private get(actor:StaffContext,id:string):StaffReport|undefined {const row=this.db.prepare('SELECT body FROM employee_reports WHERE id=? AND scope=? AND employee=?').get(id,scope(actor),actor.employeeId) as {body:string}|undefined;return row?JSON.parse(row.body):undefined;}
  list(actor:StaffContext):StaffReport[]{return (this.db.prepare('SELECT body FROM employee_reports WHERE scope=? ORDER BY rowid DESC').all(scope(actor)) as {body:string}[]).map(r=>JSON.parse(r.body) as StaffReport);}
  private active(actor:StaffContext):ConfirmedEntry[]{const all=this.list(actor).filter(r=>r.state==='confirmed').flatMap(r=>r.entries);const old=new Set(all.flatMap(e=>e.supersedes?[e.supersedes]:[]));return all.filter(e=>!old.has(e.id));}
@@ -137,6 +168,15 @@ export class ManagerStore {
   const record=row?JSON.parse(row.body) as StoredBotReply:undefined;
   return record&&!reserved(record)?record:undefined;
  }
+ getBotFileReply(actor:StaffContext,snapshotHash:string,target:BotReplyTarget):BotReplyIntent|undefined {
+  let route:BotReplyTarget;try{route=structuredClone(target);}catch{throw Error('invalid_bot_reply');}
+  if(!digest(snapshotHash))throw Error('invalid_bot_reply');validReplyTarget(route);
+  const keys=['corpId','botId','memberId','accountId','workspaceJid','storeId','bindingVersion'] as const;
+  const targetMatch=keys.map(key=>`json_extract(body,'$.target.${key}')=?`).join(' AND ');
+  const row=this.db.prepare("SELECT body FROM bot_reply_intents WHERE scope=? AND employee=? AND json_extract(body,'$.attachment.snapshotHash')=? AND json_extract(body,'$.phase') IS NULL AND "+targetMatch+' ORDER BY rowid DESC LIMIT 1').get(scope(actor),actor.employeeId,snapshotHash,...keys.map(key=>route[key])) as {body:string}|undefined;
+  const record=row?JSON.parse(row.body) as StoredBotReply:undefined;
+  return record&&!reserved(record)&&isDeepStrictEqual(record.target,route)?record:undefined;
+ }
  private linkedReport(actor:StaffContext,seed:BotReplySeed):StaffReport {
   const report=seed.confirmation&&this.get(actor,seed.confirmation.reportId),src=report?.botSource;
   if(!report||report.state!=='confirmed'||!src||!report.delivery||report.delivery.confirmationHash!==report.confirmationHash||seed.confirmation!.reportId!==seed.reportId||report.delivery.id!==seed.confirmation!.deliveryId||!isDeepStrictEqual({corpId:src.corpId,botId:src.botId,memberId:src.memberId,accountId:src.accountId,workspaceJid:src.workspaceJid,storeId:src.storeId,bindingVersion:src.bindingVersion},seed.target))throw Error('delivery_conflict');
@@ -168,7 +208,7 @@ export class ManagerStore {
    const record=row?JSON.parse(row.body) as StoredBotReply:undefined;
    if(record&&(scope(record.actor)!==s||record.actor.employeeId!==owner.employeeId||record.fingerprint!==seed.fingerprint||!isDeepStrictEqual(record.target,seed.target)))throw Error('bot_reply_conflict');
    const existing=record&&!reserved(record)?record:undefined;
-   if(existing&&(existing.reportId!==seed.reportId||!isDeepStrictEqual(existing.confirmation,seed.confirmation)))throw Error('bot_reply_conflict');
+   if(existing&&(existing.reportId!==seed.reportId||!isDeepStrictEqual(existing.confirmation,seed.confirmation)||!isDeepStrictEqual(existing.attachment,seed.attachment)))throw Error('bot_reply_conflict');
    if(seed.confirmation)this.linkedReport(owner,seed);
    const refresh=!existing||['prepared','blocked'].includes(existing.delivery.state);
    if(refresh&&this.db.prepare("SELECT id FROM bot_reply_intents WHERE id<>? AND json_extract(body,'$.reply.reqId')=? LIMIT 1").get(seed.id,seed.reply.reqId))throw Error('bot_reply_conflict');

@@ -3,19 +3,23 @@ import {createBotReportHandler,type BotReportOptions,type BotReportResult} from 
 import type {BotContextRequest} from './wecom-bot-context.js';
 import type {ReportDelivery} from './manager-store.js';
 import type {createBotSender} from './wecom-bot-sender.js';
+import {parseManagerCommand} from './manager-commands.js';
+import {botDeliveryNotice} from './wecom-bot-notice.js';
+export {botDeliveryNotice} from './wecom-bot-notice.js';
 export interface BotDeliveryResult {result:BotReportResult;delivery:ReportDelivery|null;reportDelivery?:ReportDelivery;deferred?:boolean;suppressed?:boolean;}
-export function botDeliveryNotice(delivery:ReportDelivery):string{
- return {prepared:'通知待投递',blocked:'明确尚未发送，可在恢复后重试',attempting:'通知正在尝试或中途退出，请勿重复投递',accepted:'平台已受理，不代表手机实收',rejected:'平台已拒绝，请核实原因；不会自动重发',unknown:'通知结果未知，请勿重复投递；可继续查询入账结果'}[delivery.state];
-}
 export function createBotDelivery(options:BotReportOptions&{sender:ReturnType<typeof createBotSender>}){
- const {ledger,authority,sender}=options;let closed=false;
+ const {ledger,authority,sender,artifacts}=options;let closed=false;
+ const roster=structuredClone(options.employees).map(e=>({...options.scope,employeeId:e.employeeId,employeeName:e.employeeName}));
  const hash=(text:string)=>createHash('sha256').update(text).digest('hex');
  const checkOpen=()=>{if(closed)throw Error('delivery_closed');};
  const eventSeed=(value:Parameters<NonNullable<BotReportOptions['beforeWork']>>[0])=>{
   const c=value.context.channel,i=value.context.identity,event=value.event;
   return {id:hash(JSON.stringify([c.corpId,c.botId,c.memberId,event.messageId])),fingerprint:hash(JSON.stringify([event.botId,event.memberId,event.messageId,event.createTime??null,event.action])),target:{...c,accountId:i.accountId,workspaceJid:i.workspaceJid,storeId:i.storeId}};
  };
- const handler=createBotReportHandler({...options,beforeWork:(value,guard)=>{checkOpen();ledger.reserveBotReply({...value.actor},{...eventSeed(value),reqId:value.event.reqId},guard);}});
+ const handler=createBotReportHandler({...options,beforeWork:(value,guard)=>{
+  checkOpen();const seed=eventSeed(value);ledger.reserveBotReply({...value.actor},{...seed,reqId:value.event.reqId},guard);
+  const previous=ledger.getBotReply(value.actor,seed.id);if(previous?.attachment)return {status:'file',snapshotId:previous.attachment.snapshotHash,attachment:{...previous.attachment},reply:structuredClone(previous.reply)};
+ }});
  return {
  async handle(request:BotContextRequest):Promise<BotDeliveryResult>{
   checkOpen();const input={signal:request.signal,deadline:request.deadline,correlationId:request.correlationId},result=await handler.handle(input);
@@ -26,11 +30,22 @@ export function createBotDelivery(options:BotReportOptions&{sender:ReturnType<ty
    const confirmation=event.action.kind==='confirm'&&result.status==='confirmed'&&report?.botSource&&report.delivery?{reportId:report.id,deliveryId:report.delivery.id}:undefined;
    const reply=structuredClone(value.result.reply);
    if(event.action.kind==='text'&&/^查询\s/.test(event.action.text.trim())&&report?.delivery)reply.body.stream.content+='\n原报告'+botDeliveryNotice(report.delivery);
-   const seed={...eventSeed(value),reply,...(report?{reportId:report.id}:{}),...(confirmation?{confirmation}:{})};
+   const attachment=value.result.attachment;
+   const seed={...eventSeed(value),reply,...(report?{reportId:report.id}:{}),...(confirmation?{confirmation}:{}),...(attachment?{attachment}:{})};
    await authority.withCurrent(context,guard=>{checkOpen();return ledger.prepareBotReply(actor,seed,guard);});
    const claim=await authority.withCurrent(context,guard=>{checkOpen();return ledger.claimBotReply(actor,seed.id,guard);});
    if(!claim){const delivery=ledger.getBotReply(actor,seed.id)?.delivery??null,reportDelivery=readReportDelivery();return {result,delivery,...(reportDelivery?{reportDelivery}:{}),suppressed:true};}
-   const outcome=await sender.reply(claim.reply,input,async()=>{checkOpen();await authority.assertCurrent(context);});
+   const preflight=async()=>{checkOpen();await authority.assertCurrent(context);};
+   let outcome;
+   if(claim.attachment){
+    const descriptor=claim.attachment,owner={accountId:context.identity.accountId,actor};
+    const currentFile=()=>{const file=artifacts?.artifact(owner,descriptor.snapshotHash);if(!file||file.info.sha256!==descriptor.sha256||file.info.filename!==descriptor.filename||file.info.byteLength!==descriptor.byteLength)throw Error('artifact_unavailable');return file;};
+    try{
+     const file=currentFile(),fresh=event.action.kind==='text'&&parseManagerCommand(event.action.text)?.kind==='export';
+     const filePreflight=async()=>{await preflight();await authority.withCurrent(context,guard=>{currentFile();if(fresh){const snapshot=artifacts!.read(owner,descriptor.snapshotHash);if(!snapshot||ledger.summary(actor,snapshot.period.start,snapshot.kind,roster).snapshotHash!==descriptor.snapshotHash)throw Error('snapshot_changed');}guard();});};
+     outcome=await sender.file(context.channel.memberId,descriptor.filename,file.bytes,input,filePreflight);
+    }catch{outcome={state:'blocked' as const,apiErrorCode:null,msgid:null,detail:'file_not_sent'};}
+   }else outcome=await sender.reply(claim.reply,input,preflight);
    let delivery=claim.delivery,deferred=false;
    try{delivery=ledger.finishBotReply(actor,claim.id,claim.delivery.id,claim.delivery.attempt,outcome)?.delivery??delivery;}catch{deferred=true;}
    let reportDelivery=confirmation&&report?.delivery?{...report.delivery,state:delivery.state,attempt:claim.reportAttempt!,apiErrorCode:delivery.apiErrorCode,msgid:delivery.msgid,detail:delivery.detail,...(delivery.ackReqId?{ackReqId:delivery.ackReqId}:{})}:undefined;
