@@ -1,6 +1,6 @@
 # qiwe-agent
 
-企微员工入口接入现有 Agent 与门店业务服务。本仓库当前交付 **T0–T4 本地隔离切片**：复用原账号、门店、岗位授权和经营账本，验证文字报数、卡片核对、更正、经营汇总、Excel 文件查回，以及结果回传、失败恢复和投递去重。
+企微员工入口接入现有 Agent 与门店业务服务。本仓库当前交付 **T0–T5 本地隔离切片**：复用原账号、门店、岗位授权、经营账本和培训服务，验证报数、更正、汇总、Excel，以及任务提交、进度/结果查询、精确取消和重启后查回。
 
 ## 当前可以验证什么
 
@@ -17,6 +17,8 @@
 - 本人更正先生成待核对报告，显示旧值和新值；确认后沿用原规则替代原明细，原报告仍可查回。
 - 经营汇总保存原版本编号，未知指标保留未知。复用原 Excel 双工作表模板，生成与汇总同版的实际 XLSX，经文件消息回传给当前授权成员。
 - 上传成功与文件发送分开记录；上传后再次验权和核对版本，文件发送未知时不自动重投。新请求可显式查询已有历史文件，重复平台事件不会再次上传或发送。
+- 任务按当前岗位授权，别名只映射服务端配置的原任务。提交前保存渠道引用；结果未知不自动重跑，取消受理与原运行终态分开记录。
+- 培训复用原知识审批、引用校验和持久结果，补充精确取消及迟到输出保护；仅注入合成生成函数，不连接模型。长结果可在企微按页查询。
 
 当前入口限制为 `isolated-synthetic`，企微事件及SDK方法以显式本进程合成端口注入。**尚未连接真实机器人、发送真实消息或运行原 Agent。** 员工操作和查回使用企微消息/卡片载荷，Web继续承担原管理、数据流转与审计。T3合成ACK只验证本地处理，不能视为真实平台受理或手机实收。
 
@@ -33,6 +35,14 @@
 | `查询汇总 快照编号` | 查回原版本汇总及当前成员最近文件请求的投递状态，不重发文件 |
 | `导出Excel 快照编号` | 原账本版本未变化时生成并回传该版本 Excel；已变化则提示重新汇总 |
 | `查询文件 快照编号` | 明确请求取得该版本已存在且校验完整的历史文件；不会静默生成新版 |
+| `执行任务 内容营销 weekly` | 按当前岗位授权，触发服务端预先登记的已有任务别名 |
+| `培训问答 指导员 家访练习` | 使用原培训服务和获准资料；另支持培训教案，以及执总、总指导视角 |
+| `查询任务 岗位 任务编号 [页码]` | 查原任务状态、结果和取消请求；查询不会重新执行 |
+| `取消任务 岗位 任务编号` | 核验保存的精确原运行，取消受理后继续查询终态 |
+
+岗位可用原英文键或中文名称：客服接待、前台办理、内容营销、投放辅助、店长经营、评测质检、培训。员工必须已经获得对应岗位授权，命令不能开通权限。
+
+**T5 的 Native 端口目前未连接真实运行时，默认关闭。** 原 Home 会话不能按单条消息指定岗位 Profile，因此只适配已有非 Home 岗位工作区中的原 scheduler 任务；不接受任意提示词直接运行，不创建任务或改 Home 绑定。尚未装配的任务明确拒绝。培训生成也仍由可信装配显式启用合成端口，原 HTTP 暂停/额度门禁保留。
 
 ## 本地运行
 
@@ -47,9 +57,12 @@ npm run demo
 npm run demo:report
 npm run demo:delivery
 npm run demo:operations
+npm run demo:tasks
 ```
 
 演示只使用系统临时目录中的合成数据库。`demo`验证开通与撤权；`demo:report`验证报数、确认和新进程查回；`demo:delivery`验证断线恢复和未知结果；`demo:operations`验证250元更正为200元、20%汇总、真实XLSX，以及独立进程查回同版文件和重复事件零重发。不读取本人实际数据库，不连接企微或模型。
+
+`demo:tasks`验证暂停时零触发、Native 合成事实的精确取消、原培训引用结果与迟到输出保护；新进程查回 ready/unknown/取消状态，原事件重复零执行、零发送。它使用本地合成 Native 行投影，不启动原 Agent 或第二个循环。
 
 ## 文件职责
 
@@ -65,6 +78,9 @@ npm run demo:operations
 | `wecom-bot-handler.ts` / `wecom-bot-transport.ts` | 可信事件与授权匹配、报数/本人确认/查询、官方形状回复计划 |
 | `wecom-bot-sender.ts` / `wecom-bot-delivery.ts` | 合成SDK发送、原持久通知状态、业务前事件排重、恢复及未知结果处理 |
 | `manager-commands.ts` / `manager-artifacts.ts` / `unified-workbook.ts` | 有限管理指令、按原授权作用域保存快照/文件、原Excel模板 |
+| `wecom-bot-task-commands.ts` / `wecom-bot-tasks.ts` / `wecom-bot-task-store.ts` | 岗位任务指令、可信任务调用与持久原引用，不承担调度 |
+| `native-bot-tasks.ts` | 原scheduler最小合成服务端口，校验Owner/Profile/非Home工作区/精确run/key |
+| `training-generation.ts` / `training-knowledge.ts` / `training-output.ts` | 原培训结果、审批资料和输出合同，精确取消与来源失效处理 |
 | `install.ts` / `file-journal.ts` / `workspace-access.ts` | 原开通流程依赖，保持原能力与测试兼容 |
 
 源码均位于 `src/role-eval/`。绑定与Native读取依赖是服务端端口；未来 SDK/内部进程装配必须验证调用者，不能把客户端字段、HTTP Header 或反序列化上下文当权限。
@@ -79,6 +95,8 @@ T3在原SQLite文件增加`bot_reply_intents`回复元数据表，记录事件�
 
 T4在显式注入的工件目录保存按账号/门店/原scope/员工隔离的快照、XLSX及校验元数据；这是原导出物的适配，不增加业务账本。文件投递复用原回复状态。原快照哈希只覆盖scope、period、entries及rows；跨期附录和观察时间不参与版本编号，同版缓存保留首次观察。Excel沿用原精度边界，极大数受电子表格15位有效数字限制。崩溃留下的导出锁或半文件会拒绝使用，需管理员核实后恢复，不自动覆盖。
 
-[T4验收记录](docs/t4-acceptance.md) · [T3记录](docs/t3-acceptance.md) · [T2记录](docs/t2-acceptance.md) · [T0/T1记录](docs/t0-t1-acceptance.md) · [阶段计划](docs/roadmap.md) · [源码来源](docs/source-provenance.md)
+T5在显式SQLite文件增加`bot_task_refs`渠道引用元数据，可与原报告文件共用，保存原服务请求键/run及独立取消状态；没有新调度器或Agent循环。培训仍使用原`web:local-training`业务命名空间，目录需按账号/租户/门店/Home分区，不能据此创建或替换Native工作间。取消不回滚已发生的业务副作用；跨进程不持有原培训控制器时只能报告unknown。
+
+[T5验收记录](docs/t5-acceptance.md) · [T4记录](docs/t4-acceptance.md) · [T3记录](docs/t3-acceptance.md) · [T2记录](docs/t2-acceptance.md) · [T0/T1记录](docs/t0-t1-acceptance.md) · [阶段计划](docs/roadmap.md) · [源码来源](docs/source-provenance.md)
 
 本仓库是从原工程精选导出的可独立验证切片，包含必要复用源码、测试和说明。完整原产品继续保留在原工程；私有历史、Native基座原件、课程资料、生产配置和真实数据均不在本仓库。原产品生产状态不因本次提交改变。
