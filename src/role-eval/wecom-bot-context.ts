@@ -4,14 +4,14 @@ import {resolveWorkbenchAuthority,type WorkbenchAuthorityCatalog} from './workbe
 import {snapshotBinding,type WecomBotSubject,type WecomBotBinding} from './wecom-bot-bindings.js';
 export interface BotReadScope {readonly signal:AbortSignal;readonly deadline:number;}
 export interface BotContextRequest extends BotReadScope {readonly correlationId:string;}
-export interface WecomBotContext {readonly identity:Readonly<ReturnType<typeof resolveWorkbenchAuthority>['identity']>;readonly roles:readonly WorkbenchRole[];readonly correlationId:string;}
+export interface WecomBotContext {readonly identity:Readonly<ReturnType<typeof resolveWorkbenchAuthority>['identity']>;readonly roles:readonly WorkbenchRole[];readonly correlationId:string;readonly channel:Readonly<{botId:string;corpId:string;memberId:string;bindingVersion:number}>;}
 export interface WecomBotContextOptions extends WorkbenchAuthorityCatalog {
  mode:'isolated-synthetic';botId:string;corpId:string;
  readSubject(scope:BotReadScope):Promise<WecomBotSubject>;
  readBinding(subject:Readonly<WecomBotSubject>,scope:BotReadScope):Promise<WecomBotBinding>;
  readNative(accountId:string,scope:BotReadScope):Promise<{user:unknown;workspaceJid:string}>;
 }
-/** In-process authority only. No SDK, HTTP registration, credentials or business execution. */
+/** In-process authority. Only synchronous business work may run under the grant lock. */
 export function createWecomBotContext(options:WecomBotContextOptions){
  if(options.mode!=='isolated-synthetic'||!options.botId||!options.corpId)throw Error('invalid_bot_catalog');
  const catalog={tenantId:options.tenantId,stores:structuredClone(options.stores),roles:[...options.roles],store:options.store};catalog.store.bindTenant(catalog.tenantId);
@@ -38,18 +38,23 @@ export function createWecomBotContext(options:WecomBotContextOptions){
  const authority=resolveWorkbenchAuthority(catalog,native.user,native.workspaceJid);
  if(authority.identity.accountId!==binding.accountId||!authority.grant.roles.includes(required))throw Error('access_denied');return {subject,binding,native,authority};
  });}
+ async function assertCurrent(context:WecomBotContext):Promise<void>{
+ if(closing.signal.aborted)throw Error('context_closed');const own=context&&issued.get(context);if(!own)throw Error('access_denied');
+ let current:Snapshot;try{current=await read(own.request,own.required);}catch(error){if(error instanceof Error&&error.message==='access_denied')throw Error('access_changed');throw error;}
+ if(!isDeepStrictEqual(current,own.snapshot))throw Error('access_changed');check(own.request);
+ }
  return {
+ async withCurrent<T>(context:WecomBotContext,work:(checkActive:()=>void)=>T extends PromiseLike<unknown>?never:T):Promise<T>{
+ await assertCurrent(context);const own=issued.get(context)!;
+ return catalog.store.withCurrent(own.snapshot.authority.grant,()=>{check(own.request);return work(()=>check(own.request));});
+ },
  async authorize(request:BotContextRequest,required:WorkbenchRole):Promise<WecomBotContext>{
  const input={correlationId:request.correlationId,signal:request.signal,deadline:request.deadline};
  if(typeof input.correlationId!=='string'||!input.correlationId||input.correlationId.length>200)throw Error('access_denied');
  const first=await read(input,required),current=await read(input,required);if(!isDeepStrictEqual(first,current))throw Error('access_changed');check(input);
- const context=Object.freeze({identity:Object.freeze({...current.authority.identity}),roles:Object.freeze([...current.authority.grant.roles]),correlationId:input.correlationId});issued.set(context,{request:input,required,snapshot:current});return context;
+ const context=Object.freeze({identity:Object.freeze({...current.authority.identity}),roles:Object.freeze([...current.authority.grant.roles]),correlationId:input.correlationId,channel:Object.freeze({botId,corpId,memberId:current.subject.memberId,bindingVersion:current.binding.version})});issued.set(context,{request:input,required,snapshot:current});return context;
  },
- async assertCurrent(context:WecomBotContext):Promise<void>{
- if(closing.signal.aborted)throw Error('context_closed');const own=context&&issued.get(context);if(!own)throw Error('access_denied');
- let current:Snapshot;try{current=await read(own.request,own.required);}catch(error){if(error instanceof Error&&error.message==='access_denied')throw Error('access_changed');throw error;}
- if(!isDeepStrictEqual(current,own.snapshot))throw Error('access_changed');check(own.request);
- },
+ assertCurrent,
  close(){closing.abort();}
  };
 }

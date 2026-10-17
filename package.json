@@ -10,7 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
-    "demo": "npm run build && node examples/local-identity.mjs"
+    "demo": "npm run build && node examples/local-identity.mjs",
+    "demo:report": "npm run build && node examples/local-report.mjs"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
