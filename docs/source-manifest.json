@@ -1,8 +1,9 @@
 {
   "recordedAt": "2026-10-17",
   "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
-  "sourceState": "baseline plus reviewed T0/T1 working-tree changes; no source history imported",
-  "normalization": "CRLF normalized to LF; source and export content otherwise identical",
+  "publicBase": "2590fa5f7dcca42a31ded5daf5ed2dbcc23da643",
+  "sourceState": "Selected T0/T1 export plus reviewed T2 local adaptations; original working-tree snapshot provenance, no private history imported",
+  "normalization": "sha256 covers current exported source with CRLF normalized to LF; sourceSha256 is original raw snapshot; t0t1Sha256 preserves the initial public version where adapted",
   "files": [
     {
       "path": "src/role-eval/file-journal.ts",
@@ -13,6 +14,22 @@
       "path": "src/role-eval/install.ts",
       "sha256": "9d2e221aebbc115546cd233e53391b630fae28a8d846fdabfbbf6631ee8fad50",
       "sourceSha256": "92f893d7c24e8f3d9e467f653666310b5000ff6327467d0f071bc9bfe9163137"
+    },
+    {
+      "path": "src/role-eval/manager-report.ts",
+      "sha256": "5d8610b14c5c46ccf1ee02b2aab327a6c529a74004808c03209e7c1c6a101d12",
+      "sourceSha256": "9dcf8cd5d51d2ffe998f40e61e056f37a7c0744cf0101aba5eb43ff6eaeedd2c",
+      "sourceCanonicalSha256": "5d8610b14c5c46ccf1ee02b2aab327a6c529a74004808c03209e7c1c6a101d12",
+      "origin": "Original business working-tree snapshot 2026-10-17",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "src/role-eval/manager-store.ts",
+      "sha256": "6fb4e5fe58eab6467c74b92f8b181f61964efbc48bcaa171d0f387e549747e90",
+      "sourceSha256": "af9adc7a6d532bbea29e686bf394a66cf28c84c025299039d72cbac705907834",
+      "sourceCanonicalSha256": "486f740fd6c5bec96b7c48e38ad0337f1a1d5ae0c20fb99e97b7a4a3e0b992be",
+      "origin": "Original business working-tree snapshot 2026-10-17",
+      "adaptation": "Compatible botSource, receiveBot, own lookup and confirm guard"
     },
     {
       "path": "src/role-eval/native-bot-identity.ts",
@@ -26,8 +43,20 @@
     },
     {
       "path": "src/role-eval/wecom-bot-context.ts",
-      "sha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71",
-      "sourceSha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71"
+      "sha256": "116bc7a8ef8e0f35dc77f7f70f197c24a30b060f2397132f5bd13a6e0b712ca1",
+      "sourceSha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71",
+      "t0t1Sha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71",
+      "adaptation": "T2 authenticated channel metadata and guarded synchronous business seam"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-handler.ts",
+      "sha256": "8af7e3ec577d05a84c855354d234f44ba3f095eace3421a9d8cfc0b8a003c6ff",
+      "origin": "T2 implementation and synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-transport.ts",
+      "sha256": "4e1d50780267a8093ab4472be1d86d7fb2ccd3b2b6c837cb57708d1c2f757bc6",
+      "origin": "T2 implementation and synthetic tests in this repository"
     },
     {
       "path": "src/role-eval/workbench-access.ts",
@@ -50,6 +79,19 @@
       "sourceSha256": "b7f07dab43fbd0c8bc91af8b6047d06ef2bb987821e4e107bc3483785c3bde6d"
     },
     {
+      "path": "tests/role-eval/manager-bot-store.test.ts",
+      "sha256": "77ce16c3f973ea9ced6097ae476db2e7e01f24cf5304acb68960f664b52d45de",
+      "origin": "Original manager-store and manager-return-store assertions plus T2 synthetic seam tests"
+    },
+    {
+      "path": "tests/role-eval/manager-report.test.ts",
+      "sha256": "4c462a5a04df98698414f6ba968f0ad8e6d41ece3e1d1117ef3b4793c4d5c2cf",
+      "sourceSha256": "020d83b344e654c30cc77287a0e02fda5cc2e31897bb92c9f3b0c1828d8f8905",
+      "sourceCanonicalSha256": "4c462a5a04df98698414f6ba968f0ad8e6d41ece3e1d1117ef3b4793c4d5c2cf",
+      "origin": "Original business working-tree snapshot 2026-10-17",
+      "adaptation": "Unchanged"
+    },
+    {
       "path": "tests/role-eval/native-bot-identity.test.ts",
       "sha256": "a333b284ebb1b340a074b7c0a66d8ff78545126d1048df40f3d5572d1ff4dc92",
       "sourceSha256": "a333b284ebb1b340a074b7c0a66d8ff78545126d1048df40f3d5572d1ff4dc92"
@@ -60,9 +102,29 @@
       "sourceSha256": "fe7b7e8bfc02dcf29354f09de34bc17edf7a45772ad6b11dc6072097c67bb1c8"
     },
     {
+      "path": "tests/role-eval/wecom-bot-execution.test.ts",
+      "sha256": "e2421c749c3658c4dd9480f0f9b08655951f06c74e8e438d56e8b6a06ec1c09a",
+      "origin": "T2 implementation and synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-handler.test.ts",
+      "sha256": "a0e9f0d2693737c1d99525130494880b1e9e9913675615a979d67277b7c4746d",
+      "origin": "T2 implementation and synthetic tests in this repository"
+    },
+    {
       "path": "tests/role-eval/wecom-bot-identity-integration.test.ts",
       "sha256": "c568d40fa530577715d74b8d3f62443c3f47d70ecc068990385cec0be7e2c847",
       "sourceSha256": "c568d40fa530577715d74b8d3f62443c3f47d70ecc068990385cec0be7e2c847"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-report-integration.test.ts",
+      "sha256": "d63a80c9103f173592f71f86e13d9da1ebe9b4c19788cf4c66359d91056ef185",
+      "origin": "T2 implementation and synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-transport.test.ts",
+      "sha256": "5eba5352b5bdcff2dc7240a0b3e6b15aa9afe6158000742eec9ea03944f9a42e",
+      "origin": "T2 implementation and synthetic tests in this repository"
     },
     {
       "path": "tests/role-eval/workbench-access.test.ts",
