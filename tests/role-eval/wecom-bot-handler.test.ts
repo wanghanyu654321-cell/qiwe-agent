@@ -97,3 +97,8 @@ it('uses official task_id characters and separate card IDs for different query e
  expect(task).toMatch(/^[A-Za-z0-9_@-]{1,128}$/);expect((await s.handler.handle(s.request())).reply.body.template_card!.task_id).toBe(task);
  s.text('查询 '+first.reportId,'new-query');const next=await s.handler.handle(s.request());expect(next.reply.body.template_card!.task_id).not.toBe(task);expect(next.reply.body.template_card!.task_id).toContain(first.reportId);
 });
+it('returns the exact original integer cents even near the safe integer limit',async()=>{
+ const s=setup();s.text('今天销售成交90071992547409.90元');const result=await s.handler.handle(s.request());
+ expect(s.ledger.getReport(s.actor(),result.reportId!)?.proposed.items[0]?.amountCents).toBe(9007199254740990);
+ expect(result.reply.body.stream.content).toContain('90071992547409.90元');
+});

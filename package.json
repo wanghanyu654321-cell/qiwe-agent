@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "demo": "npm run build && node examples/local-identity.mjs",
-    "demo:report": "npm run build && node examples/local-report.mjs"
+    "demo:report": "npm run build && node examples/local-report.mjs",
+    "demo:delivery": "npm run build && node examples/local-delivery.mjs"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
