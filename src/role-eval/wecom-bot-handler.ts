@@ -3,11 +3,14 @@ import type {ManagerStore,StaffContext,StaffReport,BotReplyAttachment} from './m
 import type {ManagerArtifactStore,ManagerSnapshot,ManagerArtifact} from './manager-artifacts.js';
 import {parseManagerCommand} from './manager-commands.js';
 import {botDeliveryNotice} from './wecom-bot-notice.js';
+import {parseBotTaskCommand} from './wecom-bot-task-commands.js';
+import type {createBotTasks} from './wecom-bot-tasks.js';
 import type {BotContextRequest,WecomBotContext,createWecomBotContext} from './wecom-bot-context.js';
 import {normalizeBotFrame,type BotEvent,type BotReplyPlan} from './wecom-bot-transport.js';
 export interface BotReportOptions {
  mode:'isolated-synthetic';authority:ReturnType<typeof createWecomBotContext>;ledger:ManagerStore;
  artifacts?:ManagerArtifactStore;
+ tasks?:ReturnType<typeof createBotTasks>;
  scope:{tenant:string;store:string;workspace:string};
  employees:readonly {accountId:string;employeeId:string;employeeName:string}[];
  /** Already authenticated SDK callback snapshot, never an HTTP/client payload. Synchronous and bounded by caller. */
@@ -15,12 +18,12 @@ export interface BotReportOptions {
  /** Trusted synchronous reservation; a persisted file result can short-circuit regeneration on replay. */
  beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):BotReportResult|void;
 }
-export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;reply:BotReplyPlan;}
+export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file'|'task';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;taskId?:string;taskStatus?:string;reply:BotReplyPlan;}
 export interface BotReplyExecution {context:WecomBotContext;event:BotEvent;actor:StaffContext;result:BotReportResult;}
 export function createBotReportHandler(options:BotReportOptions){
  const valid=(s:unknown):s is string=>typeof s==='string'&&!!s.trim()&&s.length<=120&&!/[\u0000-\u001f]/.test(s);
  if(options.mode!=='isolated-synthetic'||!options.scope||Object.values(options.scope).length!==3||!['tenant','store','workspace'].every(k=>valid(Reflect.get(options.scope,k)))||!Array.isArray(options.employees)||!options.employees.length||options.employees.some(p=>!p||![p.accountId,p.employeeId,p.employeeName].every(valid))||new Set(options.employees.map(p=>p.accountId)).size!==options.employees.length||new Set(options.employees.map(p=>p.employeeId)).size!==options.employees.length)throw Error('invalid_report_catalog');
- const scope={...options.scope},employees=structuredClone(options.employees),{authority,ledger,artifacts,readEvent,beforeWork}=options,now=options.now??(()=>new Date());
+ const scope={...options.scope},employees=structuredClone(options.employees),{authority,ledger,artifacts,tasks,readEvent,beforeWork}=options,now=options.now??(()=>new Date());
  const roster=employees.map(e=>({...scope,employeeId:e.employeeId,employeeName:e.employeeName}));
  const money=(cents:number|null)=>cents===null?'未知':`${cents<0?'-':''}${Math.trunc(Math.abs(cents)/100)}.${String(Math.abs(cents)%100).padStart(2,'0')}元`;
  const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
@@ -46,7 +49,7 @@ export function createBotReportHandler(options:BotReportOptions){
  async handle(request:BotContextRequest):Promise<BotReportResult>{
   const input={correlationId:request.correlationId,signal:request.signal,deadline:request.deadline};
   let frame:unknown;try{frame=structuredClone(readEvent());}catch{throw Error('event_unavailable');}
-  const event=normalizeBotFrame(frame),context=await authority.authorize(input,'manager');
+  const event=normalizeBotFrame(frame),taskCommand=event.action.kind==='text'?parseBotTaskCommand(event.action.text):undefined,context=await authority.authorize(input,taskCommand?.role??'manager');
   if(event.botId!==context.channel.botId||event.memberId!==context.channel.memberId||event.corpId!==undefined&&event.corpId!==context.channel.corpId||scope.tenant!==context.identity.tenantId||scope.store!==context.identity.storeId)throw Error('access_denied');
   const actor=resolveActor(context);
   const plan=(status:BotReportResult['status'],content:string,report?:StaffReport,card=false):BotReportResult=>({status,...(report?{reportId:report.id}:{}),reply:{reqId:event.reqId,body:{msgtype:card?'stream_with_template_card':'stream',stream:{id:hash('report-reply|'+event.reqId),finish:true,content},...(card&&report?{template_card:{card_type:'button_interaction' as const,main_title:{title:'核对本人报数'},task_id:'report-'+report.id+'-'+hash(JSON.stringify([context.channel.corpId,event.botId,event.memberId,event.messageId,event.reqId])).slice(0,32),button_list:[{text:'确认入账',key:'confirm:'+report.hash,style:1 as const}]}}:{})}}});
@@ -69,6 +72,7 @@ export function createBotReportHandler(options:BotReportOptions){
   try{
    result=await authority.withCurrent(context,checkActive=>{
     const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay)return structuredClone(replay);
+    if(taskCommand)return plan('needs-input','正在核实任务。');
     if(event.action.kind==='confirm'){
      const r=owned(event.action.reportId);if(!r)return plan('not-found','未找到你有权访问的报告，请核对报告编号。');
      if(r.hash!==event.action.hash)return plan('conflict',`报告版本不一致，未变更入账结果。请发送：查询 ${r.id}`);
@@ -96,17 +100,19 @@ export function createBotReportHandler(options:BotReportOptions){
     if(command?.kind==='correction')return view(ledger.receiveBotCorrection(actor,key,text,date,source,command.reportId,command.entryIndex,command.amountCents,checkActive));
     return view(ledger.receiveBot(actor,key,event.action.text,date,source,checkActive));
    });
-   if(exportSnapshot){const id=exportSnapshot;result=fileView(await artifacts!.export(owner,id,input,async()=>{
+   if(taskCommand){if(!tasks)result=plan('needs-input','任务服务尚未装配，未执行。请联系管理员核实。');else{const task=await tasks.execute(context,event,taskCommand,input);result={...plan(task.status==='needs-input'?'needs-input':'task',task.content),...(task.taskId?{taskId:task.taskId}:{}),taskStatus:task.status};}}
+   else if(exportSnapshot){const id=exportSnapshot;result=fileView(await artifacts!.export(owner,id,input,async()=>{
     await authority.assertCurrent(context);
     await authority.withCurrent(context,guard=>{const saved=artifacts!.read(owner,id);if(!saved)throw Error('artifact_unavailable');if(ledger.summary(actor,saved.period.start,saved.kind,roster).snapshotHash!==id)throw Error('snapshot_changed');guard();});
    }));}
   }catch(error){
    const code=error instanceof Error?error.message:'';
-   if(['message_conflict','overlapping_report','confirmation_conflict','correction_conflict','report_version_conflict'].includes(code))result=plan('conflict','该消息或期间与已有记录冲突，未重复入账。请查询原报告，使用当前有效报告编号与明细序号发起更正。');
+   if(['task_conflict','task_attempt_conflict','task_reference_changed','task_command_conflict'].includes(code))result=plan('conflict','任务来源或原引用冲突，未重新执行。请核对岗位与原任务编号并查询，必要时联系管理员。');
+   else if(['message_conflict','overlapping_report','confirmation_conflict','correction_conflict','report_version_conflict'].includes(code))result=plan('conflict','该消息或期间与已有记录冲突，未重复入账。请查询原报告，使用当前有效报告编号与明细序号发起更正。');
    else if(code==='invalid_correction_reference')result=plan('needs-input','请核对本人已确认报告的完整编号、明细序号和新金额。');
    else if(code==='snapshot_changed')result=plan('conflict','原汇总之后账本已变化，未发送文件。请重新发送经营汇总指令，按新快照导出；旧汇总仍可查询。');
    else if(['artifact_unavailable','artifact_snapshot_conflict','workbook_failed','invalid_workbook','invalid_workbook_size','no_confirmed_sales_data'].includes(code))result=plan('needs-input','文件尚未发送。请核对已确认报数；汇总或文件不可用时联系管理员核实，可继续在企微查询原报告和汇总。');
-   else if(['authority_cancelled','authority_timeout','context_closed','access_changed','access_denied','authority_unavailable','bot_reply_conflict','invalid_bot_reply'].includes(code))throw Error(code);
+   else if(['authority_cancelled','authority_timeout','context_closed','tasks_closed','access_changed','access_denied','authority_unavailable','bot_reply_conflict','invalid_bot_reply'].includes(code))throw Error(code);
    else throw Error('report_unavailable');
   }
   // A committed report survives response failure. Do not roll it back or mark it delivered.

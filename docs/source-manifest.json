@@ -2,8 +2,8 @@
   "recordedAt": "2026-10-18",
   "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
   "publicBase": "2590fa5f7dcca42a31ded5daf5ed2dbcc23da643",
-  "sourceState": "Selected T0/T1 export plus reviewed T2/T3/T4 local adaptations; no private history or data imported",
-  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256 preserve earlier public versions where adapted",
+  "sourceState": "Selected T0/T1 export plus reviewed T2/T3/T4/T5 local adaptations; no private history or data imported",
+  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted",
   "files": [
     {
       "path": "src/role-eval/file-journal.ts",
@@ -51,6 +51,35 @@
       "sourceSha256": "cabf7176e1ca18cb8ed1d2dc1b3e34f6967b4f497a23148f00ef873d1199499f"
     },
     {
+      "path": "src/role-eval/native-bot-tasks.ts",
+      "sha256": "3a72afafbedad2c950cddcc8b20bbcff67d76febd8744bb52a684e93a17eb3c1",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/training-generation.ts",
+      "sha256": "75b6e71cd05831fcb10c761a4b0b96362f9bafbb050a659c5934b0948e973ef1",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "28d4e9c6071cc6015d869010c526ae46c8aa52c9fa74a03d61566a9f08bd634a",
+      "sourceCanonicalSha256": "c247080e38c5de505ad13c3f1434bc1a7ac3e6c33662d890a1a6d529f92133f3",
+      "adaptation": "Exact-run cancellation, immutable arguments and outputs, late-result fence and optional authorization recheck"
+    },
+    {
+      "path": "src/role-eval/training-knowledge.ts",
+      "sha256": "a297f34248afe8b51316a9b1daac342ffd1c97462eb0fa87b2f5e98785e4a126",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "ccb8541fa1b123e422f9326febf7dd5625d699879d0b3ac6dcb97645cb95e9da",
+      "sourceCanonicalSha256": "a297f34248afe8b51316a9b1daac342ffd1c97462eb0fa87b2f5e98785e4a126",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "src/role-eval/training-output.ts",
+      "sha256": "28a28986add61ed8a7302401feb0614bb4eeba850e9e36c1a5c7863989caefd5",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "624b40f155e763b1790bd60e833ac72b92c2a4a167d5922f469ccdc97263871e",
+      "sourceCanonicalSha256": "28a28986add61ed8a7302401feb0614bb4eeba850e9e36c1a5c7863989caefd5",
+      "adaptation": "Unchanged"
+    },
+    {
       "path": "src/role-eval/unified-workbook.ts",
       "sha256": "472dd88fd8ecfac823c2b117417a431a6edafa5ee900b60461808d2ac121a17f",
       "origin": "Original business working-tree snapshot 2026-10-18",
@@ -79,12 +108,14 @@
     },
     {
       "path": "src/role-eval/wecom-bot-handler.ts",
-      "sha256": "30efe1c5d081b8bf939eb3a500cf6a7a13aa15d04ba8e765840dae956bf1046e",
+      "sha256": "85f64b92e717e995318ce8b39a42743e7270f6e6cdd2648a37daea1b1db6ff5d",
       "origin": "T2 implementation and synthetic tests in this repository",
       "t2Sha256": "8af7e3ec577d05a84c855354d234f44ba3f095eace3421a9d8cfc0b8a003c6ff",
       "t3Adaptation": "Event reservation, controlled result consumption, delivery recovery or compatibility regression",
       "t3Sha256": "08da63945089666034f06b119b2af24476013d39d415ff0cbeb74e87b0152e13",
-      "t4Adaptation": "Confirmed correction, scoped snapshot/file adaptation, persisted delivery lookup or bounded file send"
+      "t4Adaptation": "Confirmed correction, scoped snapshot/file adaptation, persisted delivery lookup or bounded file send",
+      "t4Sha256": "30efe1c5d081b8bf939eb3a500cf6a7a13aa15d04ba8e765840dae956bf1046e",
+      "t5Adaptation": "Role-authorized task routing through original reply outbox"
     },
     {
       "path": "src/role-eval/wecom-bot-notice.ts",
@@ -97,6 +128,21 @@
       "origin": "T3 local implementation or synthetic tests in this repository",
       "t3Sha256": "8c3435482046efa82e3d2515b2ca066cd147e18f28cd8856c1415ce15a147ba5",
       "t4Adaptation": "Confirmed correction, scoped snapshot/file adaptation, persisted delivery lookup or bounded file send"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-task-commands.ts",
+      "sha256": "46698ea05b4c7bbab71d64532ec8d8bb4081bc174c0809ee9995eced88b5f9d1",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-task-store.ts",
+      "sha256": "e6ee7f430ebd579b1dc4a1a5982999dcb5252212cf18fa5b8ebb71c507159cdb",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-tasks.ts",
+      "sha256": "baeaefd8ff0f067d31c1658b9872ebae6195fd520994c1edbb6e02206ab2e6ad",
+      "origin": "T5 local implementation or synthetic tests in this repository"
     },
     {
       "path": "src/role-eval/wecom-bot-transport.ts",
@@ -162,6 +208,40 @@
       "sourceSha256": "a333b284ebb1b340a074b7c0a66d8ff78545126d1048df40f3d5572d1ff4dc92"
     },
     {
+      "path": "tests/role-eval/native-bot-tasks.test.ts",
+      "sha256": "1ef9d2aeb8d0140e236add5231c97517a36cc78a52aff5a37ff7ac67b014fc57",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/training-cancel.test.ts",
+      "sha256": "26f67ffcd4f42e22c0ff6d4678cedb06b9b92b2cbc0ab321cc7381a18068a8f5",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/training-generation.test.ts",
+      "sha256": "9705f688dbef9819f2fca28964214c4e549c7461b277f5c13a3eb3029ce0033e",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "f2d20e856cee2f45e967206d47275b223c0a594efbcab947f33490de4834553b",
+      "sourceCanonicalSha256": "9705f688dbef9819f2fca28964214c4e549c7461b277f5c13a3eb3029ce0033e",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "tests/role-eval/training-knowledge.test.ts",
+      "sha256": "473a06546e163da0c99df747a769835cdd75365e78ab6183e9d0eb36021280be",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "768c0a7f0f8bf99d46afa7762d1101e36cddcb18dcdc289e22381568b175ba57",
+      "sourceCanonicalSha256": "473a06546e163da0c99df747a769835cdd75365e78ab6183e9d0eb36021280be",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "tests/role-eval/training-output.test.ts",
+      "sha256": "2eaf1d04f6689e726839ae4623b4310205b246e9e12987eeb60e9ac15844cbd2",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "e70e38267bc65fa8978881aca2c8e565b45974e47e872e28477551356a3ec271",
+      "sourceCanonicalSha256": "2eaf1d04f6689e726839ae4623b4310205b246e9e12987eeb60e9ac15844cbd2",
+      "adaptation": "Unchanged"
+    },
+    {
       "path": "tests/role-eval/unified-workbook.test.ts",
       "sha256": "8ec39d2cded7e3dc64c411f7b1f8c94f9a2c46faf11c3478cad89adee5f5d4f7",
       "origin": "Original business working-tree snapshot 2026-10-18",
@@ -224,6 +304,21 @@
       "origin": "T3 local implementation or synthetic tests in this repository"
     },
     {
+      "path": "tests/role-eval/wecom-bot-task-commands.test.ts",
+      "sha256": "d7040aa08bded25b74c3df2ef2d69b7d118bedbdf74bea6243db5aa173c97335",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-task-store.test.ts",
+      "sha256": "00e30f1c74d6a568f1bbedc8e0675ed76fe45168da19de3ac23f890b1408a600",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-tasks.test.ts",
+      "sha256": "7d312aca4283596f537e656f6bd58e0b698ed12b8ea32e414bc0315e34a456f1",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
       "path": "tests/role-eval/wecom-bot-transport.test.ts",
       "sha256": "5eba5352b5bdcff2dc7240a0b3e6b15aa9afe6158000742eec9ea03944f9a42e",
       "origin": "T2 implementation and synthetic tests in this repository"
@@ -240,5 +335,6 @@
     }
   ],
   "stageBase": "50471d3517eb6d4936e5599f1e1a31a1e107bb00",
-  "t4Base": "19629f700485f12c186cf7c98683132a82ed2321"
+  "t4Base": "19629f700485f12c186cf7c98683132a82ed2321",
+  "t5Base": "70ae2d209c85b0b05d648afb0f19c514afde5c15"
 }
