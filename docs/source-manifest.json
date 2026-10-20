@@ -1,8 +1,8 @@
 {
-  "recordedAt": "2026-10-18",
+  "recordedAt": "2026-10-20",
   "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
   "publicBase": "2590fa5f7dcca42a31ded5daf5ed2dbcc23da643",
-  "sourceState": "Selected T0/T1 export plus reviewed T2/T3/T4/T5 local adaptations; no private history or data imported",
+  "sourceState": "Selected T0/T1 export plus reviewed T2/T3/T4/T5 local adaptations and T6 synthetic validation; no private history or data imported",
   "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted",
   "files": [
     {
@@ -170,6 +170,11 @@
       "sourceSha256": "b7f07dab43fbd0c8bc91af8b6047d06ef2bb987821e4e107bc3483785c3bde6d"
     },
     {
+      "path": "tests/role-eval/local-performance-output.test.ts",
+      "sha256": "3d3f8c9303e22da6872709d84ecfa9c3300a8962bf37dcc0345e0e380647271f",
+      "origin": "T6 synthetic acceptance tests in this repository"
+    },
+    {
       "path": "tests/role-eval/manager-artifacts.test.ts",
       "sha256": "bbf1e6cf9655815d86915b31badff973ac0c468eafbec542c2e7e6d416a50aa4",
       "origin": "T4 local implementation or synthetic tests in this repository"
@@ -287,6 +292,11 @@
       "sourceSha256": "c568d40fa530577715d74b8d3f62443c3f47d70ecc068990385cec0be7e2c847"
     },
     {
+      "path": "tests/role-eval/wecom-bot-multimember.test.ts",
+      "sha256": "cc95623c33d0f23c73d5c59fda5120466f4b389a97b098ccc312474258343507",
+      "origin": "T6 synthetic acceptance tests in this repository"
+    },
+    {
       "path": "tests/role-eval/wecom-bot-operations.test.ts",
       "sha256": "d3d28d66abf1671651da4b0bbfe6f9a1e8ea8e1c96e44f37bd1dad07c399b736",
       "origin": "T4 local implementation or synthetic tests in this repository"
@@ -302,6 +312,11 @@
       "path": "tests/role-eval/wecom-bot-sender.test.ts",
       "sha256": "106b018a27de9a77cbaa5b44c408314c8cf8f0f01839b574124df86d6916b502",
       "origin": "T3 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-sqlite-contention.test.ts",
+      "sha256": "3f965a13125570464e1d4cfebf0c940f31a5d8110c841c596ffeabc2e6d39a8d",
+      "origin": "T6 synthetic acceptance tests in this repository"
     },
     {
       "path": "tests/role-eval/wecom-bot-task-commands.test.ts",
@@ -324,6 +339,11 @@
       "origin": "T2 implementation and synthetic tests in this repository"
     },
     {
+      "path": "tests/role-eval/wecom-web-compat.test.ts",
+      "sha256": "52e29df0048cfabb2bf47a8e0f5351cd845eedd0113d5738b6effe884b48c941",
+      "origin": "T6 synthetic acceptance tests in this repository"
+    },
+    {
       "path": "tests/role-eval/workbench-access.test.ts",
       "sha256": "77be3cc0f19b90a5d47116def579c707f7192f81058e5b1a92ad386bb276dad0",
       "sourceSha256": "5a45fa8e3857ec189fa577dbc3ebcdcad1e7709ad51dd284551de9aca219ebdd"
@@ -336,5 +356,6 @@
   ],
   "stageBase": "50471d3517eb6d4936e5599f1e1a31a1e107bb00",
   "t4Base": "19629f700485f12c186cf7c98683132a82ed2321",
-  "t5Base": "70ae2d209c85b0b05d648afb0f19c514afde5c15"
+  "t5Base": "70ae2d209c85b0b05d648afb0f19c514afde5c15",
+  "t6Base": "ad835dd53590c0f5ebae349eeed5d47aa575f605"
 }

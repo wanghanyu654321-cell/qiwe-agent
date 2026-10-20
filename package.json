@@ -14,7 +14,8 @@
     "demo:report": "npm run build && node examples/local-report.mjs",
     "demo:delivery": "npm run build && node examples/local-delivery.mjs",
     "demo:operations": "npm run build && node examples/local-operations.mjs",
-    "demo:tasks": "npm run build && node examples/local-tasks.mjs"
+    "demo:tasks": "npm run build && node examples/local-tasks.mjs",
+    "benchmark:local": "npm run build && node examples/local-performance.mjs"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
