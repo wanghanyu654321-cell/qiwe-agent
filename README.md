@@ -1,6 +1,6 @@
 # qiwe-agent
 
-企微员工入口接入现有 Agent 与门店业务服务。本仓库当前交付 **T0–T6 本地隔离切片**：复用原账号、门店、岗位授权、经营账本和培训服务，验证报数、更正、汇总、Excel，以及任务提交、进度/结果查询、精确取消和重启后查回；T6补充多成员、Web兼容、跨进程授权锁与本地性能验收。
+企微员工入口接入现有 Agent 与门店业务服务。本仓库当前交付 **T0–T6 本地隔离切片及 T7 联调前装配**：复用原账号、门店、岗位授权、经营账本和培训服务，验证报数、更正、汇总、Excel，以及任务提交、进度/结果查询、精确取消和重启后查回；补充多成员、Web兼容、授权锁、本地性能和真实SDK发布包的离线契约验证。T7真实联调与发布尚未完成。
 
 ## 当前可以验证什么
 
@@ -21,8 +21,10 @@
 - 培训复用原知识审批、引用校验和持久结果，补充精确取消及迟到输出保护；仅注入合成生成函数，不连接模型。长结果可在企微按页查询。
 - 多成员各用独立可信身份入口，共享原账本与工件目录；验证同店经营汇总、跨成员/门店隔离、并发事件去重和文件收件人。群聊仍拒绝访问，不产生业务或发送副作用。
 - 原Web开通和业务写入后，企微读取同一报告、更正和文件；关闭合成Web入口、重开存储后继续查回。此项覆盖HTTP开通合同和原业务服务，不代表原Web页面端到端验收。
+- 装配仅订阅SDK特定事件；认证成功后逐条建立独立可信上下文，按现有门店/员工映射分发到原服务。掉线、重连、错误、踢线及关闭会废止旧会话，迟到身份结果不能写业务或发新回复；已发生动作仍保存unknown等结果。
+- 原Native只读桥按真实导出名称组合任务、工作区、Profile、绑定和run，显式转换字段；沿用原Owner、非Home及精确run校验查回结果。该桥固定关闭执行和取消，不初始化原Native或创建调度器。
 
-当前入口限制为 `isolated-synthetic`，企微事件及SDK方法以显式本进程合成端口注入。**尚未连接真实机器人、发送真实消息或运行原 Agent。** 员工操作和查回使用企微消息/卡片载荷，Web继续承担原管理、数据流转与审计。T3合成ACK只验证本地处理，不能视为真实平台受理或手机实收。
+当前入口限制为 `isolated-synthetic`，发送仍须显式注入合成端口。开发测试使用固定的`@wecom/aibot-node-sdk@1.0.7`发布包，在替换底层I/O后运行真实SDK分发、序列化及上传；运行源码不把WSClient自动包装成合成sender。**尚未连接真实机器人、发送真实消息或运行原 Agent。** 员工操作和查回使用企微消息/卡片载荷，Web继续承担原管理、数据流转与审计。本地ACK不能视为真实平台受理或手机实收。
 
 ## 美容门店场景
 
@@ -82,9 +84,11 @@ npm run benchmark:local
 | `manager-report.ts` / `manager-store.ts` | 原经营解析与单一账本，兼容XML/Web及独立机器人来源 |
 | `wecom-bot-handler.ts` / `wecom-bot-transport.ts` | 可信事件与授权匹配、报数/本人确认/查询、官方形状回复计划 |
 | `wecom-bot-sender.ts` / `wecom-bot-delivery.ts` | 合成SDK发送、原持久通知状态、业务前事件排重、恢复及未知结果处理 |
+| `wecom-bot-assembly.ts` | SDK事件认证生命周期、逐事件身份与门店/员工分发，复用原业务对象及合成发送端口 |
 | `manager-commands.ts` / `manager-artifacts.ts` / `unified-workbook.ts` | 有限管理指令、按原授权作用域保存快照/文件、原Excel模板 |
 | `wecom-bot-task-commands.ts` / `wecom-bot-tasks.ts` / `wecom-bot-task-store.ts` | 岗位任务指令、可信任务调用与持久原引用，不承担调度 |
 | `native-bot-tasks.ts` | 原scheduler最小合成服务端口，校验Owner/Profile/非Home工作区/精确run/key |
+| `native-bot-service.ts` | 原5个同步读取函数的最小投影；读取已存任务结果，执行/取消固定关闭 |
 | `training-generation.ts` / `training-knowledge.ts` / `training-output.ts` | 原培训结果、审批资料和输出合同，精确取消与来源失效处理 |
 | `install.ts` / `file-journal.ts` / `workspace-access.ts` | 原开通流程依赖，保持原能力与测试兼容 |
 
@@ -104,6 +108,10 @@ T4在显式注入的工件目录保存按账号/门店/原scope/员工隔离的�
 
 T5在显式SQLite文件增加`bot_task_refs`渠道引用元数据，可与原报告文件共用，保存原服务请求键/run及独立取消状态；没有新调度器或Agent循环。培训仍使用原`web:local-training`业务命名空间，目录需按账号/租户/门店/Home分区，不能据此创建或替换Native工作间。取消不回滚已发生的业务副作用；跨进程不持有原培训控制器时只能报告unknown。
 
-[T6验收记录](docs/t6-acceptance.md) · [T5记录](docs/t5-acceptance.md) · [T4记录](docs/t4-acceptance.md) · [T3记录](docs/t3-acceptance.md) · [T2记录](docs/t2-acceptance.md) · [T0/T1记录](docs/t0-t1-acceptance.md) · [阶段计划](docs/roadmap.md) · [源码来源](docs/source-provenance.md)
+T7装配不创建SDK连接、不打开或发现数据库，不持有调用方共享资源的关闭权。每请求使用原T1授权及原Delivery/Tasks/工件服务；默认在途容量8、预算4000ms，溢出明确拒绝。只读Native桥不会将原裸trigger/cancel接到聊天：原trigger还会推进全库任务，实际写入必须保留原进程的依赖、权限和暂停门禁。
+
+SDK已入队回复和分片上传不能随本地预算取消，同req_id迟到ACK也存在归因边界。离线测试已复现这些限制，真实出站仍不准入。卡片事件缺少显式single时继续拒绝；确认回调的实际回复协议和手机效果待真实联调，不把本地stream序列化当成手机卡片更新。
+
+[T7前置验收记录](docs/t7-acceptance.md) · [T6记录](docs/t6-acceptance.md) · [T5记录](docs/t5-acceptance.md) · [T4记录](docs/t4-acceptance.md) · [T3记录](docs/t3-acceptance.md) · [T2记录](docs/t2-acceptance.md) · [T0/T1记录](docs/t0-t1-acceptance.md) · [阶段计划](docs/roadmap.md) · [源码来源](docs/source-provenance.md)
 
 本仓库是从原工程精选导出的可独立验证切片，包含必要复用源码、测试和说明。完整原产品继续保留在原工程；私有历史、Native基座原件、课程资料、生产配置和真实数据均不在本仓库。原产品生产状态不因本次提交改变。
