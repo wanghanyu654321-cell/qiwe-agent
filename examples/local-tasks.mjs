@@ -73,7 +73,7 @@ function open(directory){
  const readRun=id=>{const row=runs.prepare('SELECT body FROM task_runs WHERE id=?').get(id);assert.ok(row,'synthetic run must exist');return JSON.parse(row.body);};
  const port={mode:'isolated-synthetic',enabled:true,
   async inspect(owner,backend){nativeCalls.inspect++;assert.deepEqual(owner,nativeOwner);assert.deepEqual(backend,nativeBackend);return {
-   task:{id:taskId,chat_jid:workspaceJid,group_folder:folder,execution_type:'agent',execution_mode:'container',status:'active',deleted_at:null},
+   task:{id:taskId,chat_jid:workspaceJid,group_folder:folder,context_mode:'isolated',execution_type:'agent',execution_mode:'container',status:'active',deleted_at:null},
    group:{jid:workspaceJid,folder,created_by:accountId,execution_mode:'container',is_home:0},
    profile:{id:profileId,owner_user_id:accountId,status:'active'},bindingProfileId:profileId};},
   async trigger(originalTaskId,idempotencyKey){
@@ -82,7 +82,7 @@ function open(directory){
    assert.equal(runs.prepare('SELECT id FROM task_runs WHERE idempotency_key=?').get(idempotencyKey),undefined,'duplicate event must not call trigger again');
    const id='synthetic-run-'+hash(idempotencyKey).slice(0,20);
    const row={id,task_id:taskId,idempotency_key:idempotencyKey,trigger_type:'manual',status:'running',result:null,
-    definition_snapshot:{chat_jid:workspaceJid,group_folder:folder,execution_type:'agent',execution_mode:'container'}};
+    definition_snapshot:{chat_jid:workspaceJid,group_folder:folder,context_mode:'isolated',execution_type:'agent',execution_mode:'container'}};
    runs.prepare('INSERT INTO task_runs(id,idempotency_key,body) VALUES(?,?,?)').run(id,idempotencyKey,JSON.stringify(row));
    return {success:true,runId:id};
   },

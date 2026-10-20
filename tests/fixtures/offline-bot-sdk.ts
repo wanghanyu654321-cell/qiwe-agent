@@ -23,6 +23,7 @@ export function offlineBotSdk() {
     return {headers: {req_id: reqId}, errcode: 0, body: cmd === 'aibot_upload_media_init' ? {upload_id: 'synthetic-upload'} : cmd === 'aibot_upload_media_finish' ? {type: 'file', media_id: 'synthetic-media'} : {}};
   };
   const sdk: BotSdkPort = {mode: 'isolated-synthetic', ready: () => true,
+    updateTemplateCard: (frame, update) => client.updateTemplateCard(frame, update.card, [update.memberId]),
     reply: (frame, body) => client.reply(frame, body), sendMessage: (member, body) => client.sendMessage(member, body)};
   const fileSdk: BotFileSdkPort = {mode: 'isolated-synthetic', uploadMedia: (bytes, options) => client.uploadMedia(bytes, options),
     sendMessage: (member, body) => client.sendMessage(member, body)};

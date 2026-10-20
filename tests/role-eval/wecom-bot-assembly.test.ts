@@ -11,6 +11,7 @@ import {WorkbenchAccessStore} from '../../src/role-eval/workbench-access.js';
 import {BotTaskStore} from '../../src/role-eval/wecom-bot-task-store.js';
 import {createNativeBotTasks} from '../../src/role-eval/native-bot-tasks.js';
 import {offlineBotSdk} from '../fixtures/offline-bot-sdk.js';
+import {createBotSdkAdapter} from '../../src/role-eval/wecom-bot-sdk.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {for (const close of cleanup.splice(0).reverse()) close();});
@@ -18,7 +19,7 @@ const people = ['a', 'b', 'c'].map(id => ({accountId: id, memberId: 'member-' + 
 function text(member: string, id: string, content = '本月销售100元') {
   return {cmd: 'aibot_msg_callback', headers: {req_id: 'req-' + id}, body: {msgid: id, aibotid: 'bot', msgtype: 'text', chattype: 'single', create_time: 1792458000, from: {userid: member, corpid: 'corp'}, text: {content}}};
 }
-function setup(extra: {maxInFlight?: number; requestTimeoutMs?: number} = {}) {
+function setup(extra: {maxInFlight?: number; requestTimeoutMs?: number} = {},controlled=false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assembly-'));
   cleanup.push(() => fs.rmSync(dir, {recursive: true, force: true}));
   const grants = new WorkbenchAccessStore(path.join(dir, 'grants.sqlite'));
@@ -29,6 +30,8 @@ function setup(extra: {maxInFlight?: number; requestTimeoutMs?: number} = {}) {
   cleanup.push(() => grants.close(), () => ledger.close(), () => tasks.close());
   for (const p of people) grants.change('admin', {accountId: p.accountId, storeId: p.store, roles: ['manager', 'marketing'], active: true, expectedVersion: 0, requestKey: 'grant-' + p.accountId});
   const offline = offlineBotSdk(), outcomes: WecomBotAssemblyOutcome[] = [];
+  const outgoing=controlled?createBotSdkAdapter({mode:'isolated-synthetic',client:offline.client}):undefined;
+  if(outgoing)cleanup.push(()=>outgoing.close());
   const readBinding = vi.fn(async (subject: {memberId: string}) => {
     const p = people.find(p => p.memberId === subject.memberId);
     if (!p) throw Error('secret_binding_error');
@@ -38,13 +41,28 @@ function setup(extra: {maxInFlight?: number; requestTimeoutMs?: number} = {}) {
   const businesses = ['store-b', 'store-c'].map(store => ({scope: {tenant: 'tenant', store, workspace: 'web:original'}, employees: people.filter(p => p.store === store), ledger, artifacts, tasks: {store: tasks, catalog: []}}));
   const options = {mode: 'isolated-synthetic' as const, botId: 'bot', corpId: 'corp', client: offline.client,
     identity: {tenantId: 'tenant', stores: [{id: 'store-b'}, {id: 'store-c'}], roles: ['manager', 'marketing'] as const, store: grants, readBinding, readNative},
-    businesses, sender: {sdk: offline.sdk, fileSdk: offline.fileSdk}, onOutcome: (outcome: WecomBotAssemblyOutcome) => {outcomes.push(outcome);}, ...extra};
+    businesses, sender: {sdk: outgoing??offline.sdk, fileSdk: outgoing??offline.fileSdk}, onOutcome: (outcome: WecomBotAssemblyOutcome) => {outcomes.push(outcome);}, ...extra};
   const app = createWecomBotAssembly(options); cleanup.push(() => app.close());
   const actor = (id: string): StaffContext => {const p = people.find(p => p.accountId === id)!; return {tenant: 'tenant', store: p.store, workspace: 'web:original', employeeId: p.employeeId, employeeName: p.employeeName};};
   const dispatch = async (frame: unknown) => {offline.frame(frame); await app.idle(); return outcomes.at(-1)!;};
   const counts = () => {const db = new DatabaseSync(factFile, {readOnly: true}); try {return {reports: db.prepare('SELECT COUNT(*) AS n FROM employee_reports').get()!.n, replies: db.prepare('SELECT COUNT(*) AS n FROM bot_reply_intents').get()!.n};} finally {db.close();}};
   return {app, offline, options, outcomes, dispatch, ledger, grants, tasks, actor, readBinding, readNative, counts, artifacts};
 }
+it('assembles the controlled SDK adapter with original ledger, nested card update, export and live revocation',async()=>{
+ const s=setup({},true);s.offline.authenticate();
+ const pending=(await s.dispatch(text('member-a','controlled-report'))).result!.result,card=pending.reply.body.template_card!;
+ const event={cmd:'aibot_event_callback',headers:{req_id:'controlled-confirm'},body:{msgid:'controlled-confirm',aibotid:'bot',msgtype:'event',chattype:'single',from:{userid:'member-a',corpid:'corp'},event:{eventtype:'template_card_event',template_card_event:{card_type:'button_interaction',task_id:card.task_id,event_key:card.button_list[0]!.key}}}};
+ expect((await s.dispatch(event)).result?.reportDelivery?.state).toBe('accepted');
+ expect(s.offline.sent.at(-1)).toMatchObject({cmd:'aibot_respond_update_msg',headers:{req_id:'controlled-confirm'},body:{userids:['member-a'],template_card:{task_id:card.task_id}}});
+ const before=s.offline.sent.length;expect((await s.dispatch(event)).result?.suppressed).toBe(true);expect(s.offline.sent).toHaveLength(before);
+ const summary=(await s.dispatch(text('member-a','controlled-summary','经营汇总 2026-10-20 本月'))).result!.result;
+ expect((await s.dispatch(text('member-a','controlled-file','导出Excel '+summary.snapshotId))).result?.delivery?.state).toBe('accepted');
+ expect(s.offline.sent.at(-1)).toMatchObject({cmd:'aibot_send_msg',body:{chatid:'member-a',chat_type:1,msgtype:'file'}});
+ expect(new Set(s.offline.sent.map(f=>f.headers.req_id)).size).toBe(s.offline.sent.length);
+ const sent=s.offline.sent.length;s.grants.change('admin',{accountId:'a',storeId:'store-b',roles:['manager','marketing'],active:false,expectedVersion:1,requestKey:'controlled-revoke'});
+ expect((await s.dispatch(text('member-a','controlled-denied','查询 '+pending.reportId))).state).toBe('rejected');
+ expect(s.offline.sent).toHaveLength(sent);expect(s.ledger.getReport(s.actor('a'),pending.reportId!)?.entries[0]?.amountCents).toBe(10000);
+});
 
 it('runs installed SDK events with separate A/B/C authority on one ledger, card confirmation, query and replay', async () => {
   const s = setup(); s.offline.authenticate();
@@ -57,6 +75,7 @@ it('runs installed SDK events with separate A/B/C authority on one ledger, card 
     const p = people[i]!, card = s.outcomes[i]!.result!.result.reply.body.template_card!;
     const frame = {cmd: 'aibot_event_callback', headers: {req_id: 'confirm-' + p.accountId}, body: {msgid: 'confirm-' + p.accountId, aibotid: 'bot', msgtype: 'event', chattype: 'single', from: {userid: p.memberId, corpid: 'corp'}, event: {eventtype: 'template_card_event', task_id: card.task_id, event_key: card.button_list[0]!.key}}};
     expect((await s.dispatch(frame)).result?.result.status).toBe('confirmed');
+    expect(s.offline.sent.at(-1)).toMatchObject({cmd:'aibot_respond_update_msg',headers:{req_id:'confirm-'+p.accountId},body:{response_type:'update_template_card',userids:[p.memberId],template_card:{task_id:card.task_id,main_title:{title:'已入账，可查回'}}}});
     const count = s.offline.sent.length;
     expect((await s.dispatch(frame)).result?.suppressed).toBe(true);
     expect(s.offline.sent.length).toBe(count);

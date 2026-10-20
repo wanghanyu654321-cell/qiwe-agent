@@ -18,3 +18,17 @@ it('bounds an ignored SDK promise and never upgrades late acceptance',async()=>{
 it('records unknown when closed after invocation and blocked if closed before invocation',async()=>{const s=setup();s.sender.close();expect((await s.sender.reply(plan,budget(),async()=>{})).state).toBe('blocked');expect(s.getCalls()).toBe(0);
  const t=setup();t.setInvoke(async()=>{t.sender.close();return {headers:{req_id:'request-1'},errcode:0};});expect((await t.sender.reply(plan,budget(),async()=>{})).state).toBe('unknown');});
 it('never exposes provider errors or accepts a production port',async()=>{const s=setup();s.setInvoke(async()=>{throw Error('synthetic-secret');});const result=await s.sender.reply(plan,budget(),async()=>{});expect(result.state).toBe('unknown');expect(JSON.stringify(result)).not.toContain('synthetic-secret');expect(()=>createBotSender({sdk:{mode:'production'} as unknown as BotSdkPort})).toThrow('invalid_bot_sender');});
+it('forwards the bounded child scope to a controlled port',async()=>{
+ let received:unknown;const sdk:BotSdkPort={mode:'isolated-synthetic',ready:()=>true,reply:async(_frame,_body,scope)=>{received=scope;return {headers:{req_id:'request-1'},errcode:0};},sendMessage:async()=>({})};
+ const sender=createBotSender({sdk,timeoutMs:20}),parent=budget();expect((await sender.reply(plan,parent,async()=>{})).state).toBe('accepted');
+ const child=received as ReturnType<typeof budget>;expect(child.signal).not.toBe(parent.signal);expect(child.signal.aborted).toBe(true);expect(child.deadline).toBeLessThan(parent.deadline);sender.close();
+});
+it('does not downgrade a card update into a stream if the update port is absent',async()=>{
+ const s=setup(),update={memberId:'trusted',card:{card_type:'button_interaction' as const,task_id:'original-card',main_title:{title:'已核对',desc:'已处理'},button_list:[{text:'核对结果',key:'confirm:'+'a'.repeat(64),style:1 as const}]}};
+ expect((await s.sender.reply({...plan,update},budget(),async()=>{})).state).toBe('blocked');expect(s.getCalls()).toBe(0);
+});
+it('routes a card update only through its specific port and retains the original callback ID',async()=>{
+ const update={memberId:'trusted',card:{card_type:'button_interaction' as const,task_id:'original-card',main_title:{title:'已核对',desc:'已处理'},button_list:[{text:'核对结果',key:'confirm:'+'a'.repeat(64),style:1 as const}]}},calls:unknown[]=[];
+ const sdk:BotSdkPort={mode:'isolated-synthetic',ready:()=>true,reply:async()=>{throw Error('stream_forbidden');},sendMessage:async()=>{throw Error('send_forbidden');},updateTemplateCard:async(frame,card,scope)=>{calls.push({frame,card,scope});return {headers:{req_id:'request-1'},errcode:0};}};
+ const sender=createBotSender({sdk});expect((await sender.reply({...plan,update},budget(),async()=>{})).state).toBe('accepted');expect(calls).toHaveLength(1);expect(calls[0]).toMatchObject({frame:{headers:{req_id:'request-1'}},card:update});sender.close();
+});

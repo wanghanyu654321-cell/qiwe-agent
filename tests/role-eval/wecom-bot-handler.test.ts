@@ -102,3 +102,20 @@ it('returns the exact original integer cents even near the safe integer limit',a
  expect(s.ledger.getReport(s.actor(),result.reportId!)?.proposed.items[0]?.amountCents).toBe(9007199254740990);
  expect(result.reply.body.stream.content).toContain('90071992547409.90元');
 });
+it('accepts the official nested card event and plans a private dedicated update with the original task id',async()=>{
+ const s=setup();s.text();const pending=await s.handler.handle(s.request()),r=s.ledger.getReport(s.actor(),pending.reportId!)!;
+ s.card(r.id,r.hash);const frame=s.getFrame() as {body:{event:Record<string,unknown>}};
+ const taskId=frame.body.event.task_id as string;
+ frame.body.event={eventtype:'template_card_event',template_card_event:{card_type:'button_interaction',task_id:taskId,event_key:'confirm:'+r.hash}};
+ const result=await s.handler.handle(s.request());
+ expect(result.status).toBe('confirmed');expect(s.ledger.getReport(s.actor(),r.id)?.entries[0]?.amountCents).toBe(12345);
+ expect(result.reply).toHaveProperty('update.memberId','member-a');
+ expect(result.reply).toHaveProperty('update.card.task_id',taskId);
+ expect(result.reply).toHaveProperty('update.card.main_title.title','已入账，可查回');
+});
+it('refuses contradictory nested/flat card fields before confirming the pending report',async()=>{
+ const s=setup();s.text();const p=await s.handler.handle(s.request()),r=s.ledger.getReport(s.actor(),p.reportId!)!;s.card(r.id,r.hash);
+ const f=s.getFrame() as {body:{event:Record<string,unknown>}};
+ f.body.event.template_card_event={card_type:'button_interaction',task_id:f.body.event.task_id,event_key:'confirm:'+'a'.repeat(64)};
+ await expect(s.handler.handle(s.request())).rejects.toThrow('unsupported_event');expect(s.ledger.getReport(s.actor(),r.id)?.state).toBe('pending');
+});

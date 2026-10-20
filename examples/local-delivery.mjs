@@ -40,6 +40,7 @@ function open(directory){
  const replies=[],notifications=[];
  const sender=createBotSender({timeoutMs:1000,sdk:{mode:'isolated-synthetic',ready:()=>ready,
   reply:async(event,body)=>{replies.push({reqId:event.headers.req_id,body:structuredClone(body)});if(failReply)throw Error('synthetic-post-invocation-failure');return ack(event.headers.req_id);},
+  updateTemplateCard:async(event,update)=>{replies.push({reqId:event.headers.req_id,update:structuredClone(update)});if(failReply)throw Error('synthetic-post-invocation-failure');return ack(event.headers.req_id);},
   sendMessage:async(userid,body)=>{notifications.push({userid,body:structuredClone(body)});return ack('synthetic-proactive-ack');}}});
  const delivery=createBotDelivery({mode:'isolated-synthetic',authority,ledger,scope,employees:[employee],readEvent:()=>frame,now:()=>new Date('2026-10-17T01:00:00Z'),sender});
  return {grants,ledger,delivery,replies,notifications,setFrame:value=>{frame=value;},disconnect:()=>{ready=false;},failReply:()=>{failReply=true;},

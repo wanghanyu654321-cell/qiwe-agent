@@ -36,12 +36,16 @@ function replySeed(raw:BotReplySeed):BotReplySeed {
  if(!onlyKeys(input,['id','fingerprint','target','reply','reportId','confirmation','attachment'])||!digest(input.id)||!digest(input.fingerprint)||input.reportId!==undefined&&!digest(input.reportId))throw Error('invalid_bot_reply');
  const target=input.target,reply=input.reply;
  validReplyTarget(target);
- if(!onlyKeys(reply,['reqId','body'])||!bounded(reply.reqId,200)||!onlyKeys(reply.body,['msgtype','stream','template_card']))throw Error('invalid_bot_reply');
+ if(!onlyKeys(reply,['reqId','body','update'])||!bounded(reply.reqId,200)||!onlyKeys(reply.body,['msgtype','stream','template_card']))throw Error('invalid_bot_reply');
  const body=reply.body,stream=body.stream,card=body.template_card;
  if(!['stream','stream_with_template_card'].includes(body.msgtype)||!onlyKeys(stream,['id','finish','content'])||!bounded(stream.id,200)||stream.finish!==true||typeof stream.content!=='string'||!stream.content.trim()||stream.content.length>32000)throw Error('invalid_bot_reply');
  if(body.msgtype==='stream_with_template_card'){
   if(!onlyKeys(card,['card_type','main_title','task_id','button_list'])||card.card_type!=='button_interaction'||!onlyKeys(card.main_title,['title'])||!bounded(card.main_title.title,200)||!bounded(card.task_id,200)||!Array.isArray(card.button_list)||card.button_list.length<1||card.button_list.length>6||card.button_list.some(b=>!onlyKeys(b,['text','key','style'])||!bounded(b.text,200)||!bounded(b.key,200)||b.style!==1))throw Error('invalid_bot_reply');
  }else if(card!==undefined)throw Error('invalid_bot_reply');
+ if(reply.update!==undefined){
+  const update=reply.update,c=update.card;
+  if(!onlyKeys(update,['memberId','card'])||update.memberId!==target.memberId||!onlyKeys(c,['card_type','main_title','task_id','button_list'])||c.card_type!=='button_interaction'||!onlyKeys(c.main_title,['title','desc'])||!bounded(c.main_title.title,200)||!bounded(c.main_title.desc,512)||!/^report-[a-f0-9]{64}-[a-f0-9]{32}$/.test(c.task_id)||!Array.isArray(c.button_list)||c.button_list.length!==1||c.button_list.some(b=>!onlyKeys(b,['text','key','style'])||!bounded(b.text,200)||!/^confirm:[a-f0-9]{64}$/.test(b.key)||b.style!==1)||body.msgtype!=='stream'||input.attachment!==undefined)throw Error('invalid_bot_reply');
+ }
  if(input.confirmation!==undefined&&(!onlyKeys(input.confirmation,['reportId','deliveryId'])||!digest(input.confirmation.reportId)||!digest(input.confirmation.deliveryId)||input.confirmation.reportId!==input.reportId))throw Error('delivery_conflict');
  const file=input.attachment;
  if(file!==undefined&&(!onlyKeys(file,['snapshotHash','sha256','filename','byteLength'])||!digest(file.snapshotHash)||!digest(file.sha256)||file.filename!=='sales-'+file.snapshotHash+'.xlsx'||!Number.isSafeInteger(file.byteLength)||file.byteLength<5||file.byteLength>20_000_000))throw Error('invalid_bot_reply');

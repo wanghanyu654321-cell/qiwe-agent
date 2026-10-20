@@ -20,16 +20,16 @@ function fixture(){
  const file=path.join(directory,'original-native-shape.sqlite'),native=new DatabaseSync(file);cleanups.push(()=>native.close());
  native.exec(`CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,status TEXT,must_change_password INTEGER);
  CREATE TABLE registered_groups(jid TEXT PRIMARY KEY,folder TEXT,created_by TEXT,is_home INTEGER,execution_mode TEXT);
- CREATE TABLE tasks(id TEXT PRIMARY KEY,chat_jid TEXT,group_folder TEXT,execution_type TEXT,execution_mode TEXT,status TEXT,deleted_at TEXT);
+ CREATE TABLE tasks(id TEXT PRIMARY KEY,chat_jid TEXT,group_folder TEXT,context_mode TEXT,execution_type TEXT,execution_mode TEXT,status TEXT,deleted_at TEXT);
  CREATE TABLE profiles(id TEXT PRIMARY KEY,owner_user_id TEXT,status TEXT);
  CREATE TABLE bindings(group_folder TEXT PRIMARY KEY,agent_profile_id TEXT);
  CREATE TABLE runs(id TEXT PRIMARY KEY,body TEXT);
  INSERT INTO users VALUES('a','member','active',0);
  INSERT INTO registered_groups VALUES('web:home-a','home-folder','a',1,'container'),('web:original-role','role-folder','a',0,'container');
- INSERT INTO tasks VALUES('original-task','web:original-role','role-folder','agent','container','active',null);
+ INSERT INTO tasks VALUES('original-task','web:original-role','role-folder','isolated','agent','container','active',null);
  INSERT INTO profiles VALUES('original-profile','a','active');
  INSERT INTO bindings VALUES('role-folder','original-profile');`);
- const run={id:'original-run',task_id:'original-task',idempotency_key:'bot-'+reference,trigger_type:'manual',status:'success',result:'已保存岗位结果（合成）',definition_snapshot:{chat_jid:'web:original-role',group_folder:'role-folder',execution_type:'agent',execution_mode:'container',prompt:'private synthetic prompt'}};
+ const run={id:'original-run',task_id:'original-task',idempotency_key:'bot-'+reference,trigger_type:'manual',status:'success',result:'已保存岗位结果（合成）',definition_snapshot:{chat_jid:'web:original-role',group_folder:'role-folder',context_mode:'isolated',execution_type:'agent',execution_mode:'container',prompt:'private synthetic prompt'}};
  native.prepare('INSERT INTO runs VALUES(?,?)').run(run.id,JSON.stringify(run));
  // These fixture functions reproduce verified original synchronous return shapes;
  // they are not imports of the private Native module or a second runtime.

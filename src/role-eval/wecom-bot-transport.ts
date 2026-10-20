@@ -1,9 +1,9 @@
 export interface BotEvent {
   reqId:string;botId:string;memberId:string;corpId?:string;messageId:string;createTime?:number;
-  action:{kind:'text';text:string}|{kind:'confirm';reportId:string;hash:string};
+  action:{kind:'text';text:string}|{kind:'confirm';reportId:string;hash:string;taskId?:string};
 }
-export interface BotCard {card_type:'button_interaction';main_title:{title:string};task_id:string;button_list:{text:string;key:string;style:1}[];}
-export interface BotReplyPlan {reqId:string;body:{msgtype:'stream'|'stream_with_template_card';stream:{id:string;finish:true;content:string};template_card?:BotCard};}
+export interface BotCard {card_type:'button_interaction';main_title:{title:string;desc?:string};task_id:string;button_list:{text:string;key:string;style:1}[];}
+export interface BotReplyPlan {reqId:string;body:{msgtype:'stream'|'stream_with_template_card';stream:{id:string;finish:true;content:string};template_card?:BotCard};update?:{memberId:string;card:BotCard};}
 /** Trusted SDK event port only; this parser is not platform authentication. */
 export function normalizeBotFrame(input:unknown):BotEvent {
  const record=(v:unknown):Record<string,unknown>=>v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
@@ -15,8 +15,10 @@ export function normalizeBotFrame(input:unknown):BotEvent {
  const base={reqId,botId:body.aibotid,memberId:from.userid,messageId:body.msgid,...(from.corpid!==undefined?{corpId:from.corpid as string}:{}),...(time!==undefined?{createTime:time as number}:{})};
  const content=record(body.text).content;
  if(frame.cmd==='aibot_msg_callback'&&body.msgtype==='text'&&typeof content==='string'&&content.trim()&&content.length<=4000)return {...base,action:{kind:'text',text:content}};
- const event=record(body.event);
- const task=typeof event.task_id==='string'?/^report-([a-f0-9]{64})-[a-f0-9]{32}$/.exec(event.task_id):null;
- if(frame.cmd==='aibot_event_callback'&&body.msgtype==='event'&&event.eventtype==='template_card_event'&&task&&typeof event.event_key==='string'&&/^confirm:[a-f0-9]{64}$/.test(event.event_key))return {...base,action:{kind:'confirm',reportId:task[1]!,hash:event.event_key.slice(8)}};
+ const event=record(body.event),nested=event.template_card_event;
+ const data=nested===undefined?event:record(nested);
+ if(nested!==undefined&&['task_id','event_key','card_type'].some(k=>event[k]!==undefined&&event[k]!==data[k]))throw Error('unsupported_event');
+ const task=typeof data.task_id==='string'?/^report-([a-f0-9]{64})-[a-f0-9]{32}$/.exec(data.task_id):null;
+ if(frame.cmd==='aibot_event_callback'&&body.msgtype==='event'&&event.eventtype==='template_card_event'&&(data.card_type===undefined||data.card_type==='button_interaction')&&task&&typeof data.event_key==='string'&&/^confirm:[a-f0-9]{64}$/.test(data.event_key))return {...base,action:{kind:'confirm',reportId:task[1]!,hash:data.event_key.slice(8),taskId:data.task_id as string}};
  throw Error('unsupported_event');
 }
