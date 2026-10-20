@@ -2,13 +2,23 @@
   "recordedAt": "2026-10-20",
   "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
   "publicBase": "2590fa5f7dcca42a31ded5daf5ed2dbcc23da643",
-  "sourceState": "Selected T0-T6 implementation, T7 controlled channel adaptation and protocol/host/native-driver isolated verification; no private history, Native source copy, binaries or business data imported",
-  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted; t7ControlledSha256 preserves the pre-readiness T7 public version where adapted",
+  "sourceState": "Selected T0-T6 implementation, T7 controlled channel adaptation, partial/full Native host and driver isolation verification; successful full-host restoration and real channel acceptance remain blocked; no private history, Native source copy, binaries or business data imported",
+  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted; t7ControlledSha256 preserves the pre-readiness T7 public version where adapted; t7ReadinessSha256 preserves the pre-full-host T7 public version where adapted",
   "files": [
     {
       "path": "integrations/native/emit-patch.mjs",
       "sha256": "823ccbfe575ef1704557a3ceafb944086a88bfbd66dc62c47df7235e1c58cc62",
       "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+    },
+    {
+      "path": "integrations/native/full-host-candidate.mjs",
+      "sha256": "622b324494b817ff3a549ff3a21650a3e95d6bb402a6ea435387bc7bf2ba24a5",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
+    },
+    {
+      "path": "integrations/native/full-host.test.mts",
+      "sha256": "bcd764d00c057828b53a2f15beb65fa7a559576dc791e84439a685593b197dd0",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
     },
     {
       "path": "integrations/native/host-candidate.mjs",
@@ -19,6 +29,16 @@
       "path": "integrations/native/host-readiness.test.mts",
       "sha256": "8f4a535445eac26babbd414924057365c278dbff46f0517c2a1af295c3420668",
       "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/linux-runtime.mjs",
+      "sha256": "ae1a854860d0d25b1cbddc8ca49e7b1d7ad3a178853862ec4e9978eba4321061",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
+    },
+    {
+      "path": "integrations/native/linux-runtime.test.mjs",
+      "sha256": "497777b27eccdb0da087d4affba17d2d44c1695012e0505cb7f34e3aa4cd90a4",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
     },
     {
       "path": "integrations/native/prepare-native-sqlite.mjs",
@@ -60,6 +80,11 @@
       "path": "integrations/native/verification-options.test.mjs",
       "sha256": "3cfe238ace0541f2dffcb47d88eb9fe779613d1d344b56d4e9d5b2e2e376a2b7",
       "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/verify-full-host.mjs",
+      "sha256": "790a0c099130cc34ec784755b7eaa2aab7ff06480c7e431b895a3a3552a57bcc",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
     },
     {
       "path": "integrations/native/verify-targeted.mjs",
@@ -501,5 +526,6 @@
   "t6Base": "ad835dd53590c0f5ebae349eeed5d47aa575f605",
   "t7Base": "cd767c1aef057063948e1de786ab47bdf9523094",
   "t7ControlledBase": "69090a7cf13a65d3629cb7081527dbaa8c1bd6ee",
-  "t7ReadinessBase": "f8673f351828d9f431fc2a108674e7ed0f19b095"
+  "t7ReadinessBase": "f8673f351828d9f431fc2a108674e7ed0f19b095",
+  "t7FullHostBase": "9fe2de5969126685b850fd8b942f0e2417cfe03d"
 }
