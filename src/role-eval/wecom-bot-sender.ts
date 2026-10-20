@@ -1,18 +1,20 @@
 import type {BotReadScope} from './wecom-bot-context.js';
-import type {BotReplyPlan} from './wecom-bot-transport.js';
+import type {BotReplyPlan,BotCard} from './wecom-bot-transport.js';
+import {isBotSdkNotStarted} from './wecom-bot-sdk.js';
 export interface BotSdkPort {
  mode:'isolated-synthetic';
  /** Authenticated and connected lifecycle, not merely WebSocket.OPEN. */
  ready():boolean;
- reply(frame:{headers:{req_id:string}},body:BotReplyPlan['body']):Promise<unknown>;
- sendMessage(chatid:string,body:{msgtype:'markdown';markdown:{content:string}}):Promise<unknown>;
+ reply(frame:{headers:{req_id:string}},body:BotReplyPlan['body'],scope?:BotReadScope):Promise<unknown>;
+ sendMessage(chatid:string,body:{msgtype:'markdown';markdown:{content:string}},scope?:BotReadScope):Promise<unknown>;
+ updateTemplateCard?(frame:{headers:{req_id:string}},update:{memberId:string;card:BotCard},scope?:BotReadScope):Promise<unknown>;
 }
 export interface BotSendOutcome {state:'blocked'|'accepted'|'rejected'|'unknown';apiErrorCode:number|null;msgid:null;detail:string;ackReqId?:string;}
 export interface BotFileSdkPort {
  mode:'isolated-synthetic';
- uploadMedia(bytes:Buffer,options:{type:'file';filename:string}):Promise<unknown>;
+ uploadMedia(bytes:Buffer,options:{type:'file';filename:string},scope?:BotReadScope):Promise<unknown>;
  /** Explicit single-chat extension documented by the current official protocol. */
- sendMessage(member:string,body:{msgtype:'file';chat_type:1;file:{media_id:string}}):Promise<unknown>;
+ sendMessage(member:string,body:{msgtype:'file';chat_type:1;file:{media_id:string}},scope?:BotReadScope):Promise<unknown>;
 }
 /** Adapted from the existing application sender's bounded/preflight/result policy.
  * No HTTP credential flow or implicit network fallback is valid for this channel. */
@@ -42,7 +44,7 @@ export function createBotSender(options:{sdk:BotSdkPort;timeoutMs?:number;fileSd
     if(expired()||done){cancel();return;}if(!sdk.ready()){finish(outcome('blocked','not_connected'));return;}
     if(!uploadMode)attempted=true;
     const response=await invoke({signal:child.signal,deadline},()=>{if(done||expired()||child.signal.aborted)throw Error('send_cancelled');attempted=true;});if(!done){if(expired())cancel();else finish(ack(response));}
-   }).catch(error=>{if(done)return;if(expired()){cancel();return;}finish(attempted?ack(error,true):outcome('blocked',uploadMode?'file_not_sent':'authority_refused'));});
+   }).catch(error=>{if(done)return;if(isBotSdkNotStarted(error)){finish(outcome('blocked',uploadMode?'file_not_sent':'sdk_not_started'));return;}if(expired()){cancel();return;}finish(attempted?ack(error,true):outcome('blocked',uploadMode?'file_not_sent':'authority_refused'));});
   });
  }
  return {
@@ -50,19 +52,23 @@ export function createBotSender(options:{sdk:BotSdkPort;timeoutMs?:number;fileSd
   if(!fileSdk||!safe(member)||member.length>120||!/^sales-[a-f0-9]{64}\.xlsx$/.test(filename)||!(bytes instanceof Uint8Array)||bytes.byteLength<5||bytes.byteLength>20_000_000)return outcome('blocked','file_not_sent');
   const copy=Buffer.from(bytes);
   return execute(scope,beforeSend,async(child,markMessage)=>{
-   const media=structuredClone(await fileSdk.uploadMedia(copy,{type:'file',filename})) as {type?:unknown;media_id?:unknown}|null;
+   const media=structuredClone(await fileSdk.uploadMedia(copy,{type:'file',filename},child)) as {type?:unknown;media_id?:unknown}|null;
    if(!media||media.type!=='file'||typeof media.media_id!=='string'||!media.media_id||media.media_id.length>4096||/[\u0000-\u0020]/.test(media.media_id))throw Error('invalid_file_media');
    await beforeSend(child);if(child.signal.aborted||performance.now()>=child.deadline||!sdk.ready())throw Error('send_cancelled');
-   markMessage();return fileSdk.sendMessage(member,{msgtype:'file',chat_type:1,file:{media_id:media.media_id}});
+   markMessage();return fileSdk.sendMessage(member,{msgtype:'file',chat_type:1,file:{media_id:media.media_id}},child);
   },undefined,true);
  },
  reply(plan:BotReplyPlan,scope:BotReadScope,beforeSend:(scope:BotReadScope)=>Promise<void>){
   const copy=structuredClone(plan);if(!safe(copy.reqId)||typeof copy.body?.stream?.content!=='string'||!copy.body.stream.content.trim()||Buffer.byteLength(copy.body.stream.content)>16384)throw Error('invalid_bot_reply');
-  return execute(scope,beforeSend,()=>sdk.reply({headers:{req_id:copy.reqId}},copy.body),copy.reqId);
+  if(copy.update){
+   if(typeof sdk.updateTemplateCard!=='function')return Promise.resolve(outcome('blocked','card_update_unavailable'));
+   return execute(scope,beforeSend,child=>sdk.updateTemplateCard!({headers:{req_id:copy.reqId}},copy.update!,child),copy.reqId);
+  }
+  return execute(scope,beforeSend,child=>sdk.reply({headers:{req_id:copy.reqId}},copy.body,child),copy.reqId);
  },
  notify(member:string,content:string,scope:BotReadScope,beforeSend:(scope:BotReadScope)=>Promise<void>){
   if(!safe(member)||member.length>120||typeof content!=='string'||!content.trim()||Buffer.byteLength(content)>16384)throw Error('invalid_bot_reply');
-  return execute(scope,beforeSend,()=>sdk.sendMessage(member,{msgtype:'markdown',markdown:{content}}));
+  return execute(scope,beforeSend,child=>sdk.sendMessage(member,{msgtype:'markdown',markdown:{content}},child));
  },
  close(){closing.abort();}
  };

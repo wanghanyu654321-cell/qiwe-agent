@@ -6,18 +6,18 @@ const owner:BotTaskOwner={tenantId:'tenant',storeId:'store',accountId:'account',
 const backend={kind:'native' as const,taskId:'task',profileId:'profile',workspaceJid:'web:role'};
 const scope=()=>({signal:new AbortController().signal,deadline:performance.now()+2000});
 function fixture(){
- const task={id:'task',chat_jid:'web:role',group_folder:'role-folder',execution_type:'agent',execution_mode:'container',status:'active',deleted_at:null,prompt:'private task prompt'};
+ const task={id:'task',chat_jid:'web:role',group_folder:'role-folder',context_mode:'isolated',execution_type:'agent',execution_mode:'container',status:'active',deleted_at:null,prompt:'private task prompt'};
  const group={jid:'web:role',folder:'role-folder',created_by:'account',is_home:false,executionMode:'container',secret:'private group metadata'};
  const profile={id:'profile',owner_user_id:'account',status:'active',system_prompt:'private profile prompt'};
  const binding={agent_profile_id:'profile',group_folder:'role-folder'};
- const run={id:'run',task_id:'task',idempotency_key:'key',trigger_type:'manual',status:'success',result:'原服务持久结果',definition_snapshot:{chat_jid:'web:role',group_folder:'role-folder',execution_type:'agent',execution_mode:'container',prompt:'private run prompt'}};
+ const run={id:'run',task_id:'task',idempotency_key:'key',trigger_type:'manual',status:'success',result:'原服务持久结果',definition_snapshot:{chat_jid:'web:role',group_folder:'role-folder',context_mode:'isolated',execution_type:'agent',execution_mode:'container',prompt:'private run prompt'}};
  const readers={getTaskById:vi.fn(()=>task as unknown),getRegisteredGroup:vi.fn(()=>group as unknown),getAgentProfile:vi.fn(()=>profile as unknown),getWorkspaceAgentProfileBinding:vi.fn(()=>binding as unknown),getTaskRunById:vi.fn(()=>run as unknown)};
  return {task,group,profile,binding,run,readers,options:{mode:'isolated-synthetic' as const,readers}};
 }
 it('maps real Native reader names, folder binding, camelCase group mode and parsed run without leaking private metadata',async()=>{
  const f=fixture(),port=createNativeBotReadPort(f.options);
  const row=await port.inspect(owner,backend,scope());
- expect(row).toEqual({task:{id:'task',chat_jid:'web:role',group_folder:'role-folder',execution_type:'agent',execution_mode:'container',status:'active',deleted_at:null},group:{jid:'web:role',folder:'role-folder',created_by:'account',is_home:false,execution_mode:'container'},profile:{id:'profile',owner_user_id:'account',status:'active'},bindingProfileId:'profile'});
+ expect(row).toEqual({task:{id:'task',chat_jid:'web:role',group_folder:'role-folder',context_mode:'isolated',execution_type:'agent',execution_mode:'container',status:'active',deleted_at:null},group:{jid:'web:role',folder:'role-folder',created_by:'account',is_home:false,execution_mode:'container'},profile:{id:'profile',owner_user_id:'account',status:'active'},bindingProfileId:'profile'});
  expect(f.readers.getTaskById).toHaveBeenCalledWith('task');expect(f.readers.getRegisteredGroup).toHaveBeenCalledWith('web:role');expect(f.readers.getWorkspaceAgentProfileBinding).toHaveBeenCalledWith('role-folder');expect(f.readers.getAgentProfile).toHaveBeenCalledWith('profile');
  const saved=await port.getRun('run',scope());expect(JSON.stringify(saved)).not.toContain('private');
  expect(await createNativeBotTasks({port}).query(owner,backend,'key','run',scope(),async()=>{})).toMatchObject({status:'success',output:'原服务持久结果'});

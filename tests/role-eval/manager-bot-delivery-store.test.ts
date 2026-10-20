@@ -19,6 +19,16 @@ function confirmed(s:ManagerStore){const report=s.receiveBot(actor,'original','�
 function linked(s:ManagerStore){const report=confirmed(s),input={...seed(),reportId:report.id,confirmation:{reportId:report.id,deliveryId:report.delivery!.id}};return {report,input};}
 const outcome=(state:DeliveryOutcome['state']='accepted'):DeliveryOutcome=>({state,apiErrorCode:state==='accepted'?0:null,msgid:null,detail:'synthetic_result',...(state==='accepted'?{ackReqId:'req-1'}:{})});
 const reservation=(input=seed()):BotReplyReservation=>({id:input.id,fingerprint:input.fingerprint,target:{...input.target},reqId:input.reply.reqId});
+it('persists a private dedicated card update without widening its target or replacing the report text',()=>{
+ const {s,file}=open(),input=seed();
+ input.reply.update={memberId:target.memberId,card:{card_type:'button_interaction',task_id:'report-'+'a'.repeat(64)+'-'+'b'.repeat(32),main_title:{title:'已入账，可查回',desc:'请查询原报告'},button_list:[{text:'核对结果',key:'confirm:'+'c'.repeat(64),style:1}]}};
+ const wrong=structuredClone(input);wrong.reply.update!.memberId='foreign';expect(()=>s.prepareBotReply(actor,wrong)).toThrow('invalid_bot_reply');
+ const extra=structuredClone(input);Object.assign(extra.reply.update!,{userids:[]});expect(()=>s.prepareBotReply(actor,extra)).toThrow('invalid_bot_reply');
+ s.prepareBotReply(actor,input);input.reply.update.card.task_id='mutated';const saved=open(file).s.getBotReply(actor,input.id)!;
+ expect(saved.reply.update?.memberId).toBe(target.memberId);expect(saved.reply.update?.card.task_id).toMatch(/^report-a{64}-b{32}$/);expect(saved.reply.body.stream.content).toBe('Synthetic reply');
+ const claim=s.claimBotReply(actor,input.id)!;s.finishBotReply(actor,claim.id,claim.delivery.id,claim.delivery.attempt,outcome('unknown'));
+ expect(open(file).s.claimBotReply(actor,input.id)).toBeUndefined();
+});
 // Workers execute the current source, independently of a previous dist build.
 function storeModule(){
  const compile=(source:string)=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');

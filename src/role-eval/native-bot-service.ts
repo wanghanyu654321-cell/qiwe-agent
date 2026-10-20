@@ -1,6 +1,6 @@
 import {types} from 'node:util';
 import type {BotReadScope} from './wecom-bot-context.js';
-import type {NativeBotTaskPort} from './native-bot-tasks.js';
+import type {NativeBotTaskPort,NativeBackend} from './native-bot-tasks.js';
 
 /** Exact synchronous reads from an already initialized original server.
  * Do not import/init Native or use getters that repair default Profiles here. */
@@ -28,7 +28,7 @@ function id(value:unknown):string{if(typeof value!=='string'||!value||value.leng
 
 /** Read-only projection bridge. This never exposes trigger/pump/cancel functions.
  * enabled=false is deliberate: the original trigger also advances global work. */
-export function createNativeBotReadPort(options:{mode:'isolated-synthetic';readers:NativeBotReaders}):NativeBotTaskPort&{close():void}{
+export function createNativeBotReadPort(options:{mode:'isolated-synthetic';readers:NativeBotReaders}):NativeBotTaskPort&{close():void;inspectSync(backend:Readonly<NativeBackend>,scope:BotReadScope):unknown;getRunSync(runId:string,scope:BotReadScope):unknown}{
  const names=['getTaskById','getRegisteredGroup','getAgentProfile','getWorkspaceAgentProfileBinding','getTaskRunById'] as const;
  let source:Record<string,unknown>,callbacks:Record<(typeof names)[number],(key:string)=>unknown>;
  try{
@@ -51,10 +51,11 @@ export function createNativeBotReadPort(options:{mode:'isolated-synthetic';reade
   }
   check(scope);return result;
  };
- const port:NativeBotTaskPort&{close():void}={
+ const port:NativeBotTaskPort&{close():void;inspectSync(backend:Readonly<NativeBackend>,scope:BotReadScope):unknown;getRunSync(runId:string,scope:BotReadScope):unknown}={
   mode:'isolated-synthetic',enabled:false,
-  async inspect(_owner,backend,scope){
-   const task=pick(read('getTaskById',backend.taskId,scope),['id','chat_jid','group_folder','execution_type','execution_mode','status','deleted_at']);
+  async inspect(_owner,backend,scope){return port.inspectSync(backend,scope);},
+  inspectSync(backend,scope){
+   const task=pick(read('getTaskById',backend.taskId,scope),['id','chat_jid','group_folder','context_mode','execution_type','execution_mode','status','deleted_at']);
    const original=object(read('getRegisteredGroup',id(task.chat_jid),scope));
    const group=pick(original,['jid','folder','created_by','is_home']);
    group.execution_mode=field(original,'executionMode');
@@ -63,11 +64,12 @@ export function createNativeBotReadPort(options:{mode:'isolated-synthetic';reade
    const profile=pick(read('getAgentProfile',bindingProfileId,scope),['id','owner_user_id','status']);
    check(scope);return {task,group,profile,bindingProfileId};
   },
-  async getRun(runId,scope){
+  async getRun(runId,scope){return port.getRunSync(runId,scope);},
+  getRunSync(runId,scope){
    const original=object(read('getTaskRunById',runId,scope));
    const run=pick(original,['id','task_id','idempotency_key','trigger_type','status','result']);
    // getTaskRunById already decodes the stored JSON. Never guess or double-parse.
-   run.definition_snapshot=pick(field(original,'definition_snapshot'),['chat_jid','group_folder','execution_type','execution_mode']);
+   run.definition_snapshot=pick(field(original,'definition_snapshot'),['chat_jid','group_folder','context_mode','execution_type','execution_mode']);
    check(scope);return run;
   },
   async trigger(_taskId,_key,scope){check(scope);throw Error('native_disabled');},

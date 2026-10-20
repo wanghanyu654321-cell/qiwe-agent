@@ -49,6 +49,7 @@ function fixture(){
  const sdk:BotSdkPort={mode:'isolated-synthetic',ready:()=>true,reply:async(f,body)=>{replies.push(body.stream.content);return {headers:{req_id:f.headers.req_id},errcode:0};},sendMessage:async()=>{throw Error('unexpected_proactive_message');}};
  const fileSdk:BotFileSdkPort={mode:'isolated-synthetic',uploadMedia:async bytes=>{uploads.push(Buffer.from(bytes));return {type:'file',media_id:'synthetic-file'};},sendMessage:async member=>{files.push(member);return {headers:{req_id:'file-'+files.length},errcode:0};}};
  let ledger=new ManagerStore(ledgerFile),artifacts=new ManagerArtifactStore({mode:'isolated-synthetic',directory:join(directory,'artifacts')});
+ sdk.updateTemplateCard=async(f,update)=>{replies.push(update.card.main_title.desc!);return {headers:{req_id:f.headers.req_id},errcode:0};};
  const make=()=>createBotDelivery({mode:'isolated-synthetic',authority,ledger,artifacts,scope:{tenant:actor.tenant,store:actor.store,workspace:actor.workspace},employees:[{accountId:'employee',employeeId:actor.employeeId,employeeName:actor.employeeName}],readEvent:()=>frame,now:()=>new Date('2026-10-20T01:00:00Z'),sender:createBotSender({sdk,fileSdk,timeoutMs:100})});
  let bot=make();
  const budget=()=>({signal:new AbortController().signal,deadline:performance.now()+3000,correlationId:'web-compat'});

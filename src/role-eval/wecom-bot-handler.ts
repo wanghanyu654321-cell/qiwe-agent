@@ -115,6 +115,12 @@ export function createBotReportHandler(options:BotReportOptions){
    else if(['authority_cancelled','authority_timeout','context_closed','tasks_closed','access_changed','access_denied','authority_unavailable','bot_reply_conflict','invalid_bot_reply'].includes(code))throw Error(code);
    else throw Error('report_unavailable');
   }
+  if(event.action.kind==='confirm'&&event.action.taskId){
+   const title=result.status==='confirmed'?'已入账，可查回':result.status==='conflict'?'核对冲突，未重复入账':'请查询报告核实';
+   result.reply.update={memberId:context.channel.memberId,card:{card_type:'button_interaction',task_id:event.action.taskId,
+    main_title:{title,desc:'业务与通知状态分别保存。请发送“查询 '+event.action.reportId+'”查回完整结果。'},
+    button_list:[{text:'核对结果',key:'confirm:'+event.action.hash,style:1}]}};
+  }
   // A committed report survives response failure. Do not roll it back or mark it delivered.
   await authority.assertCurrent(context);issued.set(result,{context,event:structuredClone(event),actor:{...actor},result:structuredClone(result)});return result;
  }};

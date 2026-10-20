@@ -73,7 +73,7 @@ function setup() {
         expect(target.taskId).toBe(backend.taskId);
         inspections.push(person.accountId);
         return {
-          task: {id: backend.taskId, chat_jid: backend.workspaceJid, group_folder: 'role-' + person.accountId, execution_type: 'agent', execution_mode: 'container', status: 'active', deleted_at: null},
+          task: {id: backend.taskId, chat_jid: backend.workspaceJid, group_folder: 'role-' + person.accountId, context_mode: 'isolated', execution_type: 'agent', execution_mode: 'container', status: 'active', deleted_at: null},
           group: {jid: backend.workspaceJid, folder: 'role-' + person.accountId, created_by: person.accountId, execution_mode: 'container', is_home: 0},
           profile: {id: backend.profileId, owner_user_id: person.accountId, status: 'active'}, bindingProfileId: backend.profileId,
         };
@@ -89,7 +89,7 @@ function setup() {
         const run = runs.get(runId);
         if (!run) throw Error('foreign_run');
         return {id: runId, task_id: backend.taskId, idempotency_key: run.key, trigger_type: 'manual', status: run.status, result: run.status === 'success' ? '本人岗位结果-' + person.accountId : null,
-          definition_snapshot: {chat_jid: backend.workspaceJid, group_folder: 'role-' + person.accountId, execution_type: 'agent', execution_mode: 'container'}};
+          definition_snapshot: {chat_jid: backend.workspaceJid, group_folder: 'role-' + person.accountId, context_mode: 'isolated', execution_type: 'agent', execution_mode: 'container'}};
       },
       cancelRun: async runId => {
         const run = runs.get(runId);
@@ -122,6 +122,7 @@ function setup() {
     const makeApp = (store: string = person.store) => {
       const sender = createBotSender({sdk: {mode: 'isolated-synthetic', ready: () => true,
         reply: async (replyFrame, body) => {replies.push({member: person.memberId, reqId: replyFrame.headers.req_id, content: body.stream.content}); return {headers: {req_id: replyFrame.headers.req_id}, errcode: 0};},
+        updateTemplateCard: async (replyFrame, update) => {replies.push({member: update.memberId, reqId: replyFrame.headers.req_id, content: update.card.main_title.desc!}); return {headers: {req_id: replyFrame.headers.req_id}, errcode: 0};},
         sendMessage: async () => {throw Error('unexpected_proactive_text');},
       }, fileSdk: {mode: 'isolated-synthetic',
         uploadMedia: async bytes => {uploads.push({member: person.memberId, bytes: Buffer.from(bytes)}); return {type: 'file', media_id: 'media-' + person.accountId};},

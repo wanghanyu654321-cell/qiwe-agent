@@ -46,7 +46,7 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
   // Validate sender now, without taking ownership of either injected SDK port.
   createBotSender(options.sender).close();
   const port = options.sender.sdk, filePort = options.sender.fileSdk;
-  const senderOptions = {...options.sender, sdk: {mode: port.mode, ready: port.ready.bind(port), reply: port.reply.bind(port), sendMessage: port.sendMessage.bind(port)},
+  const senderOptions = {...options.sender, sdk: {mode: port.mode, ready: port.ready.bind(port), reply: port.reply.bind(port), sendMessage: port.sendMessage.bind(port), ...(port.updateTemplateCard ? {updateTemplateCard: port.updateTemplateCard.bind(port)} : {})},
     ...(filePort ? {fileSdk: {mode: filePort.mode, uploadMedia: filePort.uploadMedia.bind(filePort), sendMessage: filePort.sendMessage.bind(filePort)}} : {})};
   const identity = {...options.identity, stores: structuredClone(options.identity.stores), roles: [...options.identity.roles]};
   const businesses = options.businesses.map(b => {

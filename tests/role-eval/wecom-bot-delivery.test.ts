@@ -2,6 +2,8 @@ import {afterEach,expect,it} from 'vitest';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 import {ManagerStore} from '../../src/role-eval/manager-store.js';
 import {WorkbenchAccessStore} from '../../src/role-eval/workbench-access.js';
 import {createWecomBotContext} from '../../src/role-eval/wecom-bot-context.js';
@@ -17,7 +19,9 @@ function setup(home='web:home-a'){
  const actor={tenant:'t',store:'b',workspace:'web:old-ledger',employeeId:'original-a',employeeName:'合成美容师'};
  const authority=createWecomBotContext({mode:'isolated-synthetic',botId:'bot',corpId:'corp',tenantId:'t',stores:[{id:'b'}],roles:['manager'],store:grants,readSubject:async()=>({botId:'bot',memberId:member}),readBinding:async()=>({botId:'bot',corpId:'corp',memberId:member,accountId:account,version:1,active:true}),readNative:async id=>({user:{id,role:'member',status:'active',must_change_password:false},workspaceJid:id==='a'?home:'web:home-b'})});cleanups.push(()=>authority.close());
  const replies:{reqId:string;body:BotReplyPlan['body']}[]=[],notifications:{member:string;content:string}[]=[];
+ const cardUpdate:NonNullable<BotSdkPort['updateTemplateCard']>=async(f,update)=>{replies.push({reqId:f.headers.req_id,body:{msgtype:'stream',stream:{id:f.headers.req_id,finish:true,content:update.card.main_title.desc!}}});return invoke(f.headers.req_id);};
  const sdk:BotSdkPort={mode:'isolated-synthetic',ready:()=>{readyHook();return ready;},reply:async(f,body)=>{replies.push({reqId:f.headers.req_id,body:structuredClone(body)});return invoke(f.headers.req_id);},sendMessage:async(id,body)=>{notifications.push({member:id,content:body.markdown.content});return invoke('proactive-ack');}};
+ sdk.updateTemplateCard=cardUpdate;
  const make=(store=ledger)=>{const sender=createBotSender({sdk,timeoutMs:35});const app=createBotDelivery({mode:'isolated-synthetic',authority,ledger:store,scope:{tenant:'t',store:'b',workspace:'web:old-ledger'},employees:[{accountId:'a',employeeId:'original-a',employeeName:'合成美容师'},{accountId:'b',employeeId:'original-b',employeeName:'合成员工乙'}],readEvent:()=>frame,now:()=>new Date('2026-10-17T01:00:00Z'),sender});cleanups.push(()=>app.close());return app;};
  const app=make(),request=()=>({correlationId:'delivery',signal:new AbortController().signal,deadline:performance.now()+1000});
  const text=(content='今天销售成交88.88元',id='text-1')=>{frame={cmd:'aibot_msg_callback',headers:{req_id:'req-'+id},body:{aibotid:'bot',msgid:id,chattype:'single',from:{userid:member},msgtype:'text',text:{content}}};};
@@ -31,6 +35,23 @@ it('delivers pending card, committed confirmation and a fresh query through the 
 });
 it('suppresses duplicate events and confirmation notifications across independent connections',async()=>{const s=setup();s.text();const first=await s.app.handle(s.request());await s.reopen().handle(s.request());expect(s.replies).toHaveLength(1);const r=s.ledger.getReport(s.actor,first.result.reportId!)!;s.confirm(r.id,r.hash);
  await Promise.all([s.app.handle(s.request()),s.reopen().handle(s.request())]);expect(s.replies).toHaveLength(2);await s.reopen().recover(s.request(),r.id);expect(s.notifications).toEqual([]);expect(s.ledger.getReport(s.actor,r.id)?.delivery?.attempt).toBe(1);
+});
+it.each(['blocked','unknown'] as const)('keeps pre-T7b confirmation fingerprints compatible for %s persisted delivery',async state=>{
+ const s=setup(),r=s.seed();s.confirm(r.id,r.hash);if(state==='blocked')s.disconnect();else s.setInvoke(async()=>{throw Error('synthetic-unknown');});
+ await s.app.handle(s.request());
+ const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
+ const id=hash(['corp','bot','member-a','confirm-1']);
+ const db=new DatabaseSync(s.file);try{
+  const raw=db.prepare('SELECT body FROM bot_reply_intents WHERE id=?').get(id) as {body:string};const row=JSON.parse(raw.body);
+  row.fingerprint=hash(['bot','member-a','confirm-1',null,{kind:'confirm',reportId:r.id,hash:r.hash}]);
+  row.delivery.confirmationHash=row.fingerprint;delete row.reply.update;
+  db.prepare('UPDATE bot_reply_intents SET body=? WHERE id=?').run(JSON.stringify(row),id);
+ }finally{db.close();}
+ const previous=s.replies.length;s.connect();s.setInvoke(async reqId=>({headers:{req_id:reqId},errcode:0}));
+ const result=await s.reopen().handle(s.request());
+ expect(result.delivery?.state).toBe(state==='blocked'?'accepted':'unknown');expect(s.replies.length-previous).toBe(state==='blocked'?1:0);
+ expect(s.ledger.getReport(s.actor,r.id)?.entries).toHaveLength(1);
+ if(state==='blocked')expect(s.ledger.getBotReply(s.actor,id)?.reply.update?.card.task_id).toContain(r.id);
 });
 it('recovers a definitely unsent blocked confirmation using the original single recipient',async()=>{const s=setup();const r=s.seed();s.disconnect();s.confirm(r.id,r.hash);expect((await s.app.handle(s.request())).reportDelivery?.state).toBe('blocked');expect(s.replies).toEqual([]);
  s.connect();const result=await s.reopen().recover(s.request(),r.id);expect(result.delivery.state).toBe('accepted');expect(s.notifications).toHaveLength(1);expect(s.notifications[0]).toMatchObject({member:'member-a'});expect(s.notifications[0]?.content).toContain('88.88元');expect(s.notifications[0]?.content).not.toContain('http');await s.app.recover(s.request(),r.id);expect(s.notifications).toHaveLength(1);

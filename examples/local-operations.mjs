@@ -45,6 +45,7 @@ function open(directory){
  const replies=[],uploads=[],files=[];let frame;
  const sender=createBotSender({timeoutMs:1000,sdk:{mode:'isolated-synthetic',ready:()=>true,
   reply:async(event,body)=>{replies.push({reqId:event.headers.req_id,body:structuredClone(body)});return ack(event.headers.req_id);},
+  updateTemplateCard:async(event,update)=>{replies.push({reqId:event.headers.req_id,update:structuredClone(update)});return ack(event.headers.req_id);},
   sendMessage:async()=>{throw Error('unexpected_markdown_fallback');}},fileSdk:{mode:'isolated-synthetic',
   uploadMedia:async(bytes,options)=>{assert.equal(options.type,'file');uploads.push({bytes:Buffer.from(bytes),filename:options.filename});return {type:'file',media_id:'synthetic-file-media'};},
   sendMessage:async(userid,body)=>{assert.equal(userid,member);assert.deepEqual(body,{msgtype:'file',chat_type:1,file:{media_id:'synthetic-file-media'}});files.push({userid,body:structuredClone(body)});return ack('synthetic-file-ack-'+files.length);}}});

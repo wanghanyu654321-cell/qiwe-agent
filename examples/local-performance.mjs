@@ -101,13 +101,13 @@ function open(directory){
    const port=instrument({mode:'isolated-synthetic',enabled:true,
     async inspect(owner,backend){
      assert.equal(owner.accountId,employee.accountId,'synthetic_owner_mismatch');assert.equal(backend.taskId,taskId,'synthetic_task_mismatch');
-     return {task:{id:taskId,chat_jid:workspaceJid,group_folder:folder,execution_type:'agent',execution_mode:'container',status:'active',deleted_at:null},
+     return {task:{id:taskId,chat_jid:workspaceJid,group_folder:folder,execution_type:'agent',execution_mode:'container',context_mode:'isolated',status:'active',deleted_at:null},
       group:{jid:workspaceJid,folder,created_by:employee.accountId,execution_mode:'container',is_home:0},
       profile:{id:profileId,owner_user_id:employee.accountId,status:'active'},bindingProfileId:profileId};
     },
     async trigger(id,key){
      assert.equal(id,taskId,'synthetic_trigger_target');const runId='synthetic-run-'+sha(key).slice(0,24);
-     const body={id:runId,task_id:taskId,idempotency_key:key,trigger_type:'manual',status:'running',result:null,definition_snapshot:{chat_jid:workspaceJid,group_folder:folder,execution_type:'agent',execution_mode:'container'}};
+     const body={id:runId,task_id:taskId,idempotency_key:key,trigger_type:'manual',status:'running',result:null,definition_snapshot:{chat_jid:workspaceJid,group_folder:folder,execution_type:'agent',execution_mode:'container',context_mode:'isolated'}};
      runs.prepare('INSERT INTO task_runs(id,key,body) VALUES(?,?,?)').run(runId,key,JSON.stringify(body));counters.nativeTrigger++;return {success:true,runId};
     },
     async getRun(id){return readRun(id);},
@@ -117,8 +117,9 @@ function open(directory){
    const tasks=owned(createBotTasks({mode:'isolated-synthetic',authority,store:references,native,catalog:[{tenantId:scope.tenant,storeId:scope.store,accountId:employee.accountId,homeJid,role:'marketing',alias:'weekly',taskId,profileId,workspaceJid}]}));
    const sdk=instrument({mode:'isolated-synthetic',ready:()=>true,
     async reply(event){counters.reply++;return {headers:{req_id:event.headers.req_id},errcode:0};},
+    async updateTemplateCard(event){counters.reply++;return {headers:{req_id:event.headers.req_id},errcode:0};},
     async sendMessage(){throw Error('unexpected_proactive_send');}
-   },'synthetic-sdk',['reply','sendMessage']);
+   },'synthetic-sdk',['reply','updateTemplateCard','sendMessage']);
    const fileSdk=instrument({mode:'isolated-synthetic',
     async uploadMedia(bytes,options){
      assert.equal(options.type,'file','synthetic_upload_type');

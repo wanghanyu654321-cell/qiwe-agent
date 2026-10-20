@@ -71,7 +71,7 @@ export function createBotTasks(options:BotTasksOptions){
     let invoked=false,outcome:BotTaskStartOutcome={state:'blocked',detail:'backend_unavailable'};
     try{
      await authority.assertCurrent(context);check(scope);
-     if(claim.backend.kind==='native'&&native){invoked=true;outcome=await bounded(scope,child=>native.start({...owner},{...claim.backend} as Extract<BotTaskBackend,{kind:'native'}>,'bot-'+id,child,()=>authority.assertCurrent(context)));}
+     if(claim.backend.kind==='native'&&native){invoked=true;outcome=await bounded(scope,child=>native.start({...owner},{...claim.backend} as Extract<BotTaskBackend,{kind:'native'}>,'bot-'+id,child,()=>authority.assertCurrent(context),work=>authority.withCurrent(context,()=>{work();})));}
      else if(claim.backend.kind==='training'&&training?.enabled){
       const service=trainingService(owner);check(scope);const input=command.input;if(input.kind!=='training')throw Error('task_conflict');
       invoked=true;const run=service.start({accountId:owner.accountId,workspaceJid:'web:local-training'},{mode:input.mode,query:input.query,persona:input.persona,requestKey:claim.backend.requestKey});
@@ -86,7 +86,7 @@ export function createBotTasks(options:BotTasksOptions){
    const claim=await authority.withCurrent(context,guard=>{check(scope);return store.claimCancel(owner,record!.id,guard);});
    if(claim){let invoked=false,outcome:{state:'requested'|'blocked'|'unknown';detail:string}={state:'blocked',detail:'backend_unavailable'};
     try{await authority.assertCurrent(context);check(scope);
-     if(claim.backend.kind==='native'&&native){const route=claim.input.kind==='native'?routeFor(owner,claim.input.alias):undefined;if(route&&isDeepStrictEqual(nativeBackend(route),claim.backend)){invoked=true;outcome=await bounded(scope,child=>native.cancel({...owner},{...claim.backend} as Extract<BotTaskBackend,{kind:'native'}>,'bot-'+claim.id,claim.referenceId!,child,()=>authority.assertCurrent(context)));}}
+     if(claim.backend.kind==='native'&&native){const route=claim.input.kind==='native'?routeFor(owner,claim.input.alias):undefined;if(route&&isDeepStrictEqual(nativeBackend(route),claim.backend)){invoked=true;outcome=await bounded(scope,child=>native.cancel({...owner},{...claim.backend} as Extract<BotTaskBackend,{kind:'native'}>,'bot-'+claim.id,claim.referenceId!,child,()=>authority.assertCurrent(context),work=>authority.withCurrent(context,()=>{work();})));}}
      else if(claim.backend.kind==='training'&&training?.enabled){const service=trainingService(owner),actor={accountId:owner.accountId,workspaceJid:'web:local-training'};checkTrainingReference(claim,service.get(actor,claim.backend.requestKey));invoked=true;const run=service.cancel(actor,claim.backend.requestKey,claim.referenceId!);checkTrainingReference(claim,run);outcome={state:run.status==='cancelled'?'requested':run.status==='unknown'?'unknown':'blocked',detail:'training_cancel_observed'};}
     }catch{outcome={state:invoked?'unknown':'blocked',detail:'cancellation_unverified'};}
     record=store.finishCancel(owner,claim.id,claim.cancellation.attempt,outcome);

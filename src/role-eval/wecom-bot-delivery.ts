@@ -14,7 +14,10 @@ export function createBotDelivery(options:BotReportOptions&{sender:ReturnType<ty
  const checkOpen=()=>{if(closed)throw Error('delivery_closed');};
  const eventSeed=(value:Parameters<NonNullable<BotReportOptions['beforeWork']>>[0])=>{
   const c=value.context.channel,i=value.context.identity,event=value.event;
-  return {id:hash(JSON.stringify([c.corpId,c.botId,c.memberId,event.messageId])),fingerprint:hash(JSON.stringify([event.botId,event.memberId,event.messageId,event.createTime??null,event.action])),target:{...c,accountId:i.accountId,workspaceJid:i.workspaceJid,storeId:i.storeId}};
+  // The task_id routes a card update, not a new business intent. Preserve the
+  // historical confirmation fingerprint so old blocked/unknown rows stay usable.
+  const action=event.action.kind==='confirm'?{kind:'confirm',reportId:event.action.reportId,hash:event.action.hash}:event.action;
+  return {id:hash(JSON.stringify([c.corpId,c.botId,c.memberId,event.messageId])),fingerprint:hash(JSON.stringify([event.botId,event.memberId,event.messageId,event.createTime??null,action])),target:{...c,accountId:i.accountId,workspaceJid:i.workspaceJid,storeId:i.storeId}};
  };
  const handler=createBotReportHandler({...options,beforeWork:(value,guard)=>{
   checkOpen();const seed=eventSeed(value);ledger.reserveBotReply({...value.actor},{...seed,reqId:value.event.reqId},guard);
