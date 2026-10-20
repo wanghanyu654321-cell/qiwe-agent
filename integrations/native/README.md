@@ -1,6 +1,6 @@
 # 原 Native 单条执行的本地合成接缝
 
-最新验收见[媒体、门禁和原驱动记录](../../docs/t7-host-readiness-acceptance.md)。当前增加同版本真实驱动及真实BootGate模式；原Node SQLite替代模式仍保留并明确区分。
+最新验收见[完整宿主与Linux记录](../../docs/t7-full-host-acceptance.md)、[完整宿主入口](README-full-host.md)及[Linux入口](README-linux.md)。前轮[媒体、门禁和原驱动记录](../../docs/t7-host-readiness-acceptance.md)对应`verify-targeted.mjs`局部验证；原Node SQLite替代模式仍保留并明确区分。新增完整宿主入口保留原恢复拒绝，不能据此声称原Agent已恢复。
 
 本目录交付最小候选补丁和可重复的隔离验证。**只能用于本地合成候选，不能应用生产或直接修改已有私有工作区。** 不包含 Native 源码副本、真实数据、配置或凭据。公开执行 port 默认 disabled；显式 enabled 仍只支持 `isolated-synthetic`，没有真实发送或模型准入。
 
@@ -58,7 +58,7 @@ node --test integrations/native/prepare-native-sqlite.test.mjs integrations/nati
 
 N/O路径还须保持已核实原转换器的相对目录布局；来源或布局不匹配会明确拒绝，不尝试猜测其他宿主或放宽hash。
 
-完整原index的生成文本只核对同一gate传给queue、Web、scheduler，ready后才启动消费者及原停机顺序。**运行候选不是完整O宿主栈**：使用真实gate和scheduler/IPC/recovery层，保留N原GroupQueue与T7定向db，未验收整个O warm/cold队列、DB boot promotion或Web。定向任务的同一真实gate守住准入和队列callback；组合用例同时使用原授权事务、原queue、真实原驱动和候选scheduler。不能将这些局部证据描述成真实宿主已启动或已恢复。
+`verify-targeted.mjs`对完整原index的生成文本只核对同一gate传给queue、Web、scheduler，ready后才启动消费者及原停机顺序。**该运行候选不是完整O宿主栈**：使用真实gate和scheduler/IPC/recovery层，保留N原GroupQueue与T7定向db，未验收整个O warm/cold队列、DB boot promotion或Web。定向任务的同一真实gate守住准入和队列callback；组合用例同时使用原授权事务、原queue、真实原驱动和候选scheduler。新增`verify-full-host.mjs`单独组合完整宿主并执行main；两类结果分别记录，不能将局部定向执行证据描述成完整宿主已恢复。
 
 参数必须明确：未知、重复、缺值/相对路径和`--unpatched`与`--host-overlay`组合均拒绝，不静默降级为mock。组合结果为3文件17项及候选完整类型检查；默认替代模式另6项回归保留。原账号、账本、授权、页面及Agent循环不变。
 

@@ -1,0 +1,149 @@
+import {expect,it,vi} from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import net from 'node:net';
+import dns from 'node:dns';
+import dgram from 'node:dgram';
+import childProcess from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
+// No main, queue, database, Web server, route, gate or scanner is mocked.
+it('boots the actual original main and real loopback Web stack while preserving paused durable work',async()=>{
+ const events:string[]=[],intervals:any[]=[],timeouts:any[]=[],blocked:string[]=[];
+ const originalInterval=globalThis.setInterval,originalTimeout=globalThis.setTimeout;
+ vi.spyOn(globalThis,'setInterval').mockImplementation(((...args:any[])=>{const timer=(originalInterval as any)(...args);intervals.push(timer);return timer;}) as any);
+ vi.spyOn(globalThis,'setTimeout').mockImplementation(((...args:any[])=>{const timer=(originalTimeout as any)(...args);timeouts.push(timer);return timer;}) as any);
+ const servers:net.Server[]=[];
+ const originalConnect=net.Socket.prototype.connect,originalListen=net.Server.prototype.listen;
+ vi.spyOn(net.Socket.prototype,'connect').mockImplementation(function(this:net.Socket,...args:any[]){
+  const raw=Array.isArray(args[0])?args[0]:args,first=raw[0];
+  const host=typeof first==='object'?first.host:typeof raw[1]==='string'?raw[1]:'localhost';
+  const port=Number(typeof first==='object'?first.port:first);
+  const portBelongsToFixture=servers.some(server=>{const address=server.address();return address!==null&&typeof address==='object'&&address.address==='127.0.0.1'&&address.port===port;});
+  if(typeof first==='object'&&first.path||typeof first==='string'||host!=='127.0.0.1'||!portBelongsToFixture){blocked.push('network');throw Error('FULL_HOST_EXTERNAL_NETWORK_FORBIDDEN');}
+  return (originalConnect as any).apply(this,args);
+ } as any);
+ const originalLookup=dns.lookup;
+ vi.spyOn(dns,'lookup').mockImplementation(((hostname:string,...args:any[])=>{
+  if(!['127.0.0.1','::1'].includes(hostname)){blocked.push('dns');throw Error('FULL_HOST_DNS_FORBIDDEN');}
+  return (originalLookup as any)(hostname,...args);
+ }) as any);
+ const originalPromiseLookup=dns.promises.lookup;
+ vi.spyOn(dns.promises,'lookup').mockImplementation(((hostname:string,...args:any[])=>{
+  if(!['127.0.0.1','::1'].includes(hostname)){blocked.push('dns');throw Error('FULL_HOST_DNS_FORBIDDEN');}
+  return (originalPromiseLookup as any)(hostname,...args);
+ }) as any);
+ for(const name of Object.keys(dns).filter(name=>name.startsWith('resolve')||name==='reverse'||name==='lookupService'))vi.spyOn(dns,name as any).mockImplementation((()=>{blocked.push('dns:'+name);throw Error('FULL_HOST_DNS_FORBIDDEN');}) as any);
+ for(const name of Object.keys(dns.promises).filter(name=>name.startsWith('resolve')||name==='reverse'||name==='lookupService'))vi.spyOn(dns.promises,name as any).mockImplementation((()=>{blocked.push('dns:'+name);throw Error('FULL_HOST_DNS_FORBIDDEN');}) as any);
+ for(const name of ['send','connect','bind'] as const)vi.spyOn(dgram.Socket.prototype,name as any).mockImplementation((()=>{blocked.push('udp:'+name);throw Error('FULL_HOST_UDP_FORBIDDEN');}) as any);
+ vi.spyOn(net.Server.prototype,'listen').mockImplementation(function(this:net.Server,...args:any[]){
+  const first=args[0],port=typeof first==='number'?first:first?.port;
+  if(!Number.isSafeInteger(port)||port<0||port>65535||first?.path||first?.fd!==undefined){blocked.push('listen');throw Error('FULL_HOST_LISTEN_FORBIDDEN');}
+  if(typeof first==='number'){
+   args[0]={port:first,host:'127.0.0.1'};
+   if(typeof args[1]==='string')args.splice(1,1);
+  }else args[0]={...first,host:'127.0.0.1'};
+  servers.push(this);
+  return (originalListen as any).apply(this,args);
+ } as any);
+ for(const name of ['exec','execFile','execSync','execFileSync','spawn','spawnSync','fork'] as const)vi.spyOn(childProcess,name as any).mockImplementation((()=>{blocked.push('child:'+name);throw Error('FULL_HOST_CHILD_PROCESS_FORBIDDEN');}) as any);
+ syncBuiltinESMExports();
+ const guardProbe=new net.Socket();
+ for(const target of [{host:'127.0.0.1',port:65534},{host:'::1',port:65534},{host:'192.0.2.1',port:443},{path:'/synthetic-denied.sock'}])expect(()=>guardProbe.connect(target as any)).toThrow('FULL_HOST_EXTERNAL_NETWORK_FORBIDDEN');
+ expect(()=>net.createServer().listen('/synthetic-denied.sock')).toThrow('FULL_HOST_LISTEN_FORBIDDEN');
+ expect(()=>dns.resolve('synthetic.invalid',()=>{})).toThrow('FULL_HOST_DNS_FORBIDDEN');
+ const udp=dgram.createSocket('udp4');expect(()=>udp.send('synthetic',1234,'192.0.2.1')).toThrow('FULL_HOST_UDP_FORBIDDEN');udp.close();
+ expect(()=>childProcess.exec('synthetic forbidden')).toThrow('FULL_HOST_CHILD_PROCESS_FORBIDDEN');
+ const listenProbe=net.createServer();listenProbe.listen(0,'0.0.0.0');
+ if(!listenProbe.listening)await new Promise<void>(resolve=>listenProbe.once('listening',resolve));
+ expect((listenProbe.address() as net.AddressInfo).address).toBe('127.0.0.1');
+ await new Promise<void>(resolve=>listenProbe.close(()=>resolve()));servers.splice(servers.indexOf(listenProbe),1);
+ blocked.length=0;events.push('boundary-guards-negative-controls-passed');
+ const exits:number[]=[];vi.spyOn(process,'exit').mockImplementation(((code:number)=>{exits.push(code);}) as any);
+ const db=await import('../src/db.js');
+ const config=await import('../src/config.js');
+ expect(config.DATA_DIR).toBe(path.join(process.cwd(),'data'));
+ expect(fs.existsSync(path.join(config.DATA_DIR,'config/session-secret.key'))).toBe(false);
+ const restarting=process.env.QIWE_FULL_HOST_PHASE==='restart';
+ const now=new Date().toISOString(),adminId='synthetic-full-admin',sessionId='a'.repeat(64);
+ const {default:Database}=await import('better-sqlite3');
+ if(!restarting){
+ db.initDatabase();
+ const seedSql=new Database(path.join(config.STORE_DIR,'messages.db'));
+ const freshInventory=db.scanAppointmentBootInventory();
+ console.log('FULL_HOST_FRESH_INVENTORY',JSON.stringify({blockers:freshInventory.blockers,kinds: freshInventory.records.reduce((out:any,record:any)=>{out[record.kind]=(out[record.kind]??0)+1;return out;},{})}));
+ db.createUser({id:adminId,username:'synthetic-full-admin',password_hash:'synthetic-not-a-password',display_name:'Synthetic',role:'admin',status:'active',must_change_password:false,created_at:now,updated_at:now});
+ db.createUserSession({id:sessionId,user_id:adminId,ip_address:null,user_agent:'synthetic',created_at:now,last_active_at:now,expires_at:new Date(Date.now()+3600000).toISOString()});
+ for(const [id,expires]of [['b'.repeat(64),new Date(Date.now()+3600000).toISOString()],['c'.repeat(64),'2000-01-01T00:00:00.000Z']])db.createUserSession({id,user_id:adminId,ip_address:null,user_agent:'synthetic',created_at:now,last_active_at:now,expires_at:expires});
+ db.setRegisteredGroup('web:full-role',{name:'Synthetic',folder:'full-role',added_at:now,created_by:adminId,executionMode:'container',is_home:false});
+ db.ensureChatExists('web:full-role');
+ db.storeMessageDirect('synthetic-promoting','web:full-role','synthetic','Synthetic','synthetic queued content',now,false);
+ seedSql.prepare("UPDATE messages SET delivery_mode='queue',delivery_status='promoting' WHERE id='synthetic-promoting'").run();
+ db.createTask({id:'full-unselected',group_folder:'full-role',chat_jid:'web:full-role',prompt:'synthetic task never execute',context_mode:'isolated',execution_type:'agent',execution_mode:'container',script_command:null,schedule_type:'cron',schedule_value:'0 * * * *',next_run:'2000-01-01T00:00:00.000Z',status:'active',created_at:now,created_by:adminId,notify_channels:null});
+ const run=db.createTaskRun({task:db.getTaskById('full-unselected')!,triggerType:'manual',idempotencyKey:'synthetic-full-stale'}).run;
+ seedSql.prepare("UPDATE task_runs SET status='success',notification_status='failed',notification_payload=?,notification_available_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(JSON.stringify({kind:'send_message',chatJid:'web:full-role',text:'synthetic never deliver'}),run.id);
+ seedSql.close();
+ }
+ const sql=new Database(path.join(config.STORE_DIR,'messages.db'),{fileMustExist:true});
+ const snapshot=()=>({messages:sql.prepare('SELECT * FROM messages ORDER BY id').all(),tasks:sql.prepare('SELECT * FROM scheduled_tasks ORDER BY id').all(),runs:sql.prepare('SELECT * FROM task_runs ORDER BY id').all()});
+ const before=restarting?JSON.parse(fs.readFileSync(process.env.QIWE_FULL_HOST_SNAPSHOT!,'utf8')):snapshot();
+ if(restarting)expect(snapshot()).toEqual(before);
+ else{fs.writeFileSync(process.env.QIWE_FULL_HOST_SNAPSHOT!,JSON.stringify(before));db.closeDatabase();}
+ const web=await import('../src/web.js');
+ const context=await import('../src/web-context.js');
+ const host=await import('../src/index.js') as any;
+ try{
+  for(let n=0;n<200&&(!context.getWebDeps()||!servers[0]?.listening);n++)await new Promise(resolve=>originalTimeout(resolve,25));
+  expect(exits).toEqual([]);expect(servers[0]?.listening).toBe(true);
+  const address=servers[0].address() as net.AddressInfo;
+  expect(address.address).toBe('127.0.0.1');expect(address.port).toBeGreaterThan(0);
+  const base='http://127.0.0.1:'+address.port;
+  const {signSessionToken}=await import('../src/auth.js');
+  const headers={cookie:'miniclaw_session='+signSessionToken(sessionId),Origin:'http://127.0.0.1:19777','content-type':'application/json'};
+  const status=await fetch(base+'/api/appointment/maintenance',{headers});expect(status.status).toBe(200);expect(await status.json()).toMatchObject({maintenance:true,phase:'paused',executionStart:'not_started'});
+  events.push('actual-main-loopback-http-paused');
+  const unauth=await fetch(base+'/api/appointment/maintenance');expect(unauth.status).toBe(401);
+  const review=await fetch(base+'/api/appointment/maintenance/review',{method:'POST',headers,body:'{}'});
+  expect(review.status).toBe(409);expect(await review.json()).toMatchObject({error:'review_incomplete',recoverable:false});
+  const inventory=db.scanAppointmentBootInventory();expect(inventory.complete).toBe(false);expect(inventory.safe).toBe(false);
+  expect(inventory.records.length).toBeGreaterThan(0);events.push('actual-review-fail-closed');
+  expect(host.fullHostBootGate.phase()).toBe('paused');
+  const noOrigin={cookie:headers.cookie,'content-type':'application/json'};
+  const refusals=[
+   {name:'wrong-origin',operation:'review',headers:{...headers,Origin:'https://synthetic.invalid'},body:'{}',status:403},
+   {name:'missing-origin',operation:'review',headers:noOrigin,body:'{}',status:403},
+   {name:'member',operation:'review',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('b'.repeat(64))},body:'{}',status:403},
+   {name:'expired',operation:'review',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('c'.repeat(64))},body:'{}',status:401},
+   {name:'missing-session',operation:'review',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('d'.repeat(64))},body:'{}',status:401},
+   {name:'unissued-ticket',operation:'restore',headers,body:JSON.stringify({confirmed:true,bootId:'synthetic-unissued',reportId:'synthetic-unissued',revision:0}),status:409},
+   {name:'not-confirmed',operation:'restore',headers,body:JSON.stringify({confirmed:false,bootId:'synthetic-unissued',reportId:'synthetic-unissued',revision:0}),status:400},
+   {name:'unknown-field',operation:'review',headers,body:'{"syntheticUnknown":true}',status:400},
+   {name:'oversized-body',operation:'review',headers,body:JSON.stringify({syntheticUnknown:'x'.repeat(4096)}),status:400},
+  ];
+  for(const refusal of refusals){
+   // Exercise live member role revalidation using the same synthetic account;
+   // a second owner at startup would correctly add its inaccessible home group.
+   if(refusal.name==='member')sql.prepare("UPDATE users SET role='member' WHERE id=?").run(adminId);
+   let response:Response;
+   try{response=await fetch(base+'/api/appointment/maintenance/'+refusal.operation,{method:'POST',headers:refusal.headers,body:refusal.body});}
+   finally{if(refusal.name==='member')sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(adminId);}
+   expect(response.status,refusal.name).toBe(refusal.status);await response.text();
+   expect(host.fullHostBootGate.phase(),refusal.name).toBe('paused');expect(snapshot(),refusal.name).toEqual(before);
+   expect(sql.prepare("SELECT COUNT(*) AS n FROM auth_audit_log WHERE event_type='appointment_restore_committed'").get()).toMatchObject({n:0});
+  }
+  events.push('original-http-origin-acl-ticket-body-refusals-preserve-state');
+  const queue=context.getWebDeps()!.queue;expect(queue).toBe(host.fullHostQueue);
+  const work=vi.fn(async()=>{});expect(queue.enqueueTask('web:full-role','synthetic-probe',work,{allowInactive:true})).toBe(true);
+  await new Promise(resolve=>originalTimeout(resolve,100));expect(work).not.toHaveBeenCalled();expect(snapshot()).toEqual(before);
+  events.push('actual-queue-db-promoting-notification-preserved');
+  process.emit('SIGTERM');
+  for(let n=0;n<200&&!exits.length;n++)await new Promise(resolve=>originalTimeout(resolve,25));
+  expect(exits).toEqual([0]);expect(servers[0].listening).toBe(false);expect(queue.isShuttingDown()).toBe(true);expect(db.isDatabaseInitialized()).toBe(false);events.push('actual-main-signal-shutdown');
+  db.initDatabase();expect(snapshot()).toEqual(before);db.closeDatabase();events.push('actual-db-reopen-preserved');
+  expect(blocked).toEqual([]);
+  fs.writeFileSync(process.env.QIWE_FULL_HOST_EVIDENCE!,JSON.stringify({events,phase:restarting?'restart':'boot',processId:process.pid,loopback:address,source:'actual original main and complete O stack',limitations:['original metadata collector is permanently incomplete; successful restore and post-restore execution not established','Static frontend assets are absent; HTTP API and WebSocket server startup are exercised'],guards:['TCP only to actual fixture IPv4 loopback HTTP ports; Unix sockets and named pipes refused','DNS only numeric loopback lookup; resolve/reverse and all UDP bind/connect/send refused','child_process exec/execFile/spawn/fork families refused','pure allowlisted environment, synthetic HOME/cwd/data and fixed session secret','process.exit is observed and original shutdown body runs; native worker/addon filesystem calls are not a general filesystem sandbox'],observedNoBlockedAttempts:blocked.length===0},null,2));
+ }finally{
+  await web.shutdownWebServer();if(db.isDatabaseInitialized())db.closeDatabase();sql.close();
+  for(const timer of intervals)clearInterval(timer);for(const timer of timeouts)clearTimeout(timer);
+  process.removeAllListeners('SIGTERM');process.removeAllListeners('SIGINT');vi.restoreAllMocks();syncBuiltinESMExports();
+ }
+});
