@@ -2,8 +2,8 @@
   "recordedAt": "2026-10-20",
   "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
   "publicBase": "2590fa5f7dcca42a31ded5daf5ed2dbcc23da643",
-  "sourceState": "Selected T0-T6 implementation, T7 preparation and controlled channel/Native adaptations; no private history/data imported; Native source-anchored candidate patch only",
-  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted",
+  "sourceState": "Selected T0-T6 implementation, T7 controlled channel adaptation and protocol/host/native-driver isolated verification; no private history, Native source copy, binaries or business data imported",
+  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted; t7ControlledSha256 preserves the pre-readiness T7 public version where adapted",
   "files": [
     {
       "path": "integrations/native/emit-patch.mjs",
@@ -11,9 +11,35 @@
       "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
     },
     {
+      "path": "integrations/native/host-candidate.mjs",
+      "sha256": "c3b47072415533310b63823bd5ac184163b3a47ad361edea8c2eaf6e2d761a77",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/host-readiness.test.mts",
+      "sha256": "8f4a535445eac26babbd414924057365c278dbff46f0517c2a1af295c3420668",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/prepare-native-sqlite.mjs",
+      "sha256": "ff439b951588c06420361ad74dd5c2c11857048103f042ef342807e2240ba91c",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/prepare-native-sqlite.test.mjs",
+      "sha256": "246b4a024f2e8889373a412ae7bfaa76c9f7c8b5cc6795ca28574c46645a80e2",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
       "path": "integrations/native/scheduler-targeted.test.mts",
-      "sha256": "f16f4ecdf0e2d11c1099e5ba69294ab4e8773d9a6358633dc8907a0f469d78ff",
-      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+      "sha256": "d424816636525f21c3b30de966c9b777aa2b494224798d690b5a1de215976d19",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository",
+      "t7ControlledSha256": "f16f4ecdf0e2d11c1099e5ba69294ab4e8773d9a6358633dc8907a0f469d78ff"
+    },
+    {
+      "path": "integrations/native/sqlite-driver.test.mts",
+      "sha256": "574f930169cc18114b8f83ae8d220257fc734a96cfad66e3b7de7c112a018e2c",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
     },
     {
       "path": "integrations/native/targeted-execution.mjs",
@@ -26,9 +52,20 @@
       "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
     },
     {
+      "path": "integrations/native/verification-options.mjs",
+      "sha256": "50692cfe4efec7779e6263da4d37e3db36a12c81f96498e01232a5d50d97a8c6",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/verification-options.test.mjs",
+      "sha256": "3cfe238ace0541f2dffcb47d88eb9fe779613d1d344b56d4e9d5b2e2e376a2b7",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
       "path": "integrations/native/verify-targeted.mjs",
-      "sha256": "4d51bfc20297c8acd048c9838302b3c80a9fc43d8f9bb1b4e0f4412dc8b74b87",
-      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+      "sha256": "78aa8bca8e7c4248fff0953fd2be4104e76ba70ffdbde80245bfec5675d40c31",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository",
+      "t7ControlledSha256": "4d51bfc20297c8acd048c9838302b3c80a9fc43d8f9bb1b4e0f4412dc8b74b87"
     },
     {
       "path": "src/role-eval/file-journal.ts",
@@ -170,8 +207,9 @@
     },
     {
       "path": "src/role-eval/wecom-bot-sdk.ts",
-      "sha256": "9e67aeb55ebbb77e84874292927540e602d1cd7d3feed2ef5792bbbb05bcdd89",
-      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+      "sha256": "5620bfef7fb02c35b06b2babd2331692e82aedf456c2a2f872ec58d0f2cb3cd2",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository",
+      "t7ControlledSha256": "9e67aeb55ebbb77e84874292927540e602d1cd7d3feed2ef5792bbbb05bcdd89"
     },
     {
       "path": "src/role-eval/wecom-bot-sender.ts",
@@ -399,8 +437,9 @@
     },
     {
       "path": "tests/role-eval/wecom-bot-sdk.test.ts",
-      "sha256": "cb91f9c7ee3d80dd3893b8956e36489b96c15dbbb106c99ff3058a1b9aec5720",
-      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+      "sha256": "c9bef6292f1f75c3cb34cf7a9a6637e447b334188ac4f6547d0cd6f67078b3ce",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository",
+      "t7ControlledSha256": "cb91f9c7ee3d80dd3893b8956e36489b96c15dbbb106c99ff3058a1b9aec5720"
     },
     {
       "path": "tests/role-eval/wecom-bot-sender.test.ts",
@@ -461,5 +500,6 @@
   "t5Base": "70ae2d209c85b0b05d648afb0f19c514afde5c15",
   "t6Base": "ad835dd53590c0f5ebae349eeed5d47aa575f605",
   "t7Base": "cd767c1aef057063948e1de786ab47bdf9523094",
-  "t7ControlledBase": "69090a7cf13a65d3629cb7081527dbaa8c1bd6ee"
+  "t7ControlledBase": "69090a7cf13a65d3629cb7081527dbaa8c1bd6ee",
+  "t7ReadinessBase": "f8673f351828d9f431fc2a108674e7ed0f19b095"
 }
