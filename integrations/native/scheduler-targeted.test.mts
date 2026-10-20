@@ -9,7 +9,7 @@ vi.mock('../src/runtime-config.js',()=>({getSystemSettings:()=>({billingEnabled:
 vi.mock('../src/feishu-cli-runtime.js',()=>({resolveFeishuCliBoundAccountId:()=>null}));
 vi.mock('../src/file-manager.js',()=>({removeFlowArtifacts(){}}));
 vi.mock('../src/script-runner.js',()=>({runScript(){throw Error('Real/script runner forbidden');}}));
-vi.mock('../src/sqlite-compat.js',async()=>{
+if(!process.env.QIWE_SQLITE_DRIVER)vi.doMock('../src/sqlite-compat.js',async()=>{
  const {DatabaseSync}=await import('node:sqlite');
  return {default:class {
   connection:InstanceType<typeof DatabaseSync>;open=true;depth=0;
@@ -83,8 +83,20 @@ it('connects public actor-bound port to the actual patched functions under origi
  const port=createNativeBotExecutionPort({mode:'isolated-synthetic',enabled:true,readers,target:{triggerTaskRunTargeted:(id:string,key:string,a:any)=>scheduler.triggerTaskRunTargeted(id,deps,key,a),cancelTaskRunTargeted:(id:string,a:any)=>scheduler.cancelTaskRunTargeted(id,deps,a)}}),adapter=createNativeBotTasks({port});
  const owner={tenantId:'tenant',storeId:'store',accountId:'member',workspaceJid:'web:home',role:'marketing',corpId:'corp',botId:'bot',memberId:'member-channel',bindingVersion:1},backend={kind:'native',taskId:'A',profileId:profile.id,workspaceJid:'web:role'};
  const tx=(work:()=>void)=>authority.withCurrent(context,()=>{work();}),current=()=>authority.assertCurrent(context);
+ const previousGate=deps.appointmentBootGate;
  try{
   const before=otherRows();
+  if(process.env.QIWE_HOST_OVERLAY){
+   const {createAppointmentBootGate}=await import('../src/appointment-boot-gate.js');
+   const actualGate=createAppointmentBootGate('appointment');deps.appointmentBootGate=actualGate;
+   const beforePaused=sql.prepare('SELECT * FROM task_runs ORDER BY id').all();
+   const refused=await adapter.start(owner,backend,'public-paused',request,current,tx);
+   expect(refused.state).not.toBe('linked');expect(sql.prepare('SELECT * FROM task_runs ORDER BY id').all()).toEqual(beforePaused);
+   const stamp=actualGate.beginReview();expect(stamp).not.toBeNull();
+   const ticket=actualGate.publishReview(stamp!,{complete:true,safe:true,records:[{kind:'synthetic-fixture',key:'temp-only',version:'1',disposition:'terminal',evidence:['isolated temp fixture only']}],blockers:[]});
+   const attempt=actualGate.claimRestore(ticket!);if(typeof attempt==='string')throw Error(attempt);
+   expect(actualGate.enterFinal(attempt)).toBe(true);expect(actualGate.commitRestore(attempt,()=>undefined)).toBe(true);expect(actualGate.phase()).toBe('ready');
+  }
   const fakeQueue=deps.queue,realQueue=new GroupQueue();deps.queue=realQueue;
   const completed=await adapter.start(owner,backend,'public-completed',request,current,tx);expect(completed.state).toBe('linked');
   await vi.waitFor(()=>expect(db.getTaskRunById(completed.referenceId)!).toMatchObject({status:'success',result:'original scheduler synthetic result'}));expect(otherRows()).toEqual(before);
@@ -100,7 +112,7 @@ it('connects public actor-bound port to the actual patched functions under origi
   const revoked=await adapter.start(owner,backend,'revoke-public-key',request,current,tx);expect(revoked.state).toBe('linked');
   grants.change('admin',{accountId:'member',storeId:'store',roles:['marketing'],active:false,expectedVersion:1,requestKey:'revoke'});
   await fixture.queued.shift()!();expect(db.getTaskRunById(revoked.referenceId)!.status).toBe('cancelled');expect(otherRows()).toEqual(before);
- }finally{adapter.close();port.close();authority.close();grants.close();}
+ }finally{deps.appointmentBootGate=previousGate;adapter.close();port.close();authority.close();grants.close();}
 });
 it('durably fences an abandoned queue item on request abort without waiting for the queue to drain',async()=>{
  const a=admission(),result=await scheduler.triggerTaskRunTargeted('A',deps,'A-abandoned',a);expect(result.success).toBe(true);

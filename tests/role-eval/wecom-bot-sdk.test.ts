@@ -63,6 +63,22 @@ it('sends MD5 init, sequential zero-based fixed-SDK chunks and finish without re
  expect(s.sent[1]!.body).toEqual({upload_id:'upload',chunk_index:0,base64_data:Buffer.alloc(524288,97).toString('base64')});expect(s.sent[2]!.body).toEqual({upload_id:'upload',chunk_index:1,base64_data:'YQ=='});
  expect(new Set(s.sent.map(frame=>frame.headers.req_id)).size).toBe(4);
 });
+it.each([
+ {bytes:()=>Buffer.alloc(4),filename:'small.xlsx'},
+ {bytes:()=>Buffer.alloc(20_000_001),filename:'large.xlsx'},
+ {bytes:()=>Buffer.alloc(5),filename:'美'.repeat(86)+'.xlsx'},
+])('rejects official file size or UTF-8 filename limits before upload init: $filename',async input=>{
+ const s=fixture();s.authenticate();
+ const result=await s.adapter.uploadMedia(input.bytes(),{type:'file',filename:input.filename},scope()).catch(error=>error);
+ expect(isBotSdkNotStarted(result)).toBe(true);expect(s.sent).toEqual([]);
+});
+it('accepts a 256-byte UTF-8 filename and an exact 512 KiB chunk without an extra empty chunk',async()=>{
+ const s=fixture();s.authenticate();const filename='美'.repeat(83)+'-x.xlsx';expect(Buffer.byteLength(filename)).toBe(256);
+ s.respond(frame=>s.ack(frame,frame.cmd==='aibot_upload_media_init'?{upload_id:'upload'}:frame.cmd==='aibot_upload_media_finish'?{type:'file',media_id:'media'}:{}));
+ expect(await s.adapter.uploadMedia(Buffer.alloc(524288),{type:'file',filename},scope())).toMatchObject({type:'file',media_id:'media'});
+ expect(s.sent.map(frame=>frame.cmd)).toEqual(['aibot_upload_media_init','aibot_upload_media_chunk','aibot_upload_media_finish']);
+ expect(s.sent[0]!.body).toMatchObject({total_size:524288,total_chunks:1,filename});expect(s.sent[1]!.body?.chunk_index).toBe(0);
+});
 it('does not admit any later upload frame after cancellation despite late init success',async()=>{
  const s=fixture();s.authenticate();const controller=new AbortController();let init:WsFrame|undefined;s.respond(frame=>{init=frame;});
  const result=s.adapter.uploadMedia(Buffer.from('synthetic'),{type:'file',filename:'synthetic.xlsx'},{...scope(),signal:controller.signal}).catch(e=>e);

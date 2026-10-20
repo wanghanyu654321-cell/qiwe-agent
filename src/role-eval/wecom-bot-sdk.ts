@@ -95,15 +95,17 @@ export function createBotSdkAdapter(options:{mode:'isolated-synthetic';client:WS
   },
   async uploadMedia(bytes,upload,scope){
    const operation=begin(scope);
-   if(!Buffer.isBuffer(bytes)||bytes.length<1||bytes.length>524288*100||upload.type!=='file'||!safe(upload.filename,255))return fail(operation,'invalid_bot_upload');
+   // Keep the original sender's conservative decimal 20 MB cap. The official
+   // file protocol requires >=5 bytes and filenames <=256 UTF-8 bytes.
+   if(!Buffer.isBuffer(bytes)||bytes.length<5||bytes.length>20_000_000||upload.type!=='file'||!safe(upload.filename,255)||Buffer.byteLength(upload.filename)>256)return fail(operation,'invalid_bot_upload');
    const copy=Buffer.from(bytes),filename=upload.filename,totalChunks=Math.ceil(copy.length/524288);
    const init:UploadMediaInitBody={type:'file',filename,total_size:copy.length,total_chunks:totalChunks,md5:createHash('md5').update(copy).digest('hex')};
    const initialized=await wire(operation,fresh(WsCmd.UPLOAD_MEDIA_INIT),{...init},WsCmd.UPLOAD_MEDIA_INIT);
    const uploadId=initialized.body?.upload_id;if(!safe(uploadId,4096))throw Error('invalid_bot_upload_result');
    for(let index=0;index<totalChunks;index++){
     check(operation);
-    // Synthetic-only parity with pinned 1.0.7 CJS. Its d.ts says 1-based;
-    // the official production protocol index remains a separately tracked conflict.
+    // Official upload protocol specifies zero-based order; pinned 1.0.7 CJS
+    // agrees. Its d.ts's one-based comment is inconsistent with that protocol.
     const chunk:UploadMediaChunkBody={upload_id:uploadId,chunk_index:index,base64_data:copy.subarray(index*524288,Math.min((index+1)*524288,copy.length)).toString('base64')};
     await wire(operation,fresh(WsCmd.UPLOAD_MEDIA_CHUNK),{...chunk},WsCmd.UPLOAD_MEDIA_CHUNK);
    }
