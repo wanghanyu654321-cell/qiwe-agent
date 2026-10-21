@@ -50,6 +50,7 @@ it('counts every inventory record in fixed buckets without exposing collector va
     recordCounts: { resource: 1, input: 1, execution: 1, outbox: 1, task: 1, residue: 1, observation: 1, unknown: 1 },
     blockerCount: 5,
     otherBlockerCount: 1,
+    queueEvidence: { scope: 'current_process_partial', status: 'unavailable' },
     observation: {
       scope: 'current_process_partial',
       ...observation,
@@ -65,6 +66,39 @@ it('counts every inventory record in fixed buckets without exposing collector va
   observation.activeCount = 99;
   expect(actual.recordCounts.resource).toBe(1);
   expect(actual.observation.activeCount).toBe(2);
+});
+
+const queueCountNames = [
+  'groupCount', 'activeCount', 'activeContainerCount', 'activeHostProcessCount',
+  'waitingGroupCount', 'pendingMessageGroups', 'pendingTasks', 'activeTasks',
+  'retryTimers', 'retryTasks', 'messageRetrySnapshots', 'processHandles',
+  'containerHandles', 'queryInFlight', 'pendingIpcDeliveries',
+  'acknowledgedIpcDeliveries', 'teardownWaiters', 'restartingGroups',
+  'stopRequestedGroups', 'runtimeSafetyBlocks', 'mutationPauseTokens',
+  'retainedSafetyKeys', 'retainedQueuedWork', 'detachedRetainedQueuedWork',
+];
+const queueCounts = Object.fromEntries(queueCountNames.map(name => [name, 0]));
+it('copies original queue obligation counts without upgrading any global proof', () => {
+  const raw = { ...queueCounts, retryTimers: 2, physicalCallbackWriteTickets: 'unknown', secret: '/private/old-runner' };
+  const actual = buildRecoveryInspection({ inventory: { records: [], blockers: [] } }, observation, 'paused', raw);
+  expect(actual.queueEvidence).toEqual({
+    scope: 'current_process_partial', status: 'observed',
+    counts: { ...queueCounts, retryTimers: 2 }, physicalCallbackWriteTickets: 'unknown',
+    oldProcessOwnership: 'unverified', writerCoverage: 'unverified',
+  });
+  expect(actual.restorePermission).toBe('not_issued');
+  expect(Object.values(actual.proofs).every(proof => proof.status === 'unverified')).toBe(true);
+  raw.retryTimers = 99;
+  expect(JSON.stringify(actual.queueEvidence)).not.toContain('/private');
+  expect((actual.queueEvidence as { counts: Record<string, number> }).counts.retryTimers).toBe(2);
+});
+
+it('refuses malformed queue evidence and forged callback settlement', () => {
+  const source = { inventory: { records: [], blockers: [] } };
+  for (const invalid of [null, {}, Promise.resolve({}), { ...queueCounts, physicalCallbackWriteTickets: 'settled' },
+    { ...queueCounts, physicalCallbackWriteTickets: 'unknown', retryTimers: -1 },
+    { ...queueCounts, physicalCallbackWriteTickets: 'unknown', then() {} }])
+    expect(() => buildRecoveryInspection(source, observation, 'paused', invalid)).toThrow();
 });
 
 it('does not infer recovery permission from an original ready phase', () => {

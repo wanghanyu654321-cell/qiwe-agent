@@ -2,9 +2,14 @@
   "recordedAt": "2026-10-21",
   "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
   "publicBase": "2590fa5f7dcca42a31ded5daf5ed2dbcc23da643",
-  "sourceState": "Selected T0-T6 implementation, T7 channel adaptation, partial/full Native host and driver isolation verification, read-only recovery inspection and project configuration metadata coverage; successful full-host restoration and real channel acceptance remain blocked; no private history, Native source copy, binaries or business data imported",
-  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted; t7ControlledSha256 preserves the pre-readiness T7 public version where adapted; t7ReadinessSha256 preserves the pre-full-host T7 public version where adapted; t7FullHostSha256 preserves the pre-recovery-inspection T7 public version where adapted",
+  "sourceState": "Selected T0-T6 implementation, T7 channel and Native isolation verification, recovery inspection, queue obligations and isolated WeCom preparation; four global proofs, successful appointment restoration and real channel acceptance remain blocked; no private history, Native source copy, binaries or business data imported",
+  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted; t7ControlledSha256 preserves the pre-readiness T7 public version where adapted; t7ReadinessSha256 preserves the pre-full-host T7 public version where adapted; t7FullHostSha256 preserves the pre-recovery-inspection T7 public version where adapted; t7InspectionSha256 preserves the pre-recovery-evidence T7 public version where adapted",
   "files": [
+    {
+      "path": "integrations/native/bot-preparation-native.test.mts",
+      "sha256": "6dfbda4ce0c1a09d6f699e84da4cc7a27ad66e1eb3fe31447f115a2434dfa720",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
+    },
     {
       "path": "integrations/native/emit-patch.mjs",
       "sha256": "823ccbfe575ef1704557a3ceafb944086a88bfbd66dc62c47df7235e1c58cc62",
@@ -12,15 +17,17 @@
     },
     {
       "path": "integrations/native/full-host-candidate.mjs",
-      "sha256": "1705eb80f71f5f966a659824e4e202120afa47b9852735fdf16a9f9a131c21b0",
+      "sha256": "895d8f8a83272f5452e43bac6f963dde087444323536fd4021df537129a41a12",
       "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
-      "t7FullHostSha256": "622b324494b817ff3a549ff3a21650a3e95d6bb402a6ea435387bc7bf2ba24a5"
+      "t7FullHostSha256": "622b324494b817ff3a549ff3a21650a3e95d6bb402a6ea435387bc7bf2ba24a5",
+      "t7InspectionSha256": "1705eb80f71f5f966a659824e4e202120afa47b9852735fdf16a9f9a131c21b0"
     },
     {
       "path": "integrations/native/full-host.test.mts",
-      "sha256": "244b33f6f943edf4ff9247ea0c0c7e76a46b294f846670d851fd1aca6543a1d3",
+      "sha256": "08c2c52d7788f251c6060534ae4e4010986465d890bad9d4ccd8f21e29854ce8",
       "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
-      "t7FullHostSha256": "bcd764d00c057828b53a2f15beb65fa7a559576dc791e84439a685593b197dd0"
+      "t7FullHostSha256": "bcd764d00c057828b53a2f15beb65fa7a559576dc791e84439a685593b197dd0",
+      "t7InspectionSha256": "244b33f6f943edf4ff9247ea0c0c7e76a46b294f846670d851fd1aca6543a1d3"
     },
     {
       "path": "integrations/native/host-candidate.mjs",
@@ -34,13 +41,15 @@
     },
     {
       "path": "integrations/native/linux-runtime.mjs",
-      "sha256": "ae1a854860d0d25b1cbddc8ca49e7b1d7ad3a178853862ec4e9978eba4321061",
-      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
+      "sha256": "1bb958a56cb884eb77bafa14c21725f2c458598f6fd703eab975f66f17041975",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7InspectionSha256": "ae1a854860d0d25b1cbddc8ca49e7b1d7ad3a178853862ec4e9978eba4321061"
     },
     {
       "path": "integrations/native/linux-runtime.test.mjs",
-      "sha256": "497777b27eccdb0da087d4affba17d2d44c1695012e0505cb7f34e3aa4cd90a4",
-      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
+      "sha256": "54d1ce7e81da1973024037c57c327ce8af5e1d0b07f48d36b4944f3ce241ff1c",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7InspectionSha256": "497777b27eccdb0da087d4affba17d2d44c1695012e0505cb7f34e3aa4cd90a4"
     },
     {
       "path": "integrations/native/prepare-native-sqlite.mjs",
@@ -63,14 +72,26 @@
       "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
     },
     {
+      "path": "integrations/native/queue-recovery-overlay.mjs",
+      "sha256": "3ec0729adb74c5700e21ca22d27be6b213b5748cae7e01789648eb7e8873670b",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
+    },
+    {
+      "path": "integrations/native/queue-recovery.test.mts",
+      "sha256": "0dbc7e63ed40786ac3004157aa15768eec2595769a802789479c700315173790",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
+    },
+    {
       "path": "integrations/native/recovery-inspection-overlay.mjs",
-      "sha256": "efc195cce72ce97db13bdc7b0d6e97210bb9206ef1194a12e056c10d39d91a0c",
-      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
+      "sha256": "b8d58d20bb1c13b37102c4dd196de197304ce1eeceef73bc845746394ecca534",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported",
+      "t7InspectionSha256": "efc195cce72ce97db13bdc7b0d6e97210bb9206ef1194a12e056c10d39d91a0c"
     },
     {
       "path": "integrations/native/recovery-inspection.ts",
-      "sha256": "821a9a7c43fd8bf080bbc01ecd1823d0a3acd16281305f8277b9391bb8cc5ed9",
-      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
+      "sha256": "7b576e0ea52b235b9165c7b82d24498fc4ffac280c0bf8555e9b1f458401b783",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported",
+      "t7InspectionSha256": "821a9a7c43fd8bf080bbc01ecd1823d0a3acd16281305f8277b9391bb8cc5ed9"
     },
     {
       "path": "integrations/native/scheduler-targeted.test.mts",
@@ -105,9 +126,10 @@
     },
     {
       "path": "integrations/native/verify-full-host.mjs",
-      "sha256": "ba5b3667f3fb11fac080942c8beaccfa2b99a673ee3136ab3d942564101fb092",
+      "sha256": "b906dbe3ffe3dd973c46aee3d9a33de3773bedd27ee9b0b1a162e4c043d5478a",
       "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
-      "t7FullHostSha256": "790a0c099130cc34ec784755b7eaa2aab7ff06480c7e431b895a3a3552a57bcc"
+      "t7FullHostSha256": "790a0c099130cc34ec784755b7eaa2aab7ff06480c7e431b895a3a3552a57bcc",
+      "t7InspectionSha256": "ba5b3667f3fb11fac080942c8beaccfa2b99a673ee3136ab3d942564101fb092"
     },
     {
       "path": "integrations/native/verify-targeted.mjs",
@@ -212,9 +234,10 @@
     },
     {
       "path": "src/role-eval/wecom-bot-assembly.ts",
-      "sha256": "044c2a6cc7479c9d9130b6ee2c3b988d71032c7403e8b547cb51381ea53561b6",
+      "sha256": "d8a4ee8080984d3b7966e64b8db0d8745d4f61b66fd035c36e85a2734cf2ac5b",
       "origin": "T7 isolated assembly or read-only Native projection in this repository",
-      "t7PreparationSha256": "572eb4c7ac975929b3e4faaa2a6d1eeaabd4cd026efe0a7c23b32d2ebdae0c08"
+      "t7PreparationSha256": "572eb4c7ac975929b3e4faaa2a6d1eeaabd4cd026efe0a7c23b32d2ebdae0c08",
+      "t7InspectionSha256": "044c2a6cc7479c9d9130b6ee2c3b988d71032c7403e8b547cb51381ea53561b6"
     },
     {
       "path": "src/role-eval/wecom-bot-bindings.ts",
@@ -252,6 +275,11 @@
       "path": "src/role-eval/wecom-bot-notice.ts",
       "sha256": "b46740f0a74fee0608cbca94a470a55343509e83d5d0412a0d7284d78bf03f1d",
       "origin": "T4 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-preparation.ts",
+      "sha256": "1cc0aa45043c08f9fbfb0ac6252bac34a4ccf505249578548e8f8c2d38e21aa2",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
     },
     {
       "path": "src/role-eval/wecom-bot-sdk.ts",
@@ -317,8 +345,9 @@
     },
     {
       "path": "tests/recovery-inspection.test.ts",
-      "sha256": "a28359d319d7680f4b9f1e1ea5979483a02be7f9403a501ea939a9ad2d707745",
-      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
+      "sha256": "5e9cbdb1adb6f5e3630111623447a2fc042a2da7ba4dc017697693d1c53dce22",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported",
+      "t7InspectionSha256": "a28359d319d7680f4b9f1e1ea5979483a02be7f9403a501ea939a9ad2d707745"
     },
     {
       "path": "tests/role-eval/local-performance-output.test.ts",
@@ -426,9 +455,10 @@
     },
     {
       "path": "tests/role-eval/wecom-bot-assembly.test.ts",
-      "sha256": "2b89b396aa0ce89f48725892ab6d9ede774629e245c75b4e273b77ada65c9a51",
+      "sha256": "382c8f2143c8f3ddc3bfebf06b1bf9f4d41b74666733fa94fd4309084618987c",
       "origin": "T7 synthetic integration/SDK contract test or offline fixture in this repository",
-      "t7PreparationSha256": "6a3440036f55604053cc850ada2c010e7dfb8f551904c4850d5de923077ff7b1"
+      "t7PreparationSha256": "6a3440036f55604053cc850ada2c010e7dfb8f551904c4850d5de923077ff7b1",
+      "t7InspectionSha256": "2b89b396aa0ce89f48725892ab6d9ede774629e245c75b4e273b77ada65c9a51"
     },
     {
       "path": "tests/role-eval/wecom-bot-consume.test.ts",
@@ -480,6 +510,11 @@
       "sha256": "2905328d28d1a6cfe8954c0346dd119c2f259d4495b800d3de911da0f1e5ddf4",
       "origin": "T4 local implementation or synthetic tests in this repository",
       "t7PreparationSha256": "d3d28d66abf1671651da4b0bbfe6f9a1e8ea8e1c96e44f37bd1dad07c399b736"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-preparation.test.ts",
+      "sha256": "dc4099eb74e7ed6bfeec449ed01d3a9d4032466b82dfc1a164ebdb918850b382",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
     },
     {
       "path": "tests/role-eval/wecom-bot-report-integration.test.ts",
@@ -556,5 +591,6 @@
   "t7ControlledBase": "69090a7cf13a65d3629cb7081527dbaa8c1bd6ee",
   "t7ReadinessBase": "f8673f351828d9f431fc2a108674e7ed0f19b095",
   "t7FullHostBase": "9fe2de5969126685b850fd8b942f0e2417cfe03d",
-  "t7RecoveryPreparationBase": "6045b3fafcf359abf3850afe2e3c1386402465c5"
+  "t7RecoveryPreparationBase": "6045b3fafcf359abf3850afe2e3c1386402465c5",
+  "t7RecoveryEvidenceBase": "05f90289baffa191b39d1456808fdc1643fcd7d4"
 }

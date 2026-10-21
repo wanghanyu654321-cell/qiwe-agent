@@ -10,6 +10,14 @@ node integrations/native/verify-full-host.mjs $NROOT --host-overlay $OROOT --sql
 
 Linux 在固定原 ELF、ABI 和依赖通过 `linux-runtime.mjs` 核验后省略 `--sqlite-driver`。使用 `README-linux.md` 的断网、只读容器，不把 Windows 适配驱动称为原 Linux 驱动。只读源码挂载时设置 `QIWE_EVIDENCE_ROOT` 为容器可写临时目录；最终合成证据也输出到 stdout。
 
+## 队列证据及企微准备（2026-10-21后续）
+
+本轮候选增加原GroupQueue的`getRecoveryObligations()`，24项固定安全计数包含重试、待确认IPC及O保留的孤立state；`runtimeSafetyBlocks`统计受阻断key数量，物理回调write ticket明确unknown。`inspect.queueEvidence`只报告当前进程观察，缺端口为unavailable，错误/异步/伪造settled拒绝；四proof仍unverified，不签恢复票。
+
+验证工具会在临时`test-support/`编译本仓公开preparation/assembly/SDK适配/授权/账本的最小导入闭包和既有offline SDK fixture，记录每份source/compiled hash。联合场景用安装SDK的订阅ACK判断及MessageHandler、实际原gate和临时账本；正向仅使用原original模式已ready门禁，appointment维护模式继续拒绝，未注入safe清单。SDK socket/收据I/O为合成；真实Native七类渠道连接、维护期持久收件及生产外部写者围栏仍未实现。Linux只额外允许精确公开fixture路径，不扩大为任意tests/config挂载。
+
+新生命周期API只准`isolated-synthetic`显式connect/disconnect工厂。准备成功仍不允许业务，activate须原gate已ready且同代认证和指纹有效；入站使准备失败且不算可靠收件。清理有closing/closed/cleanup_unknown，SDK迟到error保留一个inert监听防止进程崩溃，客户端永久单次认领。已有SDK外发结果未知及Native任务由原持久账本处理，不能据新读取票结清声称Provider物理结清。完整记录见[本轮验收](../../docs/t7-recovery-evidence-acceptance.md)。
+
 ## 执行与证据
 
 - 全 N 非测试 TypeScript 树 SHA-256：`8611519397c78b1f5d9591ae18ea2c5d1c399aab3d63b9ea5311ebd8c18b0bad`。

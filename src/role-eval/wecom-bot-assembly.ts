@@ -8,6 +8,14 @@ import {normalizeBotFrame, type BotEvent} from './wecom-bot-transport.js';
 import {parseBotTaskCommand} from './wecom-bot-task-commands.js';
 
 type Client = Pick<WSClient, 'on' | 'off' | 'isConnected'>;
+/** A bound trusted gate adapter. It must register a real write ticket before work starts. */
+export interface WecomBotExecutionBoundary {
+  admit(): boolean;
+  enter(): unknown;
+  check(ticket: unknown): boolean;
+  close(ticket: unknown): void;
+  onInputRejected?(kind: 'text' | 'card'): void;
+}
 export interface WecomBotAssemblyBusiness {
   scope: BotReportOptions['scope']; employees: BotReportOptions['employees'];
   ledger: BotReportOptions['ledger']; artifacts?: BotReportOptions['artifacts'];
@@ -26,6 +34,7 @@ export interface WecomBotAssemblyOptions {
   sender: Parameters<typeof createBotSender>[0];
   requestTimeoutMs?: number; maxInFlight?: number;
   onOutcome?(outcome: WecomBotAssemblyOutcome): void;
+  executionBoundary?: WecomBotExecutionBoundary;
 }
 const attached = new WeakSet<object>();
 function freezeFrame<T>(value: T): T {
@@ -39,9 +48,11 @@ function freezeFrame<T>(value: T): T {
 /** Authenticated SDK event boundary; no connection ownership, network adapter or raw-frame handler. */
 export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
   const {client, botId, corpId, onOutcome} = options;
+  const configuredBoundary = options.executionBoundary;
   const requestTimeout = options.requestTimeoutMs ?? 4000, capacity = options.maxInFlight ?? 8;
   const valid = (s: unknown): s is string => typeof s === 'string' && !!s.trim() && s.length <= 120 && !/[\u0000-\u001f]/.test(s);
-  if (options.mode !== 'isolated-synthetic' || !valid(botId) || !valid(corpId) || !client || typeof client.on !== 'function' || typeof client.off !== 'function' || !Number.isInteger(requestTimeout) || requestTimeout < 1 || requestTimeout > 4000 || !Number.isInteger(capacity) || capacity < 1 || capacity > 1024 || !options.businesses.length) throw Error('invalid_bot_assembly');
+  if (options.mode !== 'isolated-synthetic' || !valid(botId) || !valid(corpId) || !client || typeof client.on !== 'function' || typeof client.off !== 'function' || !Number.isInteger(requestTimeout) || requestTimeout < 1 || requestTimeout > 4000 || !Number.isInteger(capacity) || capacity < 1 || capacity > 1024 || !options.businesses.length || configuredBoundary && (typeof configuredBoundary.admit !== 'function' || typeof configuredBoundary.enter !== 'function' || typeof configuredBoundary.check !== 'function' || typeof configuredBoundary.close !== 'function')) throw Error('invalid_bot_assembly');
+  const boundary = configuredBoundary && {admit: configuredBoundary.admit.bind(configuredBoundary), enter: configuredBoundary.enter.bind(configuredBoundary), check: configuredBoundary.check.bind(configuredBoundary), close: configuredBoundary.close.bind(configuredBoundary), onInputRejected: configuredBoundary.onInputRejected?.bind(configuredBoundary)};
   if (attached.has(client)) throw Error('assembly_already_attached');
   // Validate sender now, without taking ownership of either injected SDK port.
   createBotSender(options.sender).close();
@@ -74,18 +85,46 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
     for (const request of active) {request.controller.abort(); request.dispose();}
   }
   function receive(raw: unknown) {
+    if (closed) return;
+    if (boundary) {
+      let admitted = false;
+      try {admitted = boundary.admit() === true;} catch {}
+      if (!admitted) {
+        try {boundary.onInputRejected?.(raw && typeof raw === 'object' && (raw as {cmd?: unknown}).cmd === 'aibot_event_callback' ? 'card' : 'text');} catch {}
+        observe({state: 'rejected', detail: 'input_not_accepted'});
+        return;
+      }
+    }
     let frame: unknown, event: BotEvent;
     try {frame = freezeFrame(structuredClone(raw)); event = normalizeBotFrame(frame);} catch {observe({state: 'rejected', detail: 'unsupported_event'}); return;}
     const metadata = {reqId: event.reqId, messageId: event.messageId, memberId: event.memberId};
     const reject = (detail: string) => observe({state: 'rejected', detail, event: metadata});
-    if (closed) return;
     if (!authenticated || !connected()) {reject('not_authenticated'); return;}
     if (event.botId !== botId || event.corpId !== undefined && event.corpId !== corpId) {reject('access_denied'); return;}
     if (active.size >= capacity) {reject('capacity_exceeded'); return;}
+    let ticket: unknown;
+    if (boundary) {
+      try {ticket = boundary.enter();} catch {reject('input_not_accepted'); return;}
+      if (ticket === null || ticket === undefined || typeof (ticket as {then?: unknown})?.then === 'function') {reject('input_not_accepted'); return;}
+    }
     const capturedEpoch = epoch, controller = new AbortController(), deadline = performance.now() + requestTimeout;
     const resources: (() => void)[] = [];
+    const physicalReads = new Set<Promise<void>>();
+    const trackPhysical = <T>(value: Promise<T>): Promise<T> => {
+      if (boundary) {
+        const settled = value.then(() => {}, () => {});
+        physicalReads.add(settled);
+        void settled.then(() => physicalReads.delete(settled));
+      }
+      return value;
+    };
     const request = {controller, dispose: () => {for (const close of resources.splice(0).reverse()) close();}};
     const check = () => {
+      if (boundary) {
+        let allowed = false;
+        try {allowed = boundary.check(ticket) === true;} catch {}
+        if (!allowed) throw Error('authority_cancelled');
+      }
       if (closed || controller.signal.aborted || capturedEpoch !== epoch || !authenticated || !connected()) throw Error('session_invalidated');
       if (performance.now() >= deadline) throw Error('request_timeout');
     };
@@ -95,7 +134,15 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
     const work = async () => {
       try {
         check();
-        const authority = createWecomBotContext({...identity, mode: 'isolated-synthetic', botId, corpId,
+        const guardedStore = boundary ? new Proxy(identity.store, {get(target, key) {
+          if (key === 'withCurrent') return <T>(grant: Parameters<typeof target.withCurrent>[0], work: () => T): T => target.withCurrent(grant, () => {check(); return work();});
+          const value: unknown = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }}) : identity.store;
+        const authority = createWecomBotContext({...identity, store: guardedStore,
+          readBinding: async (subject, scope) => {check(); const value = await trackPhysical(identity.readBinding(subject, scope)); check(); return value;},
+          readNative: async (accountId, scope) => {check(); const value = await trackPhysical(identity.readNative(accountId, scope)); check(); return value;},
+          mode: 'isolated-synthetic', botId, corpId,
           readSubject: async () => {check(); return {botId, memberId: event.memberId};}});
         resources.push(() => authority.close());
         const command = event.action.kind === 'text' ? parseBotTaskCommand(event.action.text) : undefined;
@@ -117,9 +164,18 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
         observe({state: 'handled', detail: 'event_handled', event: metadata, result});
       } catch (error) {
         const code = error instanceof Error ? error.message : '';
-        const allowed = ['access_denied', 'access_changed', 'authority_unavailable', 'unsupported_event', 'bot_reply_conflict', 'request_timeout'];
-        reject(controller.signal.aborted ? (capturedEpoch !== epoch || closed ? 'session_invalidated' : 'request_timeout') : allowed.includes(code) ? code : 'event_unavailable');
-      } finally {clearTimeout(timer); controller.abort(); request.dispose(); active.delete(request);}
+        const allowed = ['access_denied', 'access_changed', 'authority_unavailable', 'unsupported_event', 'bot_reply_conflict', 'request_timeout', 'input_not_accepted'];
+        let maintenance = false;
+        if (boundary) {try {maintenance = boundary.admit() !== true;} catch {maintenance = true;}}
+        reject(controller.signal.aborted ? (capturedEpoch !== epoch || closed ? 'session_invalidated' : 'request_timeout') : maintenance ? 'input_not_accepted' : allowed.includes(code) ? code : 'event_unavailable');
+      } finally {
+        clearTimeout(timer); controller.abort(); request.dispose();
+        // Context cancellation can settle its bounded Promise before a trusted read port
+        // settles. Keep the original gate ticket until those physical reads finish.
+        if (boundary) while (physicalReads.size) await Promise.all([...physicalReads]);
+        active.delete(request);
+        if (boundary) {try {boundary.close(ticket);} catch {}}
+      }
     };
     const promise = work(); pending.add(promise);
     void promise.finally(() => pending.delete(promise));
