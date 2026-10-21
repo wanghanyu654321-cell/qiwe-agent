@@ -22,11 +22,32 @@ function safeCount(value: unknown): number {
   return value as number;
 }
 
+const queueCountNames = [
+  'groupCount', 'activeCount', 'activeContainerCount', 'activeHostProcessCount',
+  'waitingGroupCount', 'pendingMessageGroups', 'pendingTasks', 'activeTasks',
+  'retryTimers', 'retryTasks', 'messageRetrySnapshots', 'processHandles',
+  'containerHandles', 'queryInFlight', 'pendingIpcDeliveries',
+  'acknowledgedIpcDeliveries', 'teardownWaiters', 'restartingGroups',
+  'stopRequestedGroups', 'runtimeSafetyBlocks', 'mutationPauseTokens',
+  'retainedSafetyKeys', 'retainedQueuedWork', 'detachedRetainedQueuedWork',
+] as const;
+function queueEvidence(value: unknown) {
+  const scope = 'current_process_partial' as const;
+  if (value === undefined) return { scope, status: 'unavailable' as const };
+  if (!object(value) || 'then' in value || value.physicalCallbackWriteTickets !== 'unknown')
+    throw new Error('invalid_recovery_inspection');
+  const counts = Object.fromEntries(queueCountNames.map(name => [name, safeCount(value[name])]));
+  return { scope, status: 'observed' as const, counts,
+    physicalCallbackWriteTickets: 'unknown' as const,
+    oldProcessOwnership: 'unverified' as const, writerCoverage: 'unverified' as const };
+}
+
 /** Copies only fixed category counts. Original keys, paths, IDs, versions and errors stay private. */
 export function buildRecoveryInspection(
   snapshot: unknown,
   observation: unknown,
   phase: RecoveryPhase,
+  obligations?: unknown,
 ) {
   if (!object(snapshot) || !object(snapshot.inventory) ||
       !Array.isArray(snapshot.inventory.records) ||
@@ -81,6 +102,7 @@ export function buildRecoveryInspection(
     recordCounts,
     blockerCount: safeCount(snapshot.inventory.blockers.length),
     otherBlockerCount,
+    queueEvidence: queueEvidence(obligations),
     observation: {
       scope: 'current_process_partial' as const,
       ...counts,

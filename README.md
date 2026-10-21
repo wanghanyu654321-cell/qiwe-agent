@@ -1,6 +1,6 @@
 # qiwe-agent
 
-企微员工入口接入现有 Agent 与门店业务服务。本仓库当前交付 **T0–T6 本地隔离切片及 T7 受控接入适配**：复用原账号、门店、岗位授权、经营账本和培训服务，验证报数、更正、汇总、Excel，以及任务提交、进度/结果查询、精确取消和重启后查回；补充多成员、Web兼容、授权锁、本地性能、真实SDK发布包离线验证，以及定向Native执行的隔离验证。最新进展见[T7恢复核对准备](docs/t7-recovery-preparation-acceptance.md)，前轮见[完整宿主与Linux核验](docs/t7-full-host-acceptance.md)。T7真实联调与发布尚未完成。
+企微员工入口接入现有 Agent 与门店业务服务。本仓库当前交付 **T0–T6 本地隔离切片及 T7 受控接入适配**：复用原账号、门店、岗位授权、经营账本和培训服务，验证报数、更正、汇总、Excel，以及任务提交、进度/结果查询、精确取消和重启后查回；补充多成员、Web兼容、授权锁、本地性能、真实SDK发布包离线验证，以及定向Native执行的隔离验证。最新进展见[T7恢复证据接点与渠道准备](docs/t7-recovery-evidence-acceptance.md)，前轮见[恢复核对准备](docs/t7-recovery-preparation-acceptance.md)。T7真实联调与发布尚未完成。
 
 ## 当前可以验证什么
 

@@ -7,6 +7,7 @@ import {createHostCandidate,hostNativeHashes,hostOverlayHashes} from './host-can
 import {transformNative} from './targeted-execution.mjs';
 import {applyRecoveryInspectionOverlay} from './recovery-inspection-overlay.mjs';
 import {applyProjectResidueOverlay} from './project-residue-overlay.mjs';
+import {applyQueueRecoveryOverlay} from './queue-recovery-overlay.mjs';
 
 const digest=value=>createHash('sha256').update(value).digest('hex');
 export const fullHostSourceIdentity='8611519397c78b1f5d9591ae18ea2c5d1c399aab3d63b9ea5311ebd8c18b0bad';
@@ -76,6 +77,7 @@ export async function createFullHostCandidate(nativeRoot,overlayRoot){
   files.set(name,rewritten);
  }
  const adapted=applyRecoveryInspectionOverlay(files);
+ adapted.set('group-queue.ts',applyQueueRecoveryOverlay(adapted.get('group-queue.ts')));
  adapted.set('appointment-boot-inventory.ts',applyProjectResidueOverlay(adapted.get('appointment-boot-inventory.ts')));
  adapted.set('recovery-inspection.ts',fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'recovery-inspection.ts'),'utf8'));
  return {files:adapted,audit:{nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),recoveryInspection:'current-admin read-only diagnostics; no restore permit',projectConfigurationCoverage:'original descriptor scanner extended to project .env/config; all original blockers retained',scope:'actual original index main, complete O host/queue/Web/DB stack plus exact T7 DB/scheduler and recovery inspection; no inventory completion bypass'}};

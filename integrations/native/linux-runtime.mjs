@@ -37,7 +37,7 @@ export function runLinuxContainer(copyRoot,entryArguments,{execute=spawnSync,non
 }
 const stageMarker='.qiwe-linux-stage.json';
 const stageTrees=['qiwe-agent/src/','qiwe-agent/integrations/native/','qiwe-agent/node_modules/','.local/full-instance/stage/app/src/','.local/full-instance/stage/app/node_modules/','.local/core-fix/appointment-identity-candidate/src/'];
-const stageFiles=['qiwe-agent/package.json','qiwe-agent/package-lock.json','qiwe-agent/tsconfig.json','qiwe-agent/tsconfig.build.json','.local/full-instance/stage/app/package.json','.local/full-instance/stage/app/package-lock.json','.local/full-instance/stage/app/tsconfig.json'];
+const stageFiles=['qiwe-agent/package.json','qiwe-agent/package-lock.json','qiwe-agent/tsconfig.json','qiwe-agent/tsconfig.build.json','qiwe-agent/tests/fixtures/offline-bot-sdk.ts','.local/full-instance/stage/app/package.json','.local/full-instance/stage/app/package-lock.json','.local/full-instance/stage/app/tsconfig.json'];
 function stageInventory(copyRoot){
   const files={};
   const walk=(directory,prefix='')=>{for(const entry of fs.readdirSync(directory,{withFileTypes:true})){

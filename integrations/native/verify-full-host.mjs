@@ -4,6 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
+import ts from 'typescript';
 import {nativeVerificationOptions} from './verification-options.mjs';
 import {createFullHostCandidate} from './full-host-candidate.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url)),project=path.resolve(here,'../..');
@@ -25,6 +26,27 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  fs.mkdirSync(path.join(directory,'tests'));
  fs.copyFileSync(path.join(here,'full-host.test.mts'),path.join(directory,'tests/full-host.test.mts'));
  fs.copyFileSync(path.join(here,'project-residue.test.mts'),path.join(directory,'tests/project-residue.test.mts'));
+ fs.copyFileSync(path.join(here,'queue-recovery.test.mts'),path.join(directory,'tests/queue-recovery.test.mts'));
+ fs.copyFileSync(path.join(here,'bot-preparation-native.test.mts'),path.join(directory,'tests/bot-preparation-native.test.mts'));
+ // Compile only the public test dependency closure. Never load original main/config here.
+ fs.mkdirSync(path.join(directory,'test-support'));
+ const publicSupportHashes={};
+ function compilePublic(name,sourceFile=path.join(project,'src/role-eval',name+'.ts')){
+  if(Object.hasOwn(publicSupportHashes,name))return;
+  if(!/^[a-z0-9-]+$/.test(name))throw Error('FULL_HOST_INVALID_PUBLIC_SUPPORT_MODULE');
+  const bytes=fs.readFileSync(sourceFile),sourceHash=createHash('sha256').update(bytes).digest('hex');
+  publicSupportHashes[name]={sourceHash};
+  let compiled=ts.transpileModule(bytes.toString('utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+  compiled=compiled.replace(/from (['"])(\.\/([a-z0-9-]+)\.js)\1/g,(_all,quote,_relative,dependency)=>{
+   compilePublic(dependency);return 'from '+quote+'./'+dependency+'.mjs'+quote;
+  });
+  for(const dependency of ['@wecom/aibot-node-sdk','adm-zip'])
+   compiled=compiled.replaceAll("from '"+dependency+"'",'from '+JSON.stringify(import.meta.resolve(dependency))).replaceAll('from "'+dependency+'"','from '+JSON.stringify(import.meta.resolve(dependency)));
+  publicSupportHashes[name].compiledHash=createHash('sha256').update(compiled).digest('hex');
+  fs.writeFileSync(path.join(directory,'test-support',name+'.mjs'),compiled);
+ }
+ for(const name of ['wecom-bot-preparation','wecom-bot-assembly','wecom-bot-sdk','workbench-access','manager-store'])compilePublic(name);
+ compilePublic('offline-bot-sdk',path.join(project,'tests/fixtures/offline-bot-sdk.ts'));
  // Test-only observational exports. Original main() call and catch stay intact.
  fs.appendFileSync(path.join(directory,'src/index.ts'),'\nexport { queue as fullHostQueue, appointmentBootGate as fullHostBootGate };\n');
  fs.writeFileSync(path.join(directory,'package.json'),'{"type":"module","private":true}');
@@ -46,7 +68,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   if(check.error)throw check.error;if(check.status!==0){process.exitCode=check.status??1;throw Error('FULL_HOST_TYPECHECK_FAILED');}
  }
  const hashFile=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
- const instrumentation={executedIndexHash:hashFile(path.join(directory,'src/index.ts')),testHash:hashFile(path.join(directory,'tests/full-host.test.mts')),projectResidueTestHash:hashFile(path.join(directory,'tests/project-residue.test.mts')),configHash:hashFile(path.join(directory,'vitest.config.mts')),verifierHash:hashFile(fileURLToPath(import.meta.url)),candidateBuilderHash:hashFile(path.join(here,'full-host-candidate.mjs'))};
+ const instrumentation={executedIndexHash:hashFile(path.join(directory,'src/index.ts')),testHash:hashFile(path.join(directory,'tests/full-host.test.mts')),projectResidueTestHash:hashFile(path.join(directory,'tests/project-residue.test.mts')),queueRecoveryTestHash:hashFile(path.join(directory,'tests/queue-recovery.test.mts')),botPreparationNativeTestHash:hashFile(path.join(directory,'tests/bot-preparation-native.test.mts')),publicSupportHashes,configHash:hashFile(path.join(directory,'vitest.config.mts')),verifierHash:hashFile(fileURLToPath(import.meta.url)),candidateBuilderHash:hashFile(path.join(here,'full-host-candidate.mjs'))};
  const phases=[];
  for(const phase of ['boot','restart']){
   env.QIWE_FULL_HOST_PHASE=phase;env.QIWE_FULL_HOST_EVIDENCE=path.join(directory,'evidence-'+phase+'.json');
@@ -63,6 +85,9 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   if(phases.length!==2||phases.some(phase=>!phase.evidence)||phases[0].evidence.processId===phases[1].evidence.processId)throw Error('FULL_HOST_DISTINCT_PROCESS_RESTART_NOT_PROVEN');
   const evidence={runId,status:'passed',restart:'two separate OS worker processes share exact original synthetic SQLite snapshot',phases:phases.map(({phase,evidence})=>({phase,...evidence}))};
   writeAudit({...candidate.audit,instrumentation,platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF',status:'passed',phases});
+  // Linux tmpfs audit files disappear with the container. Persist enough exact
+  // source/instrumentation identity in stdout to bind the retained host log.
+  console.log('FULL_HOST_AUDIT_HASHES',JSON.stringify({runId,nativeTree:candidate.audit.nativeTree,overlayTree:candidate.audit.overlayTree,composedHashesSha256:createHash('sha256').update(JSON.stringify(candidate.audit.composedHashes)).digest('hex'),instrumentation,platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF'}));
   fs.writeFileSync(path.join(evidenceRoot,'full-host-evidence.json'),JSON.stringify(evidence,null,2));console.log('FULL_HOST_EVIDENCE',JSON.stringify(evidence));
  }
 }catch(error){writeAudit({...JSON.parse(fs.readFileSync(path.join(evidenceRoot,'full-host-audit.json'),'utf8')),...candidate?.audit,status:'failed',error:String(error)});throw error;

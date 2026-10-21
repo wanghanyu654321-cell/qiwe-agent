@@ -56,6 +56,17 @@ test('automatic removal after stop preserves the original timeout and does not r
 });
 
 const source=process.env.QIWE_LINUX_NATIVE_SOURCE;
+
+test('controlled copy admits only the exact public offline SDK fixture under tests',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-fixture-test-'));
+  try{
+    const directory=path.join(root,'qiwe-agent/tests/fixtures');fs.mkdirSync(directory,{recursive:true});
+    fs.writeFileSync(path.join(directory,'offline-bot-sdk.ts'),'// synthetic public fixture');
+    sealControlledLinuxCopy(root);assert.equal(verifyControlledLinuxCopy(root).files,1);
+    fs.writeFileSync(path.join(directory,'credentials.json'),'synthetic forbidden');
+    assert.throws(()=>sealControlledLinuxCopy(root),/Unapproved stage path/);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
 test('controlled copy inventory rejects credentials, symlinks, missing and changed files',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-stage-test-'));
   try{

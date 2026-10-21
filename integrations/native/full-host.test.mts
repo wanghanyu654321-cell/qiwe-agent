@@ -106,6 +106,9 @@ it('boots the actual original main and real loopback Web stack while preserving 
   const inspection=await fetch(base+'/api/appointment/maintenance/inspect',{method:'POST',headers,body:'{}'});
   expect(inspection.status).toBe(200);
   const inspectionBody=await inspection.json() as any;
+  expect(inspectionBody.queueEvidence).toEqual({scope:'current_process_partial',status:'observed',
+   counts:Object.fromEntries(Object.entries(host.fullHostQueue.getRecoveryObligations()).filter(([name])=>name!=='physicalCallbackWriteTickets')),
+   physicalCallbackWriteTickets:'unknown',oldProcessOwnership:'unverified',writerCoverage:'unverified'});
   const inspectionInventory=db.scanAppointmentBootInventory();
   const expectedCounts={resource:0,input:0,execution:0,outbox:0,task:0,residue:0,observation:0,unknown:0};
   for(const item of inspectionInventory.records){
@@ -199,9 +202,23 @@ it('boots the actual original main and real loopback Web stack while preserving 
    expect(snapshot(),scenario.name).toEqual(before);
   }
   events.push('direct-real-routes-invalid-observation-port-does-not-break-review');
+  for(const port of [42,()=>{throw Error('private queue error');},()=>Promise.resolve({}),async()=>({}),()=>({})]){
+   const local=createAppointmentBootRoutes({gate:host.fullHostBootGate,origin:headers.Origin,
+    readInventory:()=>({inventory:db.scanAppointmentBootInventory(),resourceJids:Object.keys(db.getAllRegisteredGroups()).sort()}),
+    prepare:async()=>{},drain:()=>{},readRecoveryObservation:()=>({activeCount:0,activeContainerCount:0,activeHostProcessCount:0,waitingCount:0,enabledAccounts:0,connectedAccounts:0}),readRecoveryObligations:port} as any);
+   const result=await local.fetch(new Request(base+'/api/appointment/maintenance/inspect',{method:'POST',headers,body:'{}'}));
+   expect(result.status).toBe(503);expect(await result.text()).not.toContain('private queue');
+   const oldReview=await local.fetch(new Request(base+'/api/appointment/maintenance/review',{method:'POST',headers,body:'{}'}));
+   expect(oldReview.status).toBe(409);expect(snapshot()).toEqual(before);
+  }
   const queue=context.getWebDeps()!.queue;expect(queue).toBe(host.fullHostQueue);
   const work=vi.fn(async()=>{});expect(queue.enqueueTask('web:full-role','synthetic-probe',work,{allowInactive:true})).toBe(true);
   await new Promise(resolve=>originalTimeout(resolve,100));expect(work).not.toHaveBeenCalled();expect(snapshot()).toEqual(before);
+  const queuedEvidence=await fetch(base+'/api/appointment/maintenance/inspect',{method:'POST',headers,body:'{}'});
+  expect(queuedEvidence.status).toBe(200);
+  expect((await queuedEvidence.json() as any).queueEvidence.counts).toMatchObject({pendingTasks:1,retainedQueuedWork:1});
+  expect(work).not.toHaveBeenCalled();expect(snapshot()).toEqual(before);expect(host.fullHostBootGate.phase()).toBe('paused');
+  events.push('actual-inspect-original-queue-obligations-not-global-proof');
   events.push('actual-queue-db-promoting-notification-preserved');
   process.emit('SIGTERM');
   for(let n=0;n<200&&!exits.length;n++)await new Promise(resolve=>originalTimeout(resolve,25));

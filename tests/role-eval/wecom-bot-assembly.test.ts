@@ -5,13 +5,14 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {ManagerArtifactStore} from '../../src/role-eval/manager-artifacts.js';
-import {createWecomBotAssembly, type WecomBotAssemblyOutcome} from '../../src/role-eval/wecom-bot-assembly.js';
+import {createWecomBotAssembly, type WecomBotAssemblyOutcome, type WecomBotExecutionBoundary} from '../../src/role-eval/wecom-bot-assembly.js';
 import {ManagerStore, type StaffContext} from '../../src/role-eval/manager-store.js';
 import {WorkbenchAccessStore} from '../../src/role-eval/workbench-access.js';
 import {BotTaskStore} from '../../src/role-eval/wecom-bot-task-store.js';
 import {createNativeBotTasks} from '../../src/role-eval/native-bot-tasks.js';
 import {offlineBotSdk} from '../fixtures/offline-bot-sdk.js';
 import {createBotSdkAdapter} from '../../src/role-eval/wecom-bot-sdk.js';
+import {createWecomBotPreparation} from '../../src/role-eval/wecom-bot-preparation.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {for (const close of cleanup.splice(0).reverse()) close();});
@@ -286,4 +287,72 @@ it('captures Native methods at assembly creation while keeping the shared servic
   expect(originalStart).toHaveBeenCalledTimes(1); expect(originalQuery).toHaveBeenCalledTimes(3); expect(originalCancel).toHaveBeenCalledTimes(1);
   expect(substitutedStart).not.toHaveBeenCalled(); expect(substitutedQuery).not.toHaveBeenCalled(); expect(substitutedCancel).not.toHaveBeenCalled();
   app.close(); expect(sharedClose).not.toHaveBeenCalled();
+});
+
+it('registers the original write ticket before async authority and rechecks inside the original grant transaction', async () => {
+  const s = setup(); s.app.close();
+  let phase: 'ready' | 'paused' = 'ready', entered = 0;
+  const finished = vi.fn();
+  const boundary: WecomBotExecutionBoundary = {
+    admit: () => phase === 'ready',
+    enter: () => ({id: String(++entered)}),
+    check: () => phase === 'ready',
+    close: finished,
+  };
+  const originalWithCurrent = s.grants.withCurrent.bind(s.grants);
+  vi.spyOn(s.grants, 'withCurrent').mockImplementation((grant, work) => {
+    phase = 'paused';
+    return originalWithCurrent(grant, work);
+  });
+  const app = createWecomBotAssembly({...s.options, executionBoundary: boundary}); cleanup.push(() => app.close());
+  s.offline.authenticate();
+  s.offline.frame(text('member-a', 'gate-revoked-before-write'));
+  await app.idle();
+  expect(entered).toBe(1);
+  expect(finished).toHaveBeenCalledTimes(1);
+  expect(s.counts()).toEqual({reports: 0, replies: 0});
+  expect(s.offline.sent).toEqual([]);
+  expect(s.outcomes.at(-1)).toMatchObject({state: 'rejected', detail: 'input_not_accepted'});
+});
+
+it.each(['timeout', 'close'] as const)('retains the gate write ticket until a late original binding read physically settles after %s', async kind => {
+  const s = setup(); s.app.close(); s.offline.lifecycle('disconnected');
+  let release!: () => void;
+  const suspended = new Promise<void>(resolve => {release = resolve;});
+  s.readBinding.mockImplementationOnce(async subject => {
+    await suspended;
+    return {botId: 'bot', corpId: 'corp', memberId: subject.memberId, accountId: 'a', active: true, version: 1};
+  });
+  let phase: 'paused' | 'ready' = 'ready', issued = 0;
+  const finishWrite = vi.fn();
+  const gate = {phase: () => phase, noteArrival: vi.fn(),
+    beginWrite: () => phase === 'ready' ? {id: String(++issued)} : null,
+    finishWrite};
+  let currentApp: ReturnType<typeof createWecomBotAssembly> | undefined;
+  const preparation = createWecomBotPreparation({mode: 'isolated-synthetic', createClient: () => s.offline.client,
+    connect: () => {s.offline.authenticate();},
+    disconnect: () => {s.offline.lifecycle('disconnected');},
+    assemble: (client, executionBoundary) => {
+      currentApp = createWecomBotAssembly({...s.options, client, executionBoundary, requestTimeoutMs: kind === 'timeout' ? 15 : 200});
+      return currentApp;
+    },
+    gate, readFingerprint: () => ({botId: 'bot', corpId: 'corp', ownerId: 'owner', configVersion: '1', credentialFingerprint: 'synthetic', workspaceFingerprint: 'synthetic'}), timeoutMs: 40});
+  cleanup.push(() => {void preparation.close();});
+  await preparation.prepare(); expect(preparation.activate()).toBe(true);
+  s.offline.frame(text('member-a', 'physically-pending-' + kind));
+  await vi.waitFor(() => expect(s.readBinding).toHaveBeenCalled());
+  if (kind === 'timeout') await vi.waitFor(() => expect(s.outcomes.at(-1)?.state).toBe('rejected'));
+  else phase = 'paused';
+  const closing = preparation.close();
+  await closing;
+  expect(preparation.status()).toBe('cleanup_unknown');
+  expect(issued).toBe(1);
+  expect(finishWrite).not.toHaveBeenCalled();
+  expect(s.counts()).toEqual({reports: 0, replies: 0});
+  expect(s.offline.sent).toEqual([]);
+  release();
+  await currentApp!.idle();
+  expect(finishWrite).toHaveBeenCalledTimes(1);
+  expect(s.counts()).toEqual({reports: 0, replies: 0});
+  expect(s.offline.sent).toEqual([]);
 });
