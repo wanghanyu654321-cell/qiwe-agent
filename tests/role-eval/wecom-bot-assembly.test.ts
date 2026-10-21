@@ -65,6 +65,171 @@ it('assembles the controlled SDK adapter with original ledger, nested card updat
  expect(s.offline.sent).toHaveLength(sent);expect(s.ledger.getReport(s.actor('a'),pending.reportId!)?.entries[0]?.amountCents).toBe(10000);
 });
 
+it('selects a permitted marketing conversation and gives an honest D1 reply without writing a report',async()=>{
+ const s=setup();s.app.close();
+ s.grants.change('admin',{accountId:'a',storeId:'store-b',roles:['marketing'],active:true,expectedVersion:1,requestKey:'marketing-only'});
+ const prepared:string[]=[];
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(){return {state:'missing' as const,detail:'not prepared'};},
+  async prepareRoleWorkspace(input:{actor:{accountId:string;role:string}}){prepared.push(input.actor.accountId+':'+input.actor.role);return {state:'ready' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',ownerAccountId:'a',storeId:'store-b',role:'marketing' as const};}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ const before=s.counts().reports;
+ s.offline.frame(text('member-a','choose-marketing','岗位 内容营销'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('内容营销');
+ s.offline.frame(text('member-a','draft-copy','写三条朋友圈文案'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('对话执行尚未接通');
+ expect(s.counts().reports).toBe(before);
+ expect(prepared).toEqual(['a:marketing']);
+ s.offline.frame(text('member-a','mode-status','岗位查询'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('内容营销');
+ s.offline.frame(text('member-a','bad-role','岗位 不存在'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('已开通岗位');
+ expect(s.counts().reports).toBe(before);
+ s.offline.frame(text('member-a','exit-mode','退出岗位对话'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('已退出');
+ s.offline.frame(text('member-a','choose-marketing','岗位 内容营销'));await app.idle();
+ expect(prepared).toEqual(['a:marketing']);
+});
+it('allows explicit reselection after a grant version change while stale ordinary text cannot reach reporting',async()=>{
+ const s=setup();s.app.close();
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(){return {state:'ready' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',ownerAccountId:'a',storeId:'store-b',role:'marketing' as const};},
+  async prepareRoleWorkspace(){throw Error('unexpected_create');}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ s.offline.frame(text('member-a','first-select','岗位 内容营销'));await app.idle();
+ s.grants.change('admin',{accountId:'a',storeId:'store-b',roles:['marketing'],active:true,expectedVersion:1,requestKey:'remove-manager'});
+ const before=s.counts().reports;s.offline.frame(text('member-a','stale-draft','本月销售100元'));await app.idle();
+ expect(s.outcomes.at(-1)?.state).toBe('rejected');expect(s.counts().reports).toBe(before);
+ s.offline.frame(text('member-a','fresh-select','岗位 内容营销'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('已选择');
+ s.offline.frame(text('member-a','fresh-draft','写三条朋友圈文案'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('对话执行尚未接通');
+ expect(s.counts().reports).toBe(before);
+});
+it('rejects a Native preparation result whose owner was changed through the input reference',async()=>{
+ const s=setup();s.app.close();
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(input:{actor:{accountId:string}}){input.actor.accountId='b';return {state:'ready' as const,workspaceJid:'web:marketing-b',profileId:'profile-b',ownerAccountId:'b',storeId:'store-b',role:'marketing' as const};},
+  async prepareRoleWorkspace(){throw Error('unexpected_create');}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ s.offline.frame(text('member-a','mutated-owner','岗位 内容营销'));await app.idle();
+ expect(s.outcomes.at(-1)?.state).toBe('rejected');
+ expect(s.offline.sent).toEqual([]);
+ expect(s.tasks.currentConversation({tenantId:'tenant',storeId:'store-b',accountId:'a',corpId:'corp',botId:'bot',memberId:'member-a',bindingVersion:1,grantVersion:1})?.state).toBe('preparing');
+});
+it('keeps explicit task and reporting commands available while role preparation is unknown',async()=>{
+ const s=setup();s.app.close();
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(){return {state:'unknown' as const,detail:'native result pending'};},
+  async prepareRoleWorkspace(){throw Error('must_reconcile');}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ s.offline.frame(text('member-a','unknown-select','岗位 内容营销'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('无法核实');
+ s.offline.frame(text('member-a','unknown-status','岗位查询'));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('重新发送选岗命令可核实准备结果');
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('不会重复创建');
+ s.offline.frame(text('member-a','original-task-query','查询任务 内容营销 '+ 'a'.repeat(64)));await app.idle();
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('任务');
+ expect(JSON.stringify(s.offline.sent.at(-1)?.body)).not.toContain('岗位空间正在准备');
+ s.offline.frame(text('member-a','explicit-report','报数 本月销售100元'));await app.idle();
+ expect(s.outcomes.at(-1)?.result?.result.status).toBe('pending');
+ expect(s.counts().reports).toBe(1);
+});
+it('rechecks an unknown resource result without calling prepare again on the same selection event',async()=>{
+ const s=setup();s.app.close();let prepares=0;
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(){return {state:'missing' as const,detail:'not found'};},
+  async prepareRoleWorkspace(){prepares++;return {state:'unknown' as const,detail:'create result lost'};}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ const frame=text('member-a','unknown-create','岗位 内容营销');s.offline.frame(frame);await app.idle();
+ expect(prepares).toBe(1);
+ s.offline.frame(frame);await app.idle();
+ expect(prepares).toBe(1);
+ expect(s.tasks.currentConversation({tenantId:'tenant',storeId:'store-b',accountId:'a',corpId:'corp',botId:'bot',memberId:'member-a',bindingVersion:1,grantVersion:1})?.state).toBe('unknown');
+});
+it('rejects a reused report message ID before a different role selection can prepare resources',async()=>{
+ const s=setup();s.app.close();let prepares=0;
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(){prepares++;return {state:'missing' as const,detail:'missing'};},
+  async prepareRoleWorkspace(){prepares++;return {state:'ready' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',ownerAccountId:'a',storeId:'store-b',role:'marketing' as const};}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ s.offline.frame(text('member-a','same-message','本月销售100元'));await app.idle();
+ expect(s.outcomes.at(-1)?.result?.result.status).toBe('pending');
+ s.offline.frame(text('member-a','same-message','岗位 内容营销'));await app.idle();
+ expect(s.outcomes.at(-1)?.detail).toBe('bot_reply_conflict');
+ expect(prepares).toBe(0);
+ expect(s.tasks.currentConversation({tenantId:'tenant',storeId:'store-b',accountId:'a',corpId:'corp',botId:'bot',memberId:'member-a',bindingVersion:1,grantVersion:1})).toBeUndefined();
+});
+it('rejects a reused selection message ID before it can write a report',async()=>{
+ const s=setup();s.app.close();
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(){return {state:'ready' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',ownerAccountId:'a',storeId:'store-b',role:'marketing' as const};},
+  async prepareRoleWorkspace(){throw Error('unexpected_create');}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ s.offline.frame(text('member-a','select-then-report','岗位 内容营销'));await app.idle();
+ const before=s.counts().reports;
+ s.offline.frame(text('member-a','select-then-report','报数 本月销售100元'));await app.idle();
+ expect(s.outcomes.at(-1)?.detail).toBe('bot_reply_conflict');
+ expect(s.counts().reports).toBe(before);
+});
+it('captures Native preparation callbacks at assembly construction',async()=>{
+ const s=setup();s.app.close();let original=0,replacement=0;
+ const native={async readRoleWorkspace(){original++;return {state:'ready' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',ownerAccountId:'a',storeId:'store-b',role:'marketing' as const};},async prepareRoleWorkspace(){throw Error('unexpected_create');}};
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native}}))});cleanup.push(()=>app.close());
+ native.readRoleWorkspace=async()=>{replacement++;return {state:'ready' as const,workspaceJid:'web:marketing-b',profileId:'profile-b',ownerAccountId:'b',storeId:'store-b',role:'marketing' as const};};
+ s.offline.authenticate();s.offline.frame(text('member-a','callback-snapshot','岗位 内容营销'));await app.idle();
+ expect(s.outcomes.at(-1)?.state).toBe('handled');expect(original).toBe(1);expect(replacement).toBe(0);
+});
+it('does not send a cached manager file after manager permission is removed',async()=>{
+ const s=setup();s.app.close();
+ const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{async readRoleWorkspace(){return {state:'unknown' as const,detail:'unused'};},async prepareRoleWorkspace(){throw Error('unused');}}}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ s.offline.frame(text('member-a','sales-for-file'));await app.idle();
+ const pending=s.outcomes.at(-1)!.result!.result,card=pending.reply.body.template_card!;
+ s.offline.frame({cmd:'aibot_event_callback',headers:{req_id:'confirm-for-file'},body:{msgid:'confirm-for-file',aibotid:'bot',msgtype:'event',chattype:'single',from:{userid:'member-a',corpid:'corp'},event:{eventtype:'template_card_event',template_card_event:{card_type:'button_interaction',task_id:card.task_id,event_key:card.button_list[0]!.key}}}});await app.idle();
+ s.offline.frame(text('member-a','summary-for-file','经营汇总 2026-10-20 本月'));await app.idle();
+ const id=s.outcomes.at(-1)!.result!.result.snapshotId!;
+ const frame=text('member-a','file-before-revoke','导出Excel '+id);
+ s.offline.frame(frame);await app.idle();
+ expect(s.outcomes.at(-1)?.result?.result.status).toBe('file');
+ const sent=s.offline.sent.length;
+ s.grants.change('admin',{accountId:'a',storeId:'store-b',roles:['marketing'],active:true,expectedVersion:1,requestKey:'manager-revoked-file'});
+ s.offline.frame(frame);await app.idle();
+ expect(s.outcomes.at(-1)?.state).toBe('rejected');expect(s.offline.sent).toHaveLength(sent);
+});
+it('reports a timed-out Native workspace read promptly while retaining its write ticket until physical settlement',async()=>{
+ const s=setup();s.app.close();let release!:()=>void;const wait=new Promise<void>(resolve=>{release=resolve;});let readStarted=false;
+ let entered=0,closed=0;const boundary:WecomBotExecutionBoundary={admit:()=>true,enter:()=>++entered,check:()=>true,close:()=>{closed++;}};
+ const app=createWecomBotAssembly({...s.options,executionBoundary:boundary,requestTimeoutMs:200,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(){readStarted=true;await wait;return {state:'missing' as const,detail:'late'};},
+  async prepareRoleWorkspace(){throw Error('must_not_create_after_timeout');}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ s.offline.frame(text('member-a','hung-workspace-read','岗位 内容营销'));
+ await vi.waitFor(()=>expect(readStarted).toBe(true));
+ await vi.waitFor(()=>expect(s.outcomes.at(-1)?.detail).toBe('request_timeout'));
+ expect(entered).toBe(1);expect(closed).toBe(0);
+ release();await app.idle();expect(closed).toBe(1);
+ expect(s.offline.sent).toEqual([]);
+});
+it('keeps the write ticket through a late Native prepare and never saves its result after timeout',async()=>{
+ const s=setup();s.app.close();let release!:()=>void;const wait=new Promise<void>(resolve=>{release=resolve;});let prepareStarted=false;
+ let entered=0,closed=0;const boundary:WecomBotExecutionBoundary={admit:()=>true,enter:()=>++entered,check:()=>true,close:()=>{closed++;}};
+ const app=createWecomBotAssembly({...s.options,executionBoundary:boundary,requestTimeoutMs:200,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{
+  async readRoleWorkspace(){return {state:'missing' as const,detail:'unprepared'};},
+  async prepareRoleWorkspace(){prepareStarted=true;await wait;return {state:'ready' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',ownerAccountId:'a',storeId:'store-b',role:'marketing' as const};}
+ }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
+ s.offline.frame(text('member-a','hung-native-prepare','岗位 内容营销'));
+ await vi.waitFor(()=>expect(prepareStarted).toBe(true));
+ await vi.waitFor(()=>expect(s.outcomes.at(-1)?.detail).toBe('request_timeout'));
+ expect(entered).toBe(1);expect(closed).toBe(0);
+ expect(s.offline.sent).toEqual([]);
+ const actor={tenantId:'tenant',storeId:'store-b',accountId:'a',corpId:'corp',botId:'bot',memberId:'member-a',bindingVersion:1,grantVersion:1};
+ expect(s.tasks.currentConversation(actor)).toMatchObject({state:'attempting'});
+ release();await app.idle();
+ expect(closed).toBe(1);
+ expect(s.tasks.currentConversation(actor)).toMatchObject({state:'attempting'});
+ expect(s.offline.sent).toEqual([]);
+});
+
 it('runs installed SDK events with separate A/B/C authority on one ledger, card confirmation, query and replay', async () => {
   const s = setup(); s.offline.authenticate();
   for (const p of people) s.offline.frame(text(p.memberId, 'report-' + p.accountId));

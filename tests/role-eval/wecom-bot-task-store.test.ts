@@ -163,8 +163,8 @@ describe('BotTaskStore durable task references',()=>{
   changeRow(file,input.id,row=>{row.attempt=1;row.state='linked';row.referenceId='exact-run';row.cancellation.attempt=Number.MAX_SAFE_INTEGER;row.cancellation.state='blocked';});
   expect(()=>store.claimCancel(owner,input.id)).toThrow('invalid_task_reference');expect(store.get(owner,input.id)?.cancellation.state).toBe('blocked');
  });
- it('creates only its reference table when sharing an existing report database',()=>{
+ it('creates its task and conversation tables without changing an existing report database',()=>{
   const {file}=open();const db=new DatabaseSync(file);try{db.exec('CREATE TABLE employee_reports(id TEXT PRIMARY KEY,body TEXT NOT NULL);');}finally{db.close();}
-  connect(file).reserve(reservation());const inspector=new DatabaseSync(file);try{expect(inspector.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()).toEqual([{name:'bot_task_refs'},{name:'employee_reports'}]);}finally{inspector.close();}
+  connect(file).reserve(reservation());const inspector=new DatabaseSync(file);try{expect(inspector.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()).toEqual([{name:'bot_conversation_current'},{name:'bot_conversation_events'},{name:'bot_task_refs'},{name:'employee_reports'}]);}finally{inspector.close();}
  });
 });

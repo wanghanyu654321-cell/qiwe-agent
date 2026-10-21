@@ -113,7 +113,25 @@ Windows命令为 `node integrations/native/verify-full-host.mjs N源码绝对路
 
 日志在本地 `.local/t7a-20261021/{public-tests,typecheck,build,native-baseline}.log`。本轮未重跑Linux，不把上一轮结果计入本轮；未动生产、真实消息、模型或实际业务数据。独立审查和GitHub状态以本轮交付记录为准。
 
-## 本地执行证据
+## D1 对 T7-A1 的范围增量（2026-10-21）
+
+基线 `19bfc67`，D1只补岗位空间准备与企微会话选择，执行进度见[对话接线计划](wecom-native-conversation-plan.md)。以下是本次已核实的覆盖要求；不是四类证明已通过，也不是完整A1清单完成。
+
+| D1读写入口 | 持久/运行事实与原来源 | 必须保持的恢复规则 |
+| --- | --- | --- |
+| 本人岗位Profile准备 | 原 `routes/agent-profiles.ts`、`createAgentProfile`、Profile prompt versions；原 `installProfiles`/创建journal | owner和模板必须来自可信上下文；原policy引用校验与能力锁保留。`listAgentProfilesForUser`可能创建默认Profile，不能作为不受门禁管理的纯读 |
+| 非Home空间创建/绑定 | 原 `routes/groups.ts`、`assignWorkspaceAgentProfile`、`setRegisteredGroup`，涉及 workspace/Profile映射、registered_groups及workspaces投影、内存注册表与原prewarm | 原额度、system/profile锁、模式、发布/回滚保留；未知创建不能盲重试；空间门店归属不能仅由名字猜测。Profile已有不证明工作空间已绑定 |
+| 企微会话选择与准备来源 | 原BotTaskStore同一数据库内新增`bot_conversation_events`、`bot_conversation_current`；原Native `router_state`增加`wecom-role-workspace:v1:`资源claim/绑定与`wecom-role-owner-claim:v1:`本人准备互斥记录 | 需可枚举并保留绑定/授权版本、原门店及事件归属。旧事件重投不得覆盖后续选择，未知准备保留查回状态；不能在维护期承诺业务已受理 |
+| 准备中的异步操作 | 原账号/绑定读取、Profile和workspace准备、迟到完成及请求取消 | 授权/门禁重读与真实write ticket覆盖实际settle；4秒请求结束不证明底层准备已经结束，不提前释放票据或宣布无外部写者 |
+| 选岗反馈与普通文本分流 | 原回复意图/发送端口；D1不启用D2的原消息提交 | 选岗成功只证明绑定与模式保存，不能回复Agent任务已开始；未接通执行时明确提示，不能偷偷回退报数。发送未知仍独立保留，不重建已完成准备 |
+
+原O scanner已识别上述原资源表，但行仍按原规则blocked；新增渠道状态/journal还需跨库/文件证据覆盖，不能因不在原SQLite就排除。若引入原DB新表，固定schema/projection必须同步，否则原unknown-object拒绝保留。门禁关闭时仅可执行获准只读核查，不能通过换original模式、注入safe/ready或空库来证明appointment恢复。
+
+D1当前采用原`router_state`命名空间保存最小来源事实，没有新增Native数据库或改动原schema；这减少迁移，但不减少解释这些值的恢复义务。`pending`不因进程重启、请求超时或门店变更自动回收；`ready`必须能核对原owner、Profile、非Home空间和门店绑定。资源发布与选择反馈不同步时保留未知，不重建资源。原创建路由没有完整的企微来源审计事件，不能将`created_by`误称为完整审计；新准备事实补上来源关联，完整恢复分类仍待后续原门禁验证。
+
+四类证明分别新增关注：非数据库残留包括准备journal/内存发布与prewarm义务；外部写者包括并发旧准备者及迟到完成；写者覆盖包括原Profile列表隐含创建、资源服务和选择状态写入；不透明元数据包括空间归属、授权版本、准备未知与选择代次。D1局部验证不能替代这些证据生产者，也不完成A2–A4。
+
+## 本地执行证据（此前T7增量）
 
 2026-10-21，qiwe-agent根目录，上述基线加本轮变更。日志在本机.local/t7f-20261021/，不把合成明细或私有源码导入Git。
 

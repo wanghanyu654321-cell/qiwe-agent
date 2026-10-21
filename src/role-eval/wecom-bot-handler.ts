@@ -5,12 +5,14 @@ import {parseManagerCommand} from './manager-commands.js';
 import {botDeliveryNotice} from './wecom-bot-notice.js';
 import {parseBotTaskCommand} from './wecom-bot-task-commands.js';
 import type {createBotTasks} from './wecom-bot-tasks.js';
+import type {createBotConversations} from './wecom-bot-conversations.js';
 import type {BotContextRequest,WecomBotContext,createWecomBotContext} from './wecom-bot-context.js';
 import {normalizeBotFrame,type BotEvent,type BotReplyPlan} from './wecom-bot-transport.js';
 export interface BotReportOptions {
  mode:'isolated-synthetic';authority:ReturnType<typeof createWecomBotContext>;ledger:ManagerStore;
  artifacts?:ManagerArtifactStore;
  tasks?:ReturnType<typeof createBotTasks>;
+ conversations?:ReturnType<typeof createBotConversations>;
  scope:{tenant:string;store:string;workspace:string};
  employees:readonly {accountId:string;employeeId:string;employeeName:string}[];
  /** Already authenticated SDK callback snapshot, never an HTTP/client payload. Synchronous and bounded by caller. */
@@ -23,7 +25,7 @@ export interface BotReplyExecution {context:WecomBotContext;event:BotEvent;actor
 export function createBotReportHandler(options:BotReportOptions){
  const valid=(s:unknown):s is string=>typeof s==='string'&&!!s.trim()&&s.length<=120&&!/[\u0000-\u001f]/.test(s);
  if(options.mode!=='isolated-synthetic'||!options.scope||Object.values(options.scope).length!==3||!['tenant','store','workspace'].every(k=>valid(Reflect.get(options.scope,k)))||!Array.isArray(options.employees)||!options.employees.length||options.employees.some(p=>!p||![p.accountId,p.employeeId,p.employeeName].every(valid))||new Set(options.employees.map(p=>p.accountId)).size!==options.employees.length||new Set(options.employees.map(p=>p.employeeId)).size!==options.employees.length)throw Error('invalid_report_catalog');
- const scope={...options.scope},employees=structuredClone(options.employees),{authority,ledger,artifacts,tasks,readEvent,beforeWork}=options,now=options.now??(()=>new Date());
+ const scope={...options.scope},employees=structuredClone(options.employees),{authority,ledger,artifacts,tasks,conversations,readEvent,beforeWork}=options,now=options.now??(()=>new Date());
  const roster=employees.map(e=>({...scope,employeeId:e.employeeId,employeeName:e.employeeName}));
  const money=(cents:number|null)=>cents===null?'未知':`${cents<0?'-':''}${Math.trunc(Math.abs(cents)/100)}.${String(Math.abs(cents)%100).padStart(2,'0')}元`;
  const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
@@ -49,9 +51,13 @@ export function createBotReportHandler(options:BotReportOptions){
  async handle(request:BotContextRequest):Promise<BotReportResult>{
   const input={correlationId:request.correlationId,signal:request.signal,deadline:request.deadline};
   let frame:unknown;try{frame=structuredClone(readEvent());}catch{throw Error('event_unavailable');}
-  const event=normalizeBotFrame(frame),taskCommand=event.action.kind==='text'?parseBotTaskCommand(event.action.text):undefined,context=await authority.authorize(input,taskCommand?.role??'manager');
+  const event=normalizeBotFrame(frame),taskCommand=event.action.kind==='text'?parseBotTaskCommand(event.action.text):undefined,context=await authority.authorize(input,conversations?null:taskCommand?.role??'manager');
   if(event.botId!==context.channel.botId||event.memberId!==context.channel.memberId||event.corpId!==undefined&&event.corpId!==context.channel.corpId||scope.tenant!==context.identity.tenantId||scope.store!==context.identity.storeId)throw Error('access_denied');
   const actor=resolveActor(context);
+  // Reserve the original reply fingerprint before a role route may persist a selection or call Native.
+  const reservedReply=conversations?await authority.withCurrent(context,checkActive=>{const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();return replay?structuredClone(replay):undefined;}):undefined;
+  const conversationResult=await conversations?.route(context,event,input);
+  if(taskCommand&&!context.roles.includes(taskCommand.role)||!taskCommand&&!conversationResult&&!context.roles.includes('manager')||conversationResult?.reportText&&!context.roles.includes('manager'))throw Error('access_denied');
   const plan=(status:BotReportResult['status'],content:string,report?:StaffReport,card=false):BotReportResult=>({status,...(report?{reportId:report.id}:{}),reply:{reqId:event.reqId,body:{msgtype:card?'stream_with_template_card':'stream',stream:{id:hash('report-reply|'+event.reqId),finish:true,content},...(card&&report?{template_card:{card_type:'button_interaction' as const,main_title:{title:'核对本人报数'},task_id:'report-'+report.id+'-'+hash(JSON.stringify([context.channel.corpId,event.botId,event.memberId,event.messageId,event.reqId])).slice(0,32),button_list:[{text:'确认入账',key:'confirm:'+report.hash,style:1 as const}]}}:{})}}});
   const view=(r:StaffReport):BotReportResult=>{
    const complete=r.proposed.items.length>0&&r.proposed.items.length<=10&&r.proposed.missing.length===0;
@@ -71,7 +77,9 @@ export function createBotReportHandler(options:BotReportOptions){
   let result:BotReportResult;
   try{
    result=await authority.withCurrent(context,checkActive=>{
-    const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay)return structuredClone(replay);
+    if(reservedReply)return structuredClone(reservedReply);
+    if(!conversations){const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay)return structuredClone(replay);}
+    if(conversationResult?.reply)return plan('needs-input',conversationResult.reply);
     if(taskCommand)return plan('needs-input','正在核实任务。');
     if(event.action.kind==='confirm'){
      const r=owned(event.action.reportId);if(!r)return plan('not-found','未找到你有权访问的报告，请核对报告编号。');
@@ -79,7 +87,7 @@ export function createBotReportHandler(options:BotReportOptions){
      if(!r.proposed.items.length||r.proposed.items.length>10||r.proposed.missing.length)return view(r);
      return view(ledger.confirm(actor,r.id,r.hash,r.proposed.items,checkActive));
     }
-    const text=event.action.text.trim();
+    const text=conversationResult?.reportText??event.action.text.trim();
     const command=parseManagerCommand(text);
     if(command?.kind==='invalid')return plan('needs-input',command.message);
     if(command&&command.kind!=='correction'){
@@ -98,7 +106,7 @@ export function createBotReportHandler(options:BotReportOptions){
     const channel=context.channel,source={kind:'wecom-bot' as const,corpId:channel.corpId,botId:channel.botId,memberId:channel.memberId,messageId:event.messageId,accountId:context.identity.accountId,workspaceJid:context.identity.workspaceJid,storeId:context.identity.storeId,bindingVersion:channel.bindingVersion,...(event.createTime!==undefined?{createTime:event.createTime}:{})};
     const key='bot-'+hash(JSON.stringify([source.corpId,source.botId,source.memberId,source.messageId]));
     if(command?.kind==='correction')return view(ledger.receiveBotCorrection(actor,key,text,date,source,command.reportId,command.entryIndex,command.amountCents,checkActive));
-    return view(ledger.receiveBot(actor,key,event.action.text,date,source,checkActive));
+    return view(ledger.receiveBot(actor,key,text,date,source,checkActive));
    });
    if(taskCommand){if(!tasks)result=plan('needs-input','任务服务尚未装配，未执行。请联系管理员核实。');else{const task=await tasks.execute(context,event,taskCommand,input);result={...plan(task.status==='needs-input'?'needs-input':'task',task.content),...(task.taskId?{taskId:task.taskId}:{}),taskStatus:task.status};}}
    else if(exportSnapshot){const id=exportSnapshot;result=fileView(await artifacts!.export(owner,id,input,async()=>{
