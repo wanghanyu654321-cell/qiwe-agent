@@ -1,6 +1,23 @@
 import {DatabaseSync} from 'node:sqlite';
 import {isDeepStrictEqual, types} from 'node:util';
 import {WORKBENCH_ROLES, type WorkbenchRole} from './workbench-access.js';
+import {createHash} from 'node:crypto';
+
+export type BotConversationActor={tenantId:string;storeId:string;accountId:string;corpId:string;botId:string;memberId:string;bindingVersion:number;grantVersion:number};
+export type BotConversationEvent={messageId:string;fingerprint:string;actor:BotConversationActor;role:WorkbenchRole};
+export type BotConversationRecord={eventId:string;fingerprint:string;actor:BotConversationActor;role:WorkbenchRole;state:'preparing'|'attempting'|'unknown'|'ready'|'stale';workspaceJid?:string;profileId?:string};
+const conversationKey=(values:unknown[])=>createHash('sha256').update(JSON.stringify(values)).digest('hex');
+function conversationActor(value:BotConversationActor){
+ const a=snapshot(value) as BotConversationActor;
+ shape(a,['tenantId','storeId','accountId','corpId','botId','memberId','bindingVersion','grantVersion']);
+ for(const key of ['tenantId','storeId','accountId','corpId','botId','memberId'] as const)check(identifier(a[key],120));
+ check(count(a.bindingVersion,1)&&count(a.grantVersion,1));return a;
+}
+function conversationEvent(value:BotConversationEvent){
+ const e=snapshot(value) as BotConversationEvent;shape(e,['messageId','fingerprint','actor','role']);
+ check(identifier(e.messageId,200)&&digest(e.fingerprint)&&WORKBENCH_ROLES.includes(e.role));
+ e.actor=conversationActor(e.actor);return e;
+}
 
 export type BotTaskOwner={tenantId:string;storeId:string;accountId:string;workspaceJid:string;role:WorkbenchRole;corpId:string;botId:string;memberId:string;bindingVersion:number};
 export type BotTaskInput={kind:'native';alias:string}|{kind:'training';mode:'question'|'lesson';query:string;persona:'instructor'|'executive'|'chief'};
@@ -84,7 +101,7 @@ export class BotTaskStore {
  constructor(file:string){
   check(typeof file==='string'&&file.trim().length>0&&!file.includes('\u0000'));
   this.db=new DatabaseSync(file);
-  try{this.db.exec('PRAGMA busy_timeout=3000; CREATE TABLE IF NOT EXISTS bot_task_refs(id TEXT PRIMARY KEY,body TEXT NOT NULL);');}catch(error){this.db.close();throw error;}
+  try{this.db.exec('PRAGMA busy_timeout=3000; CREATE TABLE IF NOT EXISTS bot_task_refs(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bot_conversation_events(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bot_conversation_current(id TEXT PRIMARY KEY,event_id TEXT NOT NULL);');}catch(error){this.db.close();throw error;}
  }
  private transaction<T>(work:()=>T,guard?:()=>void):T{
   this.db.exec('BEGIN IMMEDIATE');
@@ -139,6 +156,78 @@ export class BotTaskStore {
    const record=this.owned(trusted,id);if(!record||record.state!=='linked'||record.cancellation.state!=='attempting'||record.cancellation.attempt!==attempt)throw Error('task_attempt_conflict');
    record.cancellation={...record.cancellation,...result};this.save(record);return record;
   });
+ }
+ private conversationEvent(id:string):BotConversationRecord|undefined{
+  const row=this.db.prepare('SELECT body FROM bot_conversation_events WHERE id=?').get(id) as {body:string}|undefined;
+  return row?JSON.parse(row.body) as BotConversationRecord:undefined;
+ }
+ private currentConversationEvent(key:string):BotConversationRecord|undefined{
+  const row=this.db.prepare('SELECT event_id FROM bot_conversation_current WHERE id=?').get(key) as {event_id:string}|undefined;
+  return row?this.conversationEvent(row.event_id):undefined;
+ }
+ beginConversationSelection(input:BotConversationEvent,guard?:()=>void):BotConversationRecord{
+  const seed=conversationEvent(input),eventId=conversationKey([seed.actor.corpId,seed.actor.botId,seed.actor.memberId,seed.messageId]);
+  const key=conversationKey([seed.actor.corpId,seed.actor.botId,seed.actor.memberId]);
+  return this.transaction(()=>{
+   const previous=this.conversationEvent(eventId);
+   if(previous){if(previous.fingerprint!==seed.fingerprint||!isDeepStrictEqual(previous.actor,seed.actor)||previous.role!==seed.role)throw Error('conversation_conflict');return previous;}
+   const record:BotConversationRecord={eventId,fingerprint:seed.fingerprint,actor:seed.actor,role:seed.role,state:'preparing'};
+   this.db.prepare('INSERT INTO bot_conversation_events(id,body) VALUES (?,?)').run(eventId,JSON.stringify(record));
+   this.db.prepare('INSERT INTO bot_conversation_current(id,event_id) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET event_id=excluded.event_id').run(key,eventId);
+   return record;
+  },guard);
+ }
+ claimConversationPreparation(input:BotConversationEvent,guard?:()=>void):boolean{
+  const seed=conversationEvent(input),eventId=conversationKey([seed.actor.corpId,seed.actor.botId,seed.actor.memberId,seed.messageId]);
+  const key=conversationKey([seed.actor.corpId,seed.actor.botId,seed.actor.memberId]);
+  return this.transaction(()=>{
+   const record=this.conversationEvent(eventId);
+   if(!record||record.fingerprint!==seed.fingerprint||record.role!==seed.role||!isDeepStrictEqual(record.actor,seed.actor))throw Error('conversation_conflict');
+   if(record.state!=='preparing'||this.currentConversationEvent(key)?.eventId!==eventId)return false;
+   record.state='attempting';this.db.prepare('UPDATE bot_conversation_events SET body=? WHERE id=?').run(JSON.stringify(record),eventId);return true;
+  },guard);
+ }
+ markConversationUnknown(input:BotConversationEvent,guard?:()=>void):void{
+  const seed=conversationEvent(input),eventId=conversationKey([seed.actor.corpId,seed.actor.botId,seed.actor.memberId,seed.messageId]);
+  this.transaction(()=>{
+   const record=this.conversationEvent(eventId);
+   if(!record||record.fingerprint!==seed.fingerprint||record.role!==seed.role||!isDeepStrictEqual(record.actor,seed.actor))throw Error('conversation_conflict');
+   if(record.state==='ready')return;
+   record.state='unknown';this.db.prepare('UPDATE bot_conversation_events SET body=? WHERE id=?').run(JSON.stringify(record),eventId);
+  },guard);
+ }
+ finishConversationSelection(input:BotConversationEvent,result:{workspaceJid:string;profileId:string},guard?:()=>void):BotConversationRecord{
+  const seed=conversationEvent(input),eventId=conversationKey([seed.actor.corpId,seed.actor.botId,seed.actor.memberId,seed.messageId]);
+  const key=conversationKey([seed.actor.corpId,seed.actor.botId,seed.actor.memberId]);
+  check(identifier(result.workspaceJid,200)&&result.workspaceJid.startsWith('web:')&&!result.workspaceJid.startsWith('web:home')&&identifier(result.profileId,200));
+  return this.transaction(()=>{
+   const record=this.conversationEvent(eventId);
+   if(!record||record.fingerprint!==seed.fingerprint||record.role!==seed.role||!isDeepStrictEqual(record.actor,seed.actor))throw Error('conversation_conflict');
+   if(record.state==='ready'){
+    if(record.workspaceJid!==result.workspaceJid||record.profileId!==result.profileId)throw Error('conversation_conflict');return record;
+   }
+   if(this.currentConversationEvent(key)?.eventId!==eventId)return record;
+   const ready:BotConversationRecord={...record,state:'ready',workspaceJid:result.workspaceJid,profileId:result.profileId};
+   this.db.prepare('UPDATE bot_conversation_events SET body=? WHERE id=?').run(JSON.stringify(ready),eventId);return ready;
+  },guard);
+ }
+ currentConversation(actor:BotConversationActor):BotConversationRecord|undefined{
+  const trusted=conversationActor(actor),key=conversationKey([trusted.corpId,trusted.botId,trusted.memberId]);
+  const record=this.currentConversationEvent(key);
+  if(!record)return undefined;
+  return isDeepStrictEqual(record.actor,trusted)?record:{...record,state:'stale'};
+ }
+ exitConversation(actor:BotConversationActor,messageId:string,fingerprint:string,guard?:()=>void):{state:'exited'}{
+  const trusted=conversationActor(actor);check(identifier(messageId,200)&&digest(fingerprint));
+  const eventId=conversationKey([trusted.corpId,trusted.botId,trusted.memberId,messageId]);
+  const key=conversationKey([trusted.corpId,trusted.botId,trusted.memberId]);
+  return this.transaction(()=>{
+   const row=this.db.prepare('SELECT body FROM bot_conversation_events WHERE id=?').get(eventId) as {body:string}|undefined;
+   if(row){const previous=JSON.parse(row.body) as {kind?:string;fingerprint:string;actor:BotConversationActor};if(previous.kind!=='exit'||previous.fingerprint!==fingerprint||!isDeepStrictEqual(previous.actor,trusted))throw Error('conversation_conflict');return {state:'exited'};}
+   // Exiting only clears this channel's pointer; a changed grant must not trap the member in an old mode.
+   this.db.prepare('INSERT INTO bot_conversation_events(id,body) VALUES (?,?)').run(eventId,JSON.stringify({kind:'exit',fingerprint,actor:trusted}));
+   this.db.prepare('DELETE FROM bot_conversation_current WHERE id=?').run(key);return {state:'exited'};
+  },guard);
  }
  close():void{this.db.close();}
 }

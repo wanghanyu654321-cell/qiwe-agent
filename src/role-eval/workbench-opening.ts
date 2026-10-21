@@ -10,6 +10,12 @@ export interface WorkbenchOpeningOptions {
  origin:string;tenantId:string;stores:{id:string;name:string}[];templates:WorkbenchTemplate[];store:WorkbenchAccessStore;journalDirectory:string;
  native:{authenticate(cookie:string):Promise<unknown>;employees(cookie:string):Promise<unknown[]>;groups(cookie:string):Promise<unknown>;profiles(cookie:string):ProfilePort;skills(cookie:string):Promise<string[]>;};
 }
+/** Reuse the original profile reconciliation under the trusted owner's live authority. */
+export async function prepareOwnProfiles(input:{definitions:WorkbenchTemplate[];accountId:string;tenantId:string;journalDirectory:string;port:ProfilePort;assertCurrent:()=>Promise<void>}){
+ const journal=new FileCreationJournal(path.join(input.journalDirectory,createHash('sha256').update(JSON.stringify([input.tenantId,input.accountId])).digest('hex')));
+ const installed=await installProfiles({list:async()=>{await input.assertCurrent();return input.port.list();},beforeCreate:input.assertCurrent,create:payload=>input.port.create(payload)},input.definitions,input.accountId,journal);
+ await input.assertCurrent();return installed;
+}
 export function createWorkbenchOpening(options:WorkbenchOpeningOptions){
  const origin=new URL(options.origin),record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
  if(origin.protocol!=='https:'||!options.tenantId||!options.stores.length||new Set(options.stores.map(s=>s.id)).size!==options.stores.length||options.templates.some(t=>!WORKBENCH_ROLES.includes(t.key))||new Set(options.templates.map(t=>t.key)).size!==options.templates.length)throw Error('invalid_opening_catalog');
@@ -52,9 +58,7 @@ export function createWorkbenchOpening(options:WorkbenchOpeningOptions){
    const text=await request.text();if(Buffer.byteLength(text)>1000)return json({error:'body_too_large'},413);if(text.trim()!=='{}')throw Error('invalid_grant');
    const definitions=options.templates.filter(t=>context.grant.roles.includes(t.key)),available=await options.native.skills(cookie);
    if(definitions.some(t=>t.skills.some(s=>!available.includes(s))))throw Error('role_resources_unavailable');
-   const port=options.native.profiles(cookie),journal=new FileCreationJournal(path.join(options.journalDirectory,createHash('sha256').update(JSON.stringify([options.tenantId,context.identity.accountId])).digest('hex')));
-   const installed=await installProfiles({list:async()=>{await assertCurrent(cookie,context);return port.list();},beforeCreate:()=>assertCurrent(cookie,context),create:payload=>port.create(payload)},definitions,context.identity.accountId,journal);
-   await assertCurrent(cookie,context);
+   const installed=await prepareOwnProfiles({definitions,accountId:context.identity.accountId,tenantId:options.tenantId,journalDirectory:options.journalDirectory,port:options.native.profiles(cookie),assertCurrent:()=>assertCurrent(cookie,context)});
    return json({identity:context.identity,roles:installed.map(p=>{const t=definitions.find(t=>t.key===p.key)!;return {id:p.id,key:t.key,name:t.name,skills:t.skills};}),mode:'synthetic',modelCalls:0});
   }catch(error){const code=error instanceof Error?error.message:'unknown';
    const status=['access_denied','access_not_open','access_changed'].includes(code)?403:code==='invalid_grant'?400:['grant_version_conflict','grant_request_conflict','role_resources_unavailable'].includes(code)?409:503;

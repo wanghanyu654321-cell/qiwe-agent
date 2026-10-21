@@ -28,6 +28,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  fs.copyFileSync(path.join(here,'project-residue.test.mts'),path.join(directory,'tests/project-residue.test.mts'));
  fs.copyFileSync(path.join(here,'queue-recovery.test.mts'),path.join(directory,'tests/queue-recovery.test.mts'));
  fs.copyFileSync(path.join(here,'bot-preparation-native.test.mts'),path.join(directory,'tests/bot-preparation-native.test.mts'));
+ fs.copyFileSync(path.join(here,'role-workspace-candidate.test.mts'),path.join(directory,'tests/role-workspace-candidate.test.mts'));
  // Compile only the public test dependency closure. Never load original main/config here.
  fs.mkdirSync(path.join(directory,'test-support'));
  const publicSupportHashes={};
@@ -46,11 +47,15 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   fs.writeFileSync(path.join(directory,'test-support',name+'.mjs'),compiled);
  }
  for(const name of ['wecom-bot-preparation','wecom-bot-assembly','wecom-bot-sdk','workbench-access','manager-store'])compilePublic(name);
+ compilePublic('workbench-opening');
+ compilePublic('wecom-bot-task-store');
+ fs.copyFileSync(path.join(here,'role-workspace-overlay.mjs'),path.join(directory,'test-support/role-workspace-overlay.mjs'));
  compilePublic('offline-bot-sdk',path.join(project,'tests/fixtures/offline-bot-sdk.ts'));
  // Test-only observational exports. Original main() call and catch stay intact.
  fs.appendFileSync(path.join(directory,'src/index.ts'),'\nexport { queue as fullHostQueue, appointmentBootGate as fullHostBootGate };\n');
  fs.writeFileSync(path.join(directory,'package.json'),'{"type":"module","private":true}');
- fs.writeFileSync(path.join(directory,'vitest.config.mts'),"export default {test:{include:['tests/*.test.mts'],fileParallelism:false,testTimeout:120000,hookTimeout:120000}};");
+ fs.writeFileSync(path.join(directory,'vitest.config.mts'),"export default {test:{include:['tests/*.test.mts'],exclude:['tests/role-workspace-candidate.test.mts'],fileParallelism:false,testTimeout:120000,hookTimeout:120000}};");
+ fs.writeFileSync(path.join(directory,'role-workspace.vitest.config.mts'),"export default {test:{include:['tests/role-workspace-candidate.test.mts'],fileParallelism:false,testTimeout:120000,hookTimeout:120000}};");
  const dependencies=path.resolve(source,'../node_modules'),target=path.join(directory,'node_modules');
  fs.mkdirSync(target);
  for(const entry of fs.readdirSync(dependencies,{withFileTypes:true})){
@@ -67,8 +72,14 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   process.stdout.write(check.stdout??'');process.stderr.write(check.stderr??'');
   if(check.error)throw check.error;if(check.status!==0){process.exitCode=check.status??1;throw Error('FULL_HOST_TYPECHECK_FAILED');}
  }
+ const roleWorkspaceTest=spawnSync(process.execPath,[path.join(project,'node_modules/vitest/vitest.mjs'),'run','--config',path.join(directory,'role-workspace.vitest.config.mts')],{cwd:directory,env,encoding:'utf8',timeout:180000});
+ process.stdout.write(roleWorkspaceTest.stdout??'');process.stderr.write(roleWorkspaceTest.stderr??'');
+ const roleWorkspacePhase={status:roleWorkspaceTest.status,stdout:roleWorkspaceTest.stdout,stderr:roleWorkspaceTest.stderr};
+ writeAudit({...candidate.audit,platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF',status:roleWorkspaceTest.status===0?'in_progress':'failed',roleWorkspacePhase});
+ if(roleWorkspaceTest.error)throw roleWorkspaceTest.error;
+ if(roleWorkspaceTest.status!==0){process.exitCode=roleWorkspaceTest.status??1;throw Error('ROLE_WORKSPACE_CANDIDATE_TEST_FAILED');}
  const hashFile=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
- const instrumentation={executedIndexHash:hashFile(path.join(directory,'src/index.ts')),testHash:hashFile(path.join(directory,'tests/full-host.test.mts')),projectResidueTestHash:hashFile(path.join(directory,'tests/project-residue.test.mts')),queueRecoveryTestHash:hashFile(path.join(directory,'tests/queue-recovery.test.mts')),botPreparationNativeTestHash:hashFile(path.join(directory,'tests/bot-preparation-native.test.mts')),publicSupportHashes,configHash:hashFile(path.join(directory,'vitest.config.mts')),verifierHash:hashFile(fileURLToPath(import.meta.url)),candidateBuilderHash:hashFile(path.join(here,'full-host-candidate.mjs'))};
+ const instrumentation={executedIndexHash:hashFile(path.join(directory,'src/index.ts')),testHash:hashFile(path.join(directory,'tests/full-host.test.mts')),projectResidueTestHash:hashFile(path.join(directory,'tests/project-residue.test.mts')),queueRecoveryTestHash:hashFile(path.join(directory,'tests/queue-recovery.test.mts')),botPreparationNativeTestHash:hashFile(path.join(directory,'tests/bot-preparation-native.test.mts')),roleWorkspaceCandidateTestHash:hashFile(path.join(directory,'tests/role-workspace-candidate.test.mts')),roleWorkspaceOverlayHash:hashFile(path.join(directory,'test-support/role-workspace-overlay.mjs')),roleWorkspaceConfigHash:hashFile(path.join(directory,'role-workspace.vitest.config.mts')),publicSupportHashes,configHash:hashFile(path.join(directory,'vitest.config.mts')),verifierHash:hashFile(fileURLToPath(import.meta.url)),candidateBuilderHash:hashFile(path.join(here,'full-host-candidate.mjs'))};
  const phases=[];
  for(const phase of ['boot','restart']){
   env.QIWE_FULL_HOST_PHASE=phase;env.QIWE_FULL_HOST_EVIDENCE=path.join(directory,'evidence-'+phase+'.json');
@@ -77,14 +88,14 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   process.stdout.write(result.stdout??'');process.stderr.write(result.stderr??'');
   const evidence=fs.existsSync(env.QIWE_FULL_HOST_EVIDENCE)?JSON.parse(fs.readFileSync(env.QIWE_FULL_HOST_EVIDENCE,'utf8')):null;
   phases.push({phase,status:result.status,evidence,stdout:result.stdout,stderr:result.stderr});
-  writeAudit({...candidate.audit,instrumentation,platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF',status:result.status===0?'in_progress':'failed',phases});
+  writeAudit({...candidate.audit,instrumentation,platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF',status:result.status===0?'in_progress':'failed',roleWorkspacePhase,phases});
   if(result.error)throw result.error;
   if(result.status!==0){process.exitCode=result.status??1;break;}
  }
  if(!process.exitCode){
   if(phases.length!==2||phases.some(phase=>!phase.evidence)||phases[0].evidence.processId===phases[1].evidence.processId)throw Error('FULL_HOST_DISTINCT_PROCESS_RESTART_NOT_PROVEN');
   const evidence={runId,status:'passed',restart:'two separate OS worker processes share exact original synthetic SQLite snapshot',phases:phases.map(({phase,evidence})=>({phase,...evidence}))};
-  writeAudit({...candidate.audit,instrumentation,platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF',status:'passed',phases});
+  writeAudit({...candidate.audit,instrumentation,platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF',status:'passed',roleWorkspacePhase,phases});
   // Linux tmpfs audit files disappear with the container. Persist enough exact
   // source/instrumentation identity in stdout to bind the retained host log.
   console.log('FULL_HOST_AUDIT_HASHES',JSON.stringify({runId,nativeTree:candidate.audit.nativeTree,overlayTree:candidate.audit.overlayTree,composedHashesSha256:createHash('sha256').update(JSON.stringify(candidate.audit.composedHashes)).digest('hex'),instrumentation,platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF'}));

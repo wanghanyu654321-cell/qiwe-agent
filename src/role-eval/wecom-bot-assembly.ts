@@ -6,6 +6,8 @@ import {createBotTasks, type BotTasksOptions} from './wecom-bot-tasks.js';
 import type {BotReportOptions} from './wecom-bot-handler.js';
 import {normalizeBotFrame, type BotEvent} from './wecom-bot-transport.js';
 import {parseBotTaskCommand} from './wecom-bot-task-commands.js';
+import {createBotConversations,type BotRoleWorkspacePort} from './wecom-bot-conversations.js';
+import type {BotTaskStore} from './wecom-bot-task-store.js';
 
 type Client = Pick<WSClient, 'on' | 'off' | 'isConnected'>;
 /** A bound trusted gate adapter. It must register a real write ticket before work starts. */
@@ -20,6 +22,7 @@ export interface WecomBotAssemblyBusiness {
   scope: BotReportOptions['scope']; employees: BotReportOptions['employees'];
   ledger: BotReportOptions['ledger']; artifacts?: BotReportOptions['artifacts'];
   tasks?: Omit<BotTasksOptions, 'mode' | 'authority'>;
+  conversations?: {store:BotTaskStore;native:BotRoleWorkspacePort};
 }
 export interface WecomBotAssemblyOutcome {
   state: 'handled' | 'rejected'; detail: string;
@@ -61,13 +64,13 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
     ...(filePort ? {fileSdk: {mode: filePort.mode, uploadMedia: filePort.uploadMedia.bind(filePort), sendMessage: filePort.sendMessage.bind(filePort)}} : {})};
   const identity = {...options.identity, stores: structuredClone(options.identity.stores), roles: [...options.identity.roles]};
   const businesses = options.businesses.map(b => {
-    const tasks = b.tasks, training = tasks?.training, native = tasks?.native;
+    const tasks = b.tasks, training = tasks?.training, native = tasks?.native, conversations=b.conversations;
     return {...b, scope: structuredClone(b.scope), employees: structuredClone(b.employees), ...(tasks ? {tasks: {...tasks,
       catalog: structuredClone(tasks.catalog),
       // Capture admitted capabilities once; shared service state and live authority readers stay shared.
       ...(training ? {training: {enabled: training.enabled, resolve: training.resolve.bind(training)}} : {}),
       ...(native ? {native: {start: native.start.bind(native), query: native.query.bind(native), cancel: native.cancel.bind(native), close: native.close.bind(native)}} : {}),
-    }} : {})};
+    }} : {}),...(conversations?{conversations:{store:conversations.store,native:{readRoleWorkspace:conversations.native.readRoleWorkspace.bind(conversations.native),prepareRoleWorkspace:conversations.native.prepareRoleWorkspace.bind(conversations.native)}}}:{})};
   });
   if (businesses.some(b => !b.scope || !Object.values(b.scope).every(valid) || !b.employees.length || b.employees.some(e => ![e.accountId, e.employeeId, e.employeeName].every(valid))) || new Set(businesses.map(b => JSON.stringify([b.scope.tenant, b.scope.store]))).size !== businesses.length) throw Error('invalid_bot_assembly');
   let closed = false, authenticated = false, epoch = 0;
@@ -146,7 +149,7 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
           readSubject: async () => {check(); return {botId, memberId: event.memberId};}});
         resources.push(() => authority.close());
         const command = event.action.kind === 'text' ? parseBotTaskCommand(event.action.text) : undefined;
-        const context = await authority.authorize(scope, command?.role ?? 'manager'); check();
+        const context = await authority.authorize(scope, businesses.some(b=>b.conversations)?null:command?.role ?? 'manager'); check();
         const business = businesses.find(b => b.scope.tenant === context.identity.tenantId && b.scope.store === context.identity.storeId && b.employees.some(e => e.accountId === context.identity.accountId));
         if (!business) throw Error('access_denied');
         const sender = createBotSender({...senderOptions, sdk: {...senderOptions.sdk, ready: () => {
@@ -155,10 +158,14 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
         resources.push(() => sender.close());
         const tasks = business.tasks ? createBotTasks({...business.tasks, mode: 'isolated-synthetic', authority}) : undefined;
         if (tasks) resources.push(() => tasks.close());
+        const conversations=business.conversations?createBotConversations({store:business.conversations.store,authority,native:{
+          readRoleWorkspace:input=>trackPhysical(business.conversations!.native.readRoleWorkspace(input)),
+          prepareRoleWorkspace:input=>trackPhysical(business.conversations!.native.prepareRoleWorkspace(input)),
+        }}):undefined;
         // Original services fence business writes with this request's authority/budget. Their
         // finalizers must still persist unknown outcomes for actions already attempted at abort.
         const delivery = createBotDelivery({mode: 'isolated-synthetic', authority, ledger: business.ledger, scope: business.scope, employees: business.employees,
-          ...(business.artifacts ? {artifacts: business.artifacts} : {}), ...(tasks ? {tasks} : {}), readEvent: () => {check(); return frame;}, sender});
+          ...(business.artifacts ? {artifacts: business.artifacts} : {}), ...(tasks ? {tasks} : {}),...(conversations?{conversations}:{}), readEvent: () => {check(); return frame;}, sender});
         resources.push(() => delivery.close());
         const result = await delivery.handle(scope); check();
         observe({state: 'handled', detail: 'event_handled', event: metadata, result});
@@ -167,7 +174,7 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
         const allowed = ['access_denied', 'access_changed', 'authority_unavailable', 'unsupported_event', 'bot_reply_conflict', 'request_timeout', 'input_not_accepted'];
         let maintenance = false;
         if (boundary) {try {maintenance = boundary.admit() !== true;} catch {maintenance = true;}}
-        reject(controller.signal.aborted ? (capturedEpoch !== epoch || closed ? 'session_invalidated' : 'request_timeout') : maintenance ? 'input_not_accepted' : allowed.includes(code) ? code : 'event_unavailable');
+        reject(controller.signal.aborted ? (capturedEpoch !== epoch || closed ? 'session_invalidated' : 'request_timeout') : maintenance ? 'input_not_accepted' : code==='authority_timeout'?'request_timeout':allowed.includes(code) ? code : 'event_unavailable');
       } finally {
         clearTimeout(timer); controller.abort(); request.dispose();
         // Context cancellation can settle its bounded Promise before a trusted read port
