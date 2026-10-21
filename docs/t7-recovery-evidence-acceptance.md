@@ -1,5 +1,7 @@
 # T7 恢复证据接点与渠道安全准备实施计划
 
+> 当前执行顺序以[产品可用闭环计划](roadmap.md)为准（2026-10-21收紧）。本文保留7b69a13增量的实现、证据和未闭合事实；下列任务完成只代表该增量完成，不代表T7或产品闭环已可用。下一步先形成原门禁所需的逐项处置/围栏契约，再验证完整恢复与同一请求的企微业务回复，避免重复扩展外围检查。
+
 > **For agentic workers:** 使用 subagent-driven-development 分任务实施和独立审查。
 
 **Goal:** 为四类证明补充真实的当前进程证据接点和企微预备连接生命周期，无法核实的全局依据继续阻断，不绕过原恢复门禁。
@@ -56,7 +58,60 @@ Native IM七类provider不包含企微；普通connect包含补收、状态写�
 
 ## 当前状态
 
-队列义务接点、候选inspect接线及企微合成准备控制已实现并本地验证。四项全局证明尚未闭合，原恢复仍拒绝。审计在本机.local/t7f-20261021/{proof-contract,channel-safe}-audit.md。下一实质步骤必须进入原可信scanner/消费者边界做逐族处置和写者围栏，不能在外围传一个safe布尔值代替。
+队列义务接点、候选inspect接线及企微合成准备控制已实现并本地验证。四项全局证明尚未闭合，原恢复仍拒绝。后续T7-A1核实了原放行次序、处置分组及缺失生产者，见下节；并交付[产品使用说明与工程对应](product-usage-and-engineering.md)。未实现新的分类器/围栏，不标记A2–A4或T7完成。下一步先确定缺失证据的原协议接点，不能在外围传safe布尔值代替。
+
+## T7-A1：恢复规则与证据来源核实（2026-10-21）
+
+### 范围与结论
+
+基线7b69a13。N为原Native源码，O为原appointment候选overlay；全树身份见[候选构建器](../integrations/native/full-host-candidate.mjs)，本轮完整宿主运行再次校验了两个身份。以下原源码定位是调查依据，不在本仓复制私有实现，也不表示生产版本已核实。
+
+- 已核实原放行顺序、四类全局缺证、元数据扫描记录分组，以及企微固定任务与通用多技能对话之间的差距。
+- 每张表/每个写入口的完整消费者证明矩阵、可执行分类器、旧执行者强制失权及真实渠道装配仍未完成。因此roadmap的A1保留未完成状态，分组清单不是覆盖证书。
+- 没有一个有依据的小补丁可以让完整恢复安全通过。按用户“没有把握先交使用说明”的要求，本轮交付产品映射及规则核实，暂不扩写运行代码。已有测试用于确认基线和拒绝行为，不冒充修复后恢复成功。
+
+### 原恢复的真实次序
+
+1. 原会话、管理员、Origin及全部注册资源ACL通过；单店报数权限不等于整机恢复权限。
+2. appointment模式paused、无活动write ticket时取得本boot的review stamp，同连接扫描完整清单。每条记录必须有稳定key/version及可信证据，处置为eligible/stopped/terminal，零blocker且complete/safe成立，才发布冻结ticket。
+3. restore重新验权并复核同一快照，独占claim；prepare只检查已经完成的准备条件，不临时连接渠道或执行清理。
+4. prepare结束复核并进入final，在原IMMEDIATE事务中再次核对授权/快照、记审计并同步COMMIT，成功后gate才ready。新到达和登记写入都会使旧review失效。
+5. COMMIT后才drain原消费者。drain失败可返回 `restored:true, executionStart:failed`，所以**门禁ready仍不等于产品能受理任务**；须另验消费者和首条业务。
+
+原依据：O `appointment-boot-gate.ts:118–243`、`appointment-boot-http.ts:123–160,233–329`、`db-appointment-boot.ts.fragment:8–55`、`appointment-boot-assembly-overlay.mjs:71–108`。original模式初始化ready不经过上述恢复，不能作为正向证据。
+
+### 有限处置分组：不是放行结论
+
+| 分组/原事实来源 | 必要核实与反例 | 当前缺口 |
+| --- | --- | --- |
+| 输入：messages/channel_inbox；N db消息follow-up与index消费者，O selected rejection事务 | queued/promoting不证明未执行；关联run、outbox、IPC、ACK和旧执行者 | 原拒绝事务需要可信 `verifyInputUnexecuted`，当前主进程未提供 |
+| 执行：turn_runs、cursors、router_state、sessions、workspace_runtime_sessions、agents、onboarding | 按原消费者解释值及Owner/Profile；租约过期不等于旧进程停写 | scanner只有元数据和状态词表，未解释router_state等不透明信息 |
+| 输出：channel_outbox、streaming_cards、workspace_memory_outbox | 发送中、上传完成、未知不可盲重发；关联具体执行、收件方、Provider效果 | 各消费者的结清与迟到回调证据不完整，企微delivery不能覆盖其他outbox |
+| 任务：scheduled_tasks、task_runs、task_run_logs | 暂停定义不等于run和通知结束；cancelled也可能存在原专用通知 | 原CAS/取消token可复用，但需旧执行者围栏及定义/run/通知分别分类 |
+| 授权路由：chats、workspaces、registered_groups、Profile及版本/草稿、账号、bindings/mounts、用户会话与授权审计等 | 持久资源应保留；核实Owner、权限、配置与恢复后读者一致，connected不证明无在途 | 不能把全部resource判eligible，完整有效配置及读写覆盖未完成 |
+| 记忆：stores/items/versions/platform_items/provenance/tombstones/mutation_requests/audit_events | 版本、来源、撤销及待写outbox一致；合成资料不得成为真实证据 | 原记忆读写协议和全关联分类未验证 |
+| 用量额度：billing_plans、subscriptions、balances、quotas、usage/summary、transactions、redeem及audit | 无模型报数不免除同一宿主的全局扫描；金额/用量按原规则核实 | 原业务消费者未审完，不能以免费、余额零或无流量推定安全 |
+| 文件/队列：IPC、streaming-buffer、sessions/env/config、项目配置；descriptor scanner和GroupQueue | 文件存在或缺失不是ACK；孤立retained state、物理callback、旧runner不得漏算 | 当前进程计数不能证明旧写者失权；文件与输入/run/回执关联仍缺 |
+| sqlite_snapshot观察项 | 同连接变更检测仅说明观察边界 | 不是跨进程围栏或业务完成证明；原scanner已存在，不是本轮新增 |
+
+分组依据O `appointment-boot-inventory.ts:15–240,332–470,809–850`，具体源接点和反例在本地 `.local/t7a-20261021/recovery-audit.md`。此处只界定调查范围，不证明每族消费者覆盖完整。schema变化、未知状态、读失败、预算超限和扫描期间变化仍各自阻断。
+
+### 下一步的实际依赖
+
+1. 先界定原宿主、runner/容器、IPC、HTTP/IM、调度通知、配置授权、旁路SQL/文件及远端Provider如何失去继续写入/发送的能力。当前ticket和零计数不足；真实旧执行者与外部结果只能后续受控核实。
+2. 再选一条原规则明确的分类：原暂停/软删scheduled_tasks可作候选，但须同时核实next_run为空、原revision/CAS、无活跃run、旧scheduler/runner失权、通知关联结清。先用到期任务、活跃run及迟到写入做拒绝反例。该分类不能顺带放行task_runs、通知或四项全局证明。
+3. selected input reject缺可信未执行验证器，不能看到queued就拒绝处置；memory、billing和配置族不能凭名称推断。缺原协议时保持blocked，停止依赖它的代码。
+4. 全范围同次扫描满足条件后，验证review/restore/COMMIT/drain和恢复后业务。渠道准备必须在review前完成并结清状态写入，restore中的prepare继续只检查，再验证同一宿主的报数、回复和重启查回。
+
+**平台修正：** O `appointment-boot-inventory.ts:332–347` 的安全文件扫描只支持Linux目录描述符，Windows明确产生 `RESIDUE:UNSUPPORTED_ROOT`。因此Linux承担正向恢复验收，Windows承担启动、原驱动、兼容及拒绝路径验证；跨平台扫描移植不是默认范围，不能删除检查凑通过。当前Linux仍缺四项证明，也未成功恢复。
+
+### 本轮本地核验
+
+qiwe-agent根目录，7b69a13运行代码加本轮文档修改：`npm test`为41文件542项通过；`npm run typecheck`、`npm run build`通过。未改运行代码或增加行为测试，未运行lint（仓库无脚本）。
+
+Windows命令为 `node integrations/native/verify-full-host.mjs N源码绝对路径 --host-overlay O源码绝对路径 --sqlite-driver 本机已验证驱动绝对路径 --typecheck`，实际路径见本轮执行记录。runId为 `2026-10-21T10-41-37-942Z-ab471cf9-635b-4bf5-9258-351cade935ba`，boot/restart进程16192/15892，每轮8通过、8项平台跳过，候选类型检查通过。原review仍拒绝，历史promoting及通知保持原状；没有成功恢复或恢复后业务证据。
+
+日志在本地 `.local/t7a-20261021/{public-tests,typecheck,build,native-baseline}.log`。本轮未重跑Linux，不把上一轮结果计入本轮；未动生产、真实消息、模型或实际业务数据。独立审查和GitHub状态以本轮交付记录为准。
 
 ## 本地执行证据
 
