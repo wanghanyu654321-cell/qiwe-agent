@@ -1,9 +1,9 @@
 {
-  "recordedAt": "2026-10-20",
+  "recordedAt": "2026-10-21",
   "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
   "publicBase": "2590fa5f7dcca42a31ded5daf5ed2dbcc23da643",
-  "sourceState": "Selected T0-T6 implementation, T7 controlled channel adaptation, partial/full Native host and driver isolation verification; successful full-host restoration and real channel acceptance remain blocked; no private history, Native source copy, binaries or business data imported",
-  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted; t7ControlledSha256 preserves the pre-readiness T7 public version where adapted; t7ReadinessSha256 preserves the pre-full-host T7 public version where adapted",
+  "sourceState": "Selected T0-T6 implementation, T7 channel adaptation, partial/full Native host and driver isolation verification, read-only recovery inspection and project configuration metadata coverage; successful full-host restoration and real channel acceptance remain blocked; no private history, Native source copy, binaries or business data imported",
+  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted; t7ControlledSha256 preserves the pre-readiness T7 public version where adapted; t7ReadinessSha256 preserves the pre-full-host T7 public version where adapted; t7FullHostSha256 preserves the pre-recovery-inspection T7 public version where adapted",
   "files": [
     {
       "path": "integrations/native/emit-patch.mjs",
@@ -12,13 +12,15 @@
     },
     {
       "path": "integrations/native/full-host-candidate.mjs",
-      "sha256": "622b324494b817ff3a549ff3a21650a3e95d6bb402a6ea435387bc7bf2ba24a5",
-      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
+      "sha256": "1705eb80f71f5f966a659824e4e202120afa47b9852735fdf16a9f9a131c21b0",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7FullHostSha256": "622b324494b817ff3a549ff3a21650a3e95d6bb402a6ea435387bc7bf2ba24a5"
     },
     {
       "path": "integrations/native/full-host.test.mts",
-      "sha256": "bcd764d00c057828b53a2f15beb65fa7a559576dc791e84439a685593b197dd0",
-      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
+      "sha256": "244b33f6f943edf4ff9247ea0c0c7e76a46b294f846670d851fd1aca6543a1d3",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7FullHostSha256": "bcd764d00c057828b53a2f15beb65fa7a559576dc791e84439a685593b197dd0"
     },
     {
       "path": "integrations/native/host-candidate.mjs",
@@ -49,6 +51,26 @@
       "path": "integrations/native/prepare-native-sqlite.test.mjs",
       "sha256": "246b4a024f2e8889373a412ae7bfaa76c9f7c8b5cc6795ca28574c46645a80e2",
       "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/project-residue-overlay.mjs",
+      "sha256": "c2014298e8e0a58812e65390430a539337cff2d9f5746c27e44f25004e29e8d3",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
+    },
+    {
+      "path": "integrations/native/project-residue.test.mts",
+      "sha256": "f416f165c8c7430fcb617f8f841e056860b519b1ff6223f1830f8f9c585734a3",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
+    },
+    {
+      "path": "integrations/native/recovery-inspection-overlay.mjs",
+      "sha256": "efc195cce72ce97db13bdc7b0d6e97210bb9206ef1194a12e056c10d39d91a0c",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
+    },
+    {
+      "path": "integrations/native/recovery-inspection.ts",
+      "sha256": "821a9a7c43fd8bf080bbc01ecd1823d0a3acd16281305f8277b9391bb8cc5ed9",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
     },
     {
       "path": "integrations/native/scheduler-targeted.test.mts",
@@ -83,8 +105,9 @@
     },
     {
       "path": "integrations/native/verify-full-host.mjs",
-      "sha256": "790a0c099130cc34ec784755b7eaa2aab7ff06480c7e431b895a3a3552a57bcc",
-      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported"
+      "sha256": "ba5b3667f3fb11fac080942c8beaccfa2b99a673ee3136ab3d942564101fb092",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7FullHostSha256": "790a0c099130cc34ec784755b7eaa2aab7ff06480c7e431b895a3a3552a57bcc"
     },
     {
       "path": "integrations/native/verify-targeted.mjs",
@@ -291,6 +314,11 @@
       "sha256": "31a51f1e3c599560df4bdd6bb95430ac6b6ff2e081ca49f61a7a2f2cb9016e57",
       "origin": "T7 synthetic integration/SDK contract test or offline fixture in this repository",
       "t7PreparationSha256": "cb241a36cf8f291f72cc4178b6e1f64faf68c28c7581b7bbe00f0da63b22ff36"
+    },
+    {
+      "path": "tests/recovery-inspection.test.ts",
+      "sha256": "a28359d319d7680f4b9f1e1ea5979483a02be7f9403a501ea939a9ad2d707745",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
     },
     {
       "path": "tests/role-eval/local-performance-output.test.ts",
@@ -527,5 +555,6 @@
   "t7Base": "cd767c1aef057063948e1de786ab47bdf9523094",
   "t7ControlledBase": "69090a7cf13a65d3629cb7081527dbaa8c1bd6ee",
   "t7ReadinessBase": "f8673f351828d9f431fc2a108674e7ed0f19b095",
-  "t7FullHostBase": "9fe2de5969126685b850fd8b942f0e2417cfe03d"
+  "t7FullHostBase": "9fe2de5969126685b850fd8b942f0e2417cfe03d",
+  "t7RecoveryPreparationBase": "6045b3fafcf359abf3850afe2e3c1386402465c5"
 }

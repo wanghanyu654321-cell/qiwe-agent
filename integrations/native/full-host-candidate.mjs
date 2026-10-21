@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import ts from 'typescript';
 import {createHostCandidate,hostNativeHashes,hostOverlayHashes} from './host-candidate.mjs';
 import {transformNative} from './targeted-execution.mjs';
+import {applyRecoveryInspectionOverlay} from './recovery-inspection-overlay.mjs';
+import {applyProjectResidueOverlay} from './project-residue-overlay.mjs';
 
 const digest=value=>createHash('sha256').update(value).digest('hex');
 export const fullHostSourceIdentity='8611519397c78b1f5d9591ae18ea2c5d1c399aab3d63b9ea5311ebd8c18b0bad';
@@ -73,5 +75,8 @@ export async function createFullHostCandidate(nativeRoot,overlayRoot){
   if(rewritten.includes(privateRoot)||rewritten.includes('../../../full-instance/stage/app/src/'))throw Error('FULL_HOST_PRIVATE_IMPORT_REMAINS: '+name+' '+rewritten.slice(rewritten.indexOf(privateRoot)-80,rewritten.indexOf(privateRoot)+180));
   files.set(name,rewritten);
  }
- return {files,audit:{nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...files].map(([name,value])=>[name,digest(value)])),scope:'actual original index main, complete O host/queue/Web/DB stack plus exact T7 DB/scheduler; no inventory completion bypass'}};
+ const adapted=applyRecoveryInspectionOverlay(files);
+ adapted.set('appointment-boot-inventory.ts',applyProjectResidueOverlay(adapted.get('appointment-boot-inventory.ts')));
+ adapted.set('recovery-inspection.ts',fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'recovery-inspection.ts'),'utf8'));
+ return {files:adapted,audit:{nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),recoveryInspection:'current-admin read-only diagnostics; no restore permit',projectConfigurationCoverage:'original descriptor scanner extended to project .env/config; all original blockers retained',scope:'actual original index main, complete O host/queue/Web/DB stack plus exact T7 DB/scheduler and recovery inspection; no inventory completion bypass'}};
 }

@@ -102,6 +102,36 @@ it('boots the actual original main and real loopback Web stack while preserving 
   const status=await fetch(base+'/api/appointment/maintenance',{headers});expect(status.status).toBe(200);expect(await status.json()).toMatchObject({maintenance:true,phase:'paused',executionStart:'not_started'});
   events.push('actual-main-loopback-http-paused');
   const unauth=await fetch(base+'/api/appointment/maintenance');expect(unauth.status).toBe(401);
+  const inspectionGateCalls=['beginReview','publishReview','claimRestore','noteArrival','beginWrite','commitRestore'].map(name=>vi.spyOn(host.fullHostBootGate,name));
+  const inspection=await fetch(base+'/api/appointment/maintenance/inspect',{method:'POST',headers,body:'{}'});
+  expect(inspection.status).toBe(200);
+  const inspectionBody=await inspection.json() as any;
+  const inspectionInventory=db.scanAppointmentBootInventory();
+  const expectedCounts={resource:0,input:0,execution:0,outbox:0,task:0,residue:0,observation:0,unknown:0};
+  for(const item of inspectionInventory.records){
+   const family=item.kind.split('/',1)[0];
+   const kind=Object.hasOwn(expectedCounts,family)?family:'unknown';
+   expectedCounts[kind as keyof typeof expectedCounts]++;
+  }
+  for(const family of ['resource','input','execution','task','observation'] as const)
+   expect(expectedCounts[family],family).toBeGreaterThan(0);
+  const fixedBlockers=new Set(['NON_DATABASE_RESIDUE_UNVERIFIED','EXTERNAL_WRITERS_UNVERIFIED','WRITER_COVERAGE_INCOMPLETE','OPAQUE_RUNTIME_METADATA_UNVERIFIED']);
+  const otherBlockers=inspectionInventory.blockers.filter(blocker=>!fixedBlockers.has(blocker)).length;
+  expect(inspectionBody).toMatchObject({maintenance:true,phase:'paused',restorePermission:'not_issued',
+   proofs:{nonDatabaseResidue:{status:'unverified',report:'reported'},externalWriters:{status:'unverified',report:'reported'},writerCoverage:{status:'unverified',report:'reported'},opaqueRuntimeMetadata:{status:'unverified',report:'reported'}},
+   recordCounts:expectedCounts,blockerCount:inspectionInventory.blockers.length,otherBlockerCount:otherBlockers,
+   observation:{scope:'current_process_partial',retry:'unknown',warm:'unknown',oldRunner:'unknown',externalWriter:'unknown'}});
+  for(const name of ['activeCount','activeContainerCount','activeHostProcessCount','waitingCount','enabledAccounts','connectedAccounts'])
+   expect(Number.isSafeInteger(inspectionBody.observation[name])&&inspectionBody.observation[name]>=0,name).toBe(true);
+  const inspectionJson=JSON.stringify(inspectionBody);
+  expect(inspectionJson).not.toContain('synthetic-promoting');
+  expect(inspectionJson).not.toContain('synthetic-full-admin');
+  expect(inspectionJson).not.toContain('synthetic queued content');
+  expect(inspectionJson).not.toContain(inspectionInventory.records[0]?.key ?? 'never-an-inventory-key');
+  expect(snapshot()).toEqual(before);
+  expect(host.fullHostBootGate.phase()).toBe('paused');
+  for(const operation of inspectionGateCalls)expect(operation).not.toHaveBeenCalled();
+  events.push('actual-inspect-counts-only-preserves-paused-business');
   const review=await fetch(base+'/api/appointment/maintenance/review',{method:'POST',headers,body:'{}'});
   expect(review.status).toBe(409);expect(await review.json()).toMatchObject({error:'review_incomplete',recoverable:false});
   const inventory=db.scanAppointmentBootInventory();expect(inventory.complete).toBe(false);expect(inventory.safe).toBe(false);
@@ -109,6 +139,17 @@ it('boots the actual original main and real loopback Web stack while preserving 
   expect(host.fullHostBootGate.phase()).toBe('paused');
   const noOrigin={cookie:headers.cookie,'content-type':'application/json'};
   const refusals=[
+   {name:'inspect-unauthenticated',operation:'inspect',headers:{Origin:headers.Origin,'content-type':'application/json'},body:'{}',status:401},
+   {name:'inspect-wrong-origin',operation:'inspect',headers:{...headers,Origin:'https://synthetic.invalid'},body:'{}',status:403},
+   {name:'inspect-missing-origin',operation:'inspect',headers:noOrigin,body:'{}',status:403},
+   {name:'inspect-member',operation:'inspect',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('b'.repeat(64))},body:'{}',status:403},
+   {name:'inspect-other-owner',operation:'inspect',headers,body:'{}',status:403},
+   {name:'inspect-forced-password-change',operation:'inspect',headers,body:'{}',status:403},
+   {name:'inspect-disabled-account',operation:'inspect',headers,body:'{}',status:403},
+   {name:'inspect-expired',operation:'inspect',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('c'.repeat(64))},body:'{}',status:401},
+   {name:'inspect-missing-session',operation:'inspect',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('d'.repeat(64))},body:'{}',status:401},
+   {name:'inspect-unknown-field',operation:'inspect',headers,body:'{"syntheticUnknown":true}',status:400},
+   {name:'inspect-oversized-body',operation:'inspect',headers,body:JSON.stringify({syntheticUnknown:'x'.repeat(4096)}),status:400},
    {name:'wrong-origin',operation:'review',headers:{...headers,Origin:'https://synthetic.invalid'},body:'{}',status:403},
    {name:'missing-origin',operation:'review',headers:noOrigin,body:'{}',status:403},
    {name:'member',operation:'review',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('b'.repeat(64))},body:'{}',status:403},
@@ -122,15 +163,42 @@ it('boots the actual original main and real loopback Web stack while preserving 
   for(const refusal of refusals){
    // Exercise live member role revalidation using the same synthetic account;
    // a second owner at startup would correctly add its inaccessible home group.
-   if(refusal.name==='member')sql.prepare("UPDATE users SET role='member' WHERE id=?").run(adminId);
+   if(refusal.name==='member'||refusal.name==='inspect-member')sql.prepare("UPDATE users SET role='member' WHERE id=?").run(adminId);
+   if(refusal.name==='inspect-other-owner')sql.prepare("UPDATE registered_groups SET created_by='synthetic-foreign-owner' WHERE jid='web:full-role'").run();
+   if(refusal.name==='inspect-forced-password-change')sql.prepare('UPDATE users SET must_change_password=1 WHERE id=?').run(adminId);
+   if(refusal.name==='inspect-disabled-account')sql.prepare("UPDATE users SET status='disabled' WHERE id=?").run(adminId);
    let response:Response;
    try{response=await fetch(base+'/api/appointment/maintenance/'+refusal.operation,{method:'POST',headers:refusal.headers,body:refusal.body});}
-   finally{if(refusal.name==='member')sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(adminId);}
+   finally{
+    if(refusal.name==='member'||refusal.name==='inspect-member')sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(adminId);
+    if(refusal.name==='inspect-other-owner')sql.prepare("UPDATE registered_groups SET created_by=? WHERE jid='web:full-role'").run(adminId);
+    if(refusal.name==='inspect-forced-password-change')sql.prepare('UPDATE users SET must_change_password=0 WHERE id=?').run(adminId);
+    if(refusal.name==='inspect-disabled-account')sql.prepare("UPDATE users SET status='active' WHERE id=?").run(adminId);
+   }
    expect(response.status,refusal.name).toBe(refusal.status);await response.text();
    expect(host.fullHostBootGate.phase(),refusal.name).toBe('paused');expect(snapshot(),refusal.name).toEqual(before);
    expect(sql.prepare("SELECT COUNT(*) AS n FROM auth_audit_log WHERE event_type='appointment_restore_committed'").get()).toMatchObject({n:0});
   }
   events.push('original-http-origin-acl-ticket-body-refusals-preserve-state');
+  const {createAppointmentBootRoutes}=await import('../src/appointment-boot-http.js');
+  for(const scenario of [
+   {name:'missing-port',port:undefined},
+   {name:'nonfunction-port',port:42},
+   {name:'throwing-port',port:()=>{throw Error('synthetic private observation error');}},
+   {name:'thenable-port',port:()=>Promise.resolve({activeCount:0})},
+   {name:'async-port',port:async()=>({activeCount:0})},
+  ]){
+   const local=createAppointmentBootRoutes({gate:host.fullHostBootGate,origin:headers.Origin,
+    readInventory:()=>({inventory:db.scanAppointmentBootInventory(),resourceJids:Object.keys(db.getAllRegisteredGroups()).sort()}),
+    prepare:async()=>{},drain:()=>{},readRecoveryObservation:scenario.port} as any);
+   const inspect=await local.fetch(new Request(base+'/api/appointment/maintenance/inspect',{method:'POST',headers,body:'{}'}));
+   expect(inspect.status,scenario.name).toBe(503);
+   const oldReview=await local.fetch(new Request(base+'/api/appointment/maintenance/review',{method:'POST',headers,body:'{}'}));
+   expect(oldReview.status,scenario.name+' original review compatibility').toBe(409);
+   expect(host.fullHostBootGate.phase(),scenario.name).toBe('paused');
+   expect(snapshot(),scenario.name).toEqual(before);
+  }
+  events.push('direct-real-routes-invalid-observation-port-does-not-break-review');
   const queue=context.getWebDeps()!.queue;expect(queue).toBe(host.fullHostQueue);
   const work=vi.fn(async()=>{});expect(queue.enqueueTask('web:full-role','synthetic-probe',work,{allowInactive:true})).toBe(true);
   await new Promise(resolve=>originalTimeout(resolve,100));expect(work).not.toHaveBeenCalled();expect(snapshot()).toEqual(before);
