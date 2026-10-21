@@ -2,6 +2,8 @@
 
 此入口在临时源码副本中实际运行原 `index.ts` 的 `main()`，启动真实 Hono/Node HTTP、WebSocket server、原 SQLite、GroupQueue、WebDeps、任务路由和 O 的完整 boot/warm/cold/Web/rejection/consumer/assembly/inventory 栈。它补充旧 `host-readiness` 的局部证明；旧套件不能替代本入口的结果。
 
+2026-10-21新增[恢复核对准备](../../docs/t7-recovery-preparation-acceptance.md)：管理员`POST /api/appointment/maintenance/inspect`复用原鉴权/Origin/资源ACL，只返回固定证明状态和类别、渠道、队列计数。原project配置漏项通过`project-residue-overlay.mjs`扩展原扫描器；没有safe/ready许可或渠道连接。该入口只装配在本地合成候选，不代表已部署。
+
 ```powershell
 node integrations/native/verify-full-host.mjs $NROOT --host-overlay $OROOT --sqlite-driver $PREPARED_DRIVER --typecheck
 ```
@@ -13,7 +15,7 @@ Linux 在固定原 ELF、ABI 和依赖通过 `linux-runtime.mjs` 核验后省略
 - 全 N 非测试 TypeScript 树 SHA-256：`8611519397c78b1f5d9591ae18ea2c5d1c399aab3d63b9ea5311ebd8c18b0bad`。
 - O 源码/变换/fragment 树 SHA-256：`054aff69be686477c6df8acf8f84810d43aba538a3643fcca2a2f32d1f5e11e0`。
 - 树身份涵盖排序后的相对文件名和每文件原始字节 SHA-256。输入变化立即拒绝；所有原始 N/O 文件只读。执行 O helper 的校验快照，fragment 也来自已核验字节。
-- 临时副本共 207 个文件，其中 8 个 O runtime 模块。T7 scheduler 采用旧工具同一已核验组合；DB 保留完整 O 栈，仅移入独立核验的 T7 精确 run claim 函数。
+- 临时副本共 208 个文件，其中 8 个 O runtime 模块和1份本仓库脱敏DTO。T7 scheduler 采用旧工具同一已核验组合；DB 保留完整 O 栈，仅移入独立核验的 T7 精确 run claim 函数。原inventory复用descriptor遍历补项目`.env/config`，共享原总行/字节/截止预算，保留原data键和全部阻断语义。
 - 仅向临时 index 追加两个观测 export。保留原 `main().catch(...)`、真实 Web 启动及 shutdown 函数；audit 同时记录组合前 hash 和追加 export 后的实际 index hash、测试、配置、verifier 与 builder hash。
 - 每次运行创建独立 `runId` 证据目录，先写 `preparing`，失败写 `failed`，双进程均通过才写 `passed`。旧运行的 evidence 不代表新运行通过。
 
@@ -27,6 +29,8 @@ verifier 启动两个独立 Vitest OS worker 进程，共用同一新建临时 c
 4. 原 queue 可接收暂停任务但不消费；promoting 输入不被 boot 重置为 queued，过期任务不被 materialize，失败通知不被 pump。
 5. 原 shutdown 关闭 Web、queue、SQLite；第二个 OS 进程再次启动并查回第一轮原快照。
 6. TCP/Unix/DNS/UDP/child-process 防护含实际触发的反例。控制反例完成后清空防护计数，再报告宿主执行期间 `observedNoBlockedAttempts`。
+7. 管理员inspect读取原scanner与原进程队列/渠道投影；重启后可重复读取。未授权、异源、跨Owner、停用、强制改密、无效会话和异常观察端口拒绝。gate调用透传观测确认检查不调用beginReview/publish/claim/write/commit；原业务快照及审计状态保留。
+8. `project-residue.test.mts`实际调用原scanner/真实SQLite，Linux覆盖项目配置、嵌套文件、缺失、symlink/替换、深度预算和读失败；Windows明确跳过Linux场景，只验证不支持时关闭。文件内容不被扫描或回传。
 
 ## 隔离范围
 

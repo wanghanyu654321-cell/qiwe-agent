@@ -1,6 +1,6 @@
 # 原 Native 单条执行的本地合成接缝
 
-最新验收见[完整宿主与Linux记录](../../docs/t7-full-host-acceptance.md)、[完整宿主入口](README-full-host.md)及[Linux入口](README-linux.md)。前轮[媒体、门禁和原驱动记录](../../docs/t7-host-readiness-acceptance.md)对应`verify-targeted.mjs`局部验证；原Node SQLite替代模式仍保留并明确区分。新增完整宿主入口保留原恢复拒绝，不能据此声称原Agent已恢复。
+最新验收见[恢复检查与项目配置覆盖记录](../../docs/t7-recovery-preparation-acceptance.md)、[完整宿主入口](README-full-host.md)及[Linux入口](README-linux.md)。前轮[完整宿主与Linux记录](../../docs/t7-full-host-acceptance.md)和[媒体、门禁和原驱动记录](../../docs/t7-host-readiness-acceptance.md)保留对应阶段证据；原Node SQLite替代模式仍保留并明确区分。新增完整宿主入口保留原恢复拒绝，不能据此声称原Agent已恢复。
 
 本目录交付最小候选补丁和可重复的隔离验证。**只能用于本地合成候选，不能应用生产或直接修改已有私有工作区。** 不包含 Native 源码副本、真实数据、配置或凭据。公开执行 port 默认 disabled；显式 enabled 仍只支持 `isolated-synthetic`，没有真实发送或模型准入。
 
