@@ -70,7 +70,7 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
       // Capture admitted capabilities once; shared service state and live authority readers stay shared.
       ...(training ? {training: {enabled: training.enabled, resolve: training.resolve.bind(training)}} : {}),
       ...(native ? {native: {start: native.start.bind(native), query: native.query.bind(native), cancel: native.cancel.bind(native), close: native.close.bind(native)}} : {}),
-    }} : {}),...(conversations?{conversations:{store:conversations.store,native:{readRoleWorkspace:conversations.native.readRoleWorkspace.bind(conversations.native),prepareRoleWorkspace:conversations.native.prepareRoleWorkspace.bind(conversations.native)},...(conversations.intake?{intake:{readReceipt:conversations.intake.readReceipt.bind(conversations.intake),submitMessage:conversations.intake.submitMessage.bind(conversations.intake)}}:{})}}:{})};
+    }} : {}),...(conversations?{conversations:{store:conversations.store,native:{readRoleWorkspace:conversations.native.readRoleWorkspace.bind(conversations.native),prepareRoleWorkspace:conversations.native.prepareRoleWorkspace.bind(conversations.native)},...(conversations.intake?{intake:{readReceipt:conversations.intake.readReceipt.bind(conversations.intake),submitMessage:conversations.intake.submitMessage.bind(conversations.intake),...(conversations.intake.cancelReceipt?{cancelReceipt:conversations.intake.cancelReceipt.bind(conversations.intake)}:{})}}:{})}}:{})};
   });
   if (businesses.some(b => !b.scope || !Object.values(b.scope).every(valid) || !b.employees.length || b.employees.some(e => ![e.accountId, e.employeeId, e.employeeName].every(valid))) || new Set(businesses.map(b => JSON.stringify([b.scope.tenant, b.scope.store]))).size !== businesses.length) throw Error('invalid_bot_assembly');
   let closed = false, authenticated = false, epoch = 0;
@@ -161,7 +161,7 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
         const conversations=business.conversations?createBotConversations({store:business.conversations.store,authority,native:{
           readRoleWorkspace:input=>trackPhysical(business.conversations!.native.readRoleWorkspace(input)),
           prepareRoleWorkspace:input=>trackPhysical(business.conversations!.native.prepareRoleWorkspace(input)),
-        },...(business.conversations.intake?{intake:{readReceipt:input=>trackPhysical(business.conversations!.intake!.readReceipt(input)),submitMessage:input=>trackPhysical(business.conversations!.intake!.submitMessage(input))}}:{})}):undefined;
+        },...(business.conversations.intake?{intake:{readReceipt:input=>trackPhysical(business.conversations!.intake!.readReceipt(input)),submitMessage:input=>trackPhysical(business.conversations!.intake!.submitMessage(input)),...(business.conversations.intake.cancelReceipt?{cancelReceipt:(input:Parameters<BotConversationIntakePort['readReceipt']>[0])=>trackPhysical(business.conversations!.intake!.cancelReceipt!(input))}:{})}}:{})}):undefined;
         // Original services fence business writes with this request's authority/budget. Their
         // finalizers must still persist unknown outcomes for actions already attempted at abort.
         const delivery = createBotDelivery({mode: 'isolated-synthetic', authority, ledger: business.ledger, scope: business.scope, employees: business.employees,
