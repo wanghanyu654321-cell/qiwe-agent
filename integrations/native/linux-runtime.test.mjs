@@ -57,6 +57,27 @@ test('automatic removal after stop preserves the original timeout and does not r
 
 const source=process.env.QIWE_LINUX_NATIVE_SOURCE;
 
+test('controlled copy admits runner source, prompts and dependencies but excludes runtime data',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-runner-test-'));
+  const runner=path.join(root,'.local/full-instance/stage/app/container/agent-runner');
+  try{
+    for(const relative of ['src/pi-index.ts','prompts/system.md','node_modules/synthetic/index.js','package.json','package-lock.json','tsconfig.json']){
+      const file=path.join(runner,relative);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'synthetic');
+    }
+    sealControlledLinuxCopy(root);assert.equal(verifyControlledLinuxCopy(root).files,6);
+    for(const relative of ['.env','config/private.json','sessions/history.json','node_modules/synthetic/.env']){
+      const file=path.join(runner,relative);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'synthetic');
+      assert.throws(()=>sealControlledLinuxCopy(root),/Unapproved stage path/);
+      fs.unlinkSync(file);
+      if(relative.startsWith('config/')||relative.startsWith('sessions/'))fs.rmdirSync(path.dirname(file));
+    }
+    assert.equal(verifyControlledLinuxCopy(root).files,6);
+  }finally{
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));
+    fs.rmSync(root,{recursive:true,force:true});
+  }
+});
+
 test('controlled copy admits only the exact public offline SDK fixture under tests',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-fixture-test-'));
   try{
@@ -66,6 +87,27 @@ test('controlled copy admits only the exact public offline SDK fixture under tes
     fs.writeFileSync(path.join(directory,'credentials.json'),'synthetic forbidden');
     assert.throws(()=>sealControlledLinuxCopy(root),/Unapproved stage path/);
   }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('controlled copy admits the three existing D4 skill definitions without other skill payloads',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-skills-test-'));
+  try{
+    const skills=path.join(root,'.local/d4-skills');
+    for(const id of ['beauty-local-content','vendor-content-strategy','vendor-copywriting']){
+      fs.mkdirSync(path.join(skills,id),{recursive:true});
+      fs.writeFileSync(path.join(skills,id,'SKILL.md'),'synthetic');
+    }
+    sealControlledLinuxCopy(root);assert.equal(verifyControlledLinuxCopy(root).files,3);
+    for(const file of ['vendor-copywriting/run.js','vendor-copywriting/.env','other/SKILL.md']){
+      const target=path.join(skills,file);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,'synthetic');
+      assert.throws(()=>sealControlledLinuxCopy(root),/Unapproved stage path/);
+      fs.unlinkSync(target);if(file.startsWith('other/'))fs.rmdirSync(path.dirname(target));
+    }
+    assert.equal(verifyControlledLinuxCopy(root).files,3);
+  }finally{
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));
+    fs.rmSync(root,{recursive:true,force:true});
+  }
 });
 test('controlled copy inventory rejects credentials, symlinks, missing and changed files',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-stage-test-'));
