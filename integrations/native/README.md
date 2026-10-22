@@ -65,3 +65,9 @@ N/O路径还须保持已核实原转换器的相对目录布局；来源或布�
 测试覆盖 A 单条真实 scheduler/fake runner成功、同 key 幂等、B已到期定义/C已排队run/D到期通知/E过期started lease原始行不变、排队后撤权/暂停/abort、未drain即abort结算、准确 run cancel 与 late success fence。还有公开 `createNativeBotExecutionPort` + `createNativeBotTasks` 直接调用实际补丁函数，配原 `createWecomBotContext`/`WorkbenchAccessStore` 的真实临时 grant 库与**原 GroupQueue 实现**：空闲 queue 可在回复前开始并完成；用无模型的合成阻塞任务占满容量后，新run在回复收尾时cancelled，不会等容量释放后自行执行。原queue源码接点为 `enqueueTask` 1391、1437–1474忙碌/容量排队、1477–1486立即runTask，以及2588调用task.fn。单项故障测试另外使用可手动drain的fake queue。所有模型、发送和账户均为合成对象；没有真实渠道/模型/生产联调。
 
 可观察基线缺口：加 `--unpatched` 会在原源码上运行同一验收，因没有 targeted 入口而失败。生成 diff 用 `node integrations/native/emit-patch.mjs ABSOLUTE_NATIVE_SRC`，仍只读源目录并写本目录 patch。
+
+## D4 原岗位技能与 Pi 工具
+
+`verify-role-capabilities.mjs N_SRC O_SRC [WINDOWS_DRIVER] --skill-root ABSOLUTE_SKILLS_ROOT` 在临时副本中复用 D1–D3 服务、原 `resolveAgentProfileUserSkillsPolicy`、`pi-index.ts:runTurn` 和 Pi SDK 0.84.2。提供现有 package 的三个技能目录，工具按原文件 hash 核验，不下载或重新编写技能。Windows 参数须使用已准备的原版本驱动；当前原技能目录链接在 Windows 仍受 EPERM 限制，组合验收使用既有受控 Linux 环境。
+
+新增转换只修补原 MCP `isError:true` 被 Pi 记录为成功的问题。测试保留真实技能文件、SDK 参数校验与工具处理函数，只替换模型 I/O；故障验证使用临时合成数据。宿主启动和挂载由夹具代接，原 main 及完整有效来源合并未在本入口执行。外部 MCP 消费、执行中工具撤权、完整宿主恢复、D5 答案投递和真实模型效果不因本入口通过而完成。当前命令、证据及限制统一见 [D4 验收记录](../../docs/d4-acceptance.md)。

@@ -1,8 +1,8 @@
 # 企微接入原 Agent 会话与多技能执行：最小改造计划
 
-> 执行者按 `executing-plans` 逐项实施；每项运行行为先做失败测试，再实现、验证和独立审查。本文保留 D0 设计基线；D1 岗位空间与会话选择见 [D1 验收记录](d1-acceptance.md)，D2 原消息隔离受理与查回见 [D2 验收记录](d2-acceptance.md)，D3 原执行、追问与取消见 [D3 验收记录](d3-acceptance.md)。D4/D5 技能装配和答案回传仍是计划；本地合成不能视为真实产品已开放。
+> 执行者按 `executing-plans` 逐项实施；每项运行行为先做失败测试，再实现、验证和独立审查。本文保留 D0 设计基线；D1 岗位空间与会话选择见 [D1 验收记录](d1-acceptance.md)，D2 原消息隔离受理与查回见 [D2 验收记录](d2-acceptance.md)，D3 原执行、追问与取消见 [D3 验收记录](d3-acceptance.md)，D4 原技能与工具隔离组合见 [D4验收](d4-acceptance.md)。D5 答案回传仍是计划；本地合成不能视为真实产品已开放。
 
-2026-10-22 执行更新：用户确认[roadmap 执行说明书](roadmap.md)，D2 已交付于 `3282756`，当前继续 D3 原会话执行、追问和取消。D2/D3 的本地适配不装配到生产主进程；完整启用必须同时满足执行时授权和 T7 恢复条件。当前验证结果另记，不以本计划文字代替验收。
+2026-10-22 执行更新：用户确认[roadmap 执行说明书](roadmap.md)，D2 已交付于 `3282756`，D3 已交付于 `1ce8868`，当前继续 D4 原岗位技能和工具装配。D2/D3 的本地适配不装配到生产主进程；完整启用必须同时满足执行时授权和 T7 恢复条件。当前验证结果另记，不以本计划文字代替验收。
 
 **目标：** 员工在企微提出自然语言需求，连续追问，由原 Agent 使用获准岗位、技能和工具完成工作，结果持久保存、回复并可在企微查回或取消。
 
@@ -20,7 +20,7 @@
 | 主会话执行 | N `index.ts:5595` `processGroupMessages` → `runAgent`（9461）→ 原 host/container runner | 企微普通对话应进入这条链，不创建假 scheduler task，也不直接裸调 `runAgent` |
 | 连续追问 | N `web.ts:550–591` 记录活动 query 下排队输入，807–879 尝试 IPC；N `group-queue.ts:1549` `sendMessage` | 保留原排队/空闲投递语义；企微入站请求结束不等于取消已持久受理的工作 |
 | 岗位与空间 | Q `workbench-opening.ts` 只检查技能并安装 Profile；N `routes/groups.ts:546,984` 已有带 `agent_profile_id` 的非 Home 创建/绑定；N `db.ts:9225` `getAgentProfileForWorkspace` 被原 runner 实际调用 | 开通 Profile 不等于接好工作空间。复用本人已有匹配空间；缺失时通过原规则创建、绑定。Home 固定默认 Profile，不能为企微切岗改绑 |
-| 技能和 MCP | N `claude-context-resolver.ts:213,463` → `resolveEffectiveSkills`；`container-runner.ts:610,687,1162,2442` 装配技能/MCP；原 `container/agent-runner/src/index.ts:2727` 放入同一个 SDK query | 保留同一 Agent 按需使用多项技能/工具；不为每岗建新调度器。插件可能包含 hooks/MCP，不能把技能都当成无副作用文本 |
+| 技能和 MCP | N `claude-context-resolver.ts` → `resolveEffectiveSkills`；`container-runner.ts` 装配技能/MCP；实际入口是 `container/agent-runner/src/pi-index.ts`，旧 `index.ts` 的 SDK query 不能证明当前 Pi 已消费该配置 | D4 必须核对 Pi 实际消费路径。保留同一 Agent 按需使用多项技能/工具；不为每岗建新调度器。插件可能包含 hooks/MCP，不能把技能都当成无副作用文本 |
 | Session 与记忆 | N `index.ts:2272,9483,14213` 比较 Profile ID/version/hash，失配清 SDK session；记忆 IPC 在11962之后按 sourceGroup 定位 workspace 并授权 | 同岗位追问复用原上下文。切岗/切店不得串用；空间内多个会话可能共享空间记忆，不能声称所有会话记忆互相隔离 |
 | 输出与查回 | N `index.ts:9740` `sendMessageWithOutcome` 保存带 `turn_id/session_id/source_kind` 的输出；Q 有原发送与持久回复状态 | 已有输出落库，但缺企微输入 → 实际执行批次/turn → 输出的精确关联；不能取“最新一条回答”回给员工 |
 | 取消 | N `group-queue.ts:2040` `interruptQuery(jid, expectedQueryId)` 校验具体活动 query；原 HTTP interrupt 未带该预期值 | 使用具体执行身份。`stopGroup`、`/clear` 不是单轮取消；`interruptAndRunFollowUp` 的 `_expectedRunId` 未使用，不能直接当安全取消接口 |
@@ -112,7 +112,7 @@ Q 的状态库与 Native 库不是一个事务：Native 提交而 Q 回执丢失
 - [x] D1：隔离适配、原服务及 SDK 组合、跨店/撤权、重复与未知准备、普通文本不落报数及独立审查完成，详见 [D1验收](d1-acceptance.md)。采用 `wecom-bot-conversations/assembly`、原准备回归与 Native 候选测试覆盖。自动准备只有按原门禁可写时才可执行；真实主进程/模板装配与旧空间人工归属核实未验收，不提前对真实数据运行。
 - [x] D2：原 SQLite 同连接受理、去重与冲突、未知受理、原 Web 保存兼容和两进程 SDK 查回完成，实际范围见 [D2验收](d2-acceptance.md)。保存后唤醒队列及其断点由 D3 衔接；不将保存证明写成 Web 页面端到端验收。
 - [x] D3：原队列实际分配 query/turn，连续输入沿用原 session，执行中追问排队、Web 混合批次、当前授权过滤、错 turn、排队取消、活动取消、迟到取消和两进程查回完成，见 [D3验收](d3-acceptance.md)。中断信号发出但 runner 未结束仍为取消处理中。合成 runner 只验证关联，不证明真实生成“三条文案”或真实模型改写质量；完整宿主恢复仍待 T7。
-- [ ] D4：在原 runner/SDK 可注入的最低 I/O 边界做确定性替身，先验证该替身不跳过技能解析、工具参数校验和原持久化；随后验证两项已存在且获准的能力协作、版本重置、撤权、无证据与工具失败。若原依赖没有可安全注入的离线接口，记录具体阻塞，停止依赖它的成功断言，不再新增一套“演示 Agent”。
+- [x] D4 本地切片：原 `runTurn` / SDK 在模型 I/O 边界注入确定性替身，保留原 Profile 技能选择、真实文件加载、工具参数校验及原持久化；两个原内容方法与基础技能共同参与一条合成草稿，版本重置、排队撤权、缺资料与工具失败已验证，见 [D4验收](d4-acceptance.md)。真实启动/挂载、完整来源合并、外部 MCP、活动工具撤权、完整宿主及真实模型效果未因此完成。
 - [ ] D5：扩展 `tests/role-eval/wecom-bot-delivery.test.ts`、`manager-bot-delivery-store.test.ts` 和 Native 组合测试，先注入checkpoint续写、同消息ID内容变化、Native终态提交后/Q意图创建前崩溃、完成后发送失败/未知/重启，再接原回复意图；逐项检查载荷、收件人、结果冻结版本与查回一致、无重复执行。
 - [ ] 每项直接测试通过后跑 `npm test`、`npm run typecheck`、`npm run build`；新增 Native 测试纳入既有隔离候选加载方式，不能用裸 Vitest 导入原生产 index。提交前独立审查最终 diff；未授权不部署、不打开真实渠道。
 
@@ -146,4 +146,4 @@ T7-A仍负责全宿主恢复：非数据库残留、外部写者、写者覆盖�
 - 在 Q 运行：`node node_modules/vitest/vitest.mjs run tests/role-eval/workbench-opening.test.ts tests/role-eval/wecom-bot-task-commands.test.ts tests/role-eval/wecom-bot-tasks.test.ts tests/role-eval/native-bot-tasks.test.ts tests/role-eval/wecom-bot-transport.test.ts`，**5 文件、73 测试通过**。只证明已有接缝基线，不证明本计划已实现。
 - 调用现有 `createFullHostCandidate(N,O)` 仅做源代码组合及身份校验：208模块，未启动宿主。日志保存在本地忽略目录 `.local/t7-dialogue-20261021/`，不提交环境数据。
 - D0 只改文档，类型检查/构建/全量测试当时未重跑；执行内容、相对链接与 diff 检查。没有真实企微发送、项目模型调用、生产操作或真实数据读取。
-- 当前未完成：D4/D5、四类恢复证明与正常恢复、原 runner 多技能组合执行、真实自然语言质量、手机实收及部署。D1–D3 隔离适配不能作为这些能力已上线的证明。
+- 当前未完成：D5、四类恢复证明与正常恢复、完整宿主上的原 runner 多技能执行、外部 MCP 消费及活动工具撤权、真实自然语言质量、手机实收及部署。D1–D4 隔离适配不能作为这些能力已上线的证明。
