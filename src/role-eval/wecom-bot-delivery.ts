@@ -20,8 +20,8 @@ export function createBotDelivery(options:BotReportOptions&{sender:ReturnType<ty
   return {id:hash(JSON.stringify([c.corpId,c.botId,c.memberId,event.messageId])),fingerprint:hash(JSON.stringify([event.botId,event.memberId,event.messageId,event.createTime??null,action])),target:{...c,accountId:i.accountId,workspaceJid:i.workspaceJid,storeId:i.storeId}};
  };
  const handler=createBotReportHandler({...options,beforeWork:(value,guard)=>{
-  checkOpen();const seed=eventSeed(value);ledger.reserveBotReply({...value.actor},{...seed,reqId:value.event.reqId},guard);
-  const previous=ledger.getBotReply(value.actor,seed.id);if(previous?.attachment)return {status:'file',snapshotId:previous.attachment.snapshotHash,attachment:{...previous.attachment},reply:structuredClone(previous.reply)};
+  checkOpen();const seed=eventSeed(value),wasReserved=ledger.reserveBotReply({...value.actor},{...seed,reqId:value.event.reqId},guard);
+  const previous=ledger.getBotReply(value.actor,seed.id);return {replayState:wasReserved?(previous?(previous.reportId?'completed-report' as const:'completed-nonreport' as const):'reserved' as const):'none' as const,...(previous?.attachment?{cached:{status:'file' as const,snapshotId:previous.attachment.snapshotHash,attachment:{...previous.attachment},reply:structuredClone(previous.reply)}}:{})};
  }});
  return {
  async handle(request:BotContextRequest):Promise<BotDeliveryResult>{
