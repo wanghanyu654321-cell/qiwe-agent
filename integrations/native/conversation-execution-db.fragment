@@ -1,0 +1,92 @@
+// Appended only to the explicitly isolated D3 original DB candidate.
+export type ConversationExecutionState = 'queued'|'running'|'cancelling'|'cancelled'|'completed'|'failed'|'unknown';
+type ConversationExecution = {state:ConversationExecutionState;queryId?:string;turnId?:string;sessionId?:string;batchSize?:number};
+let conversationAuthority: ((receipt: ReturnType<typeof readBotConversationReceipt>) => boolean)|undefined;
+export function bindConversationAuthority(check: NonNullable<typeof conversationAuthority>):void {
+ if(conversationAuthority)throw Error('D3_ALREADY_BOUND');
+ conversationAuthority=check;
+ db.exec("UPDATE wecom_conversation_execution SET state='unknown' WHERE state='running'");
+}
+export function readConversationExecution(receiptId:string):ConversationExecution|undefined {
+ const row=db.prepare('SELECT * FROM wecom_conversation_execution WHERE receipt_id=?').get(receiptId) as any;
+ if(!row)return undefined;
+ const size=row.query_id?db.prepare('SELECT count(*) AS n FROM wecom_conversation_execution WHERE workspace_jid=? AND query_id=?').get(row.workspace_jid,row.query_id) as any:undefined;
+ return {state:row.state,...(row.query_id?{queryId:row.query_id}:{}),...(row.turn_id?{turnId:row.turn_id}:{}),...(row.session_id?{sessionId:row.session_id}:{}),...(size?{batchSize:row.batch_size??size.n}:{})};
+}
+export function queueConversationReceipt(receiptId:string):void {
+ const receipt=readBotConversationReceipt(receiptId);if(!receipt)throw Error('D3_RECEIPT_MISSING');
+ db.prepare("INSERT OR IGNORE INTO wecom_conversation_execution(receipt_id,workspace_jid,message_id,state) VALUES (?,?,?,'queued')").run(receiptId,receipt.workspaceJid,receipt.messageId);
+}
+function conversationMessageReceipt(messageId:string,chatJid:string):ReturnType<typeof readBotConversationReceipt> {
+ const row=db.prepare('SELECT receipt_id FROM wecom_conversation_receipts WHERE message_id=? AND workspace_jid=?').get(messageId,chatJid) as any;
+ return row?readBotConversationReceipt(row.receipt_id):undefined;
+}
+export function conversationMessageAllowed(messageId:string,chatJid:string,history=false):boolean {
+  const receipt=conversationMessageReceipt(messageId,chatJid);
+ if(!receipt){
+
+  const message=db.prepare('SELECT turn_id FROM messages WHERE id=? AND chat_jid=?').get(messageId,chatJid) as any;
+  const related=db.prepare('SELECT receipt_id FROM wecom_conversation_execution WHERE workspace_jid=? AND (turn_id=? OR EXISTS(SELECT 1 FROM json_each(input_json) WHERE value=?))').all(chatJid,message?.turn_id??null,messageId) as any[];
+  if(!history)return related.length===0;
+  return related.every(row=>{const relatedReceipt=readBotConversationReceipt(row.receipt_id);return readConversationExecution(row.receipt_id)?.state==='completed'&&conversationReceiptCurrent(relatedReceipt);});
+ }
+ const state=readConversationExecution(receipt.receiptId)?.state;
+ if(history ? state!=='completed' : state!=='queued')return false;
+ return conversationReceiptCurrent(receipt);
+}
+const conversationContextReceipts=new Map<string,string[]>();
+export function conversationSessionStale(chatJid:string):boolean {
+ const rows=db.prepare('SELECT receipt_id FROM wecom_conversation_execution WHERE workspace_jid=? AND query_id IS NOT NULL').all(chatJid) as any[];
+ conversationContextReceipts.set(chatJid,rows.filter(row=>conversationMessageAllowed(readBotConversationReceipt(row.receipt_id)!.messageId,chatJid,true)).map(row=>row.receipt_id));
+ return rows.some(row=>!conversationMessageAllowed(readBotConversationReceipt(row.receipt_id)!.messageId,chatJid,true));
+}
+export function startConversationBatch(chatJid:string,messageIds:string[],queryId:string|undefined,turnId:string):void {
+ if(!queryId||!messageIds.includes(turnId))throw Error('D3_EXECUTION_IDENTITY_INVALID');
+ db.transaction(()=>{
+  for(const id of messageIds){
+   const receipt=conversationMessageReceipt(id,chatJid);if(!receipt)continue;
+   if(!conversationMessageAllowed(id,chatJid))throw Error('D3_EXECUTION_AUTHORITY_CHANGED');
+   const result=db.prepare("UPDATE wecom_conversation_execution SET state='running',query_id=?,turn_id=?,input_json=?,batch_size=? WHERE receipt_id=? AND state='queued'").run(queryId,turnId,JSON.stringify(messageIds),messageIds.length,receipt.receiptId);
+   if(result.changes!==1)throw Error('D3_EXECUTION_CLAIM_LOST');
+  }
+ })();
+}
+export function finishConversationBatch(chatJid:string,queryId:string,state:'completed'|'failed'|'cancelled'|'unknown',sessionId?:string):void {
+ db.prepare("UPDATE wecom_conversation_execution SET state=?,session_id=COALESCE(?,session_id) WHERE workspace_jid=? AND query_id=? AND state IN ('running','cancelling')").run(state,sessionId??null,chatJid,queryId);
+}
+export function noteConversationSession(chatJid:string,queryId:string,sessionId:string):void {
+ db.prepare('UPDATE wecom_conversation_execution SET session_id=? WHERE workspace_jid=? AND query_id=?').run(sessionId,chatJid,queryId);
+}
+export function cancelConversationReceipt(receiptId:string,interrupt:(jid:string,queryId:string)=>boolean):void {
+ const receipt=readBotConversationReceipt(receiptId);if(!receipt)return;
+ const execution=readConversationExecution(receiptId);if(!execution)return;
+ if(execution.state==='queued'){
+  db.prepare("UPDATE wecom_conversation_execution SET state='cancelled' WHERE receipt_id=? AND state='queued'").run(receiptId);return;
+ }
+ if(execution.state!=='running'||!execution.queryId)return;
+ // Persist intent before signalling. A crash/signal failure cannot pretend completion.
+ db.prepare("UPDATE wecom_conversation_execution SET state='cancelling' WHERE workspace_jid=? AND query_id=? AND state='running'").run(receipt.workspaceJid,execution.queryId);
+ interrupt(receipt.workspaceJid,execution.queryId);
+}
+export function assertConversationBatchCurrent(chatJid:string,queryId:string):void {
+ for(const id of conversationContextReceipts.get(chatJid)??[])if(!conversationReceiptCurrent(readBotConversationReceipt(id)))throw Error('D3_HISTORY_AUTHORITY_CHANGED');
+ const rows=db.prepare("SELECT receipt_id FROM wecom_conversation_execution WHERE workspace_jid=? AND query_id=? AND state IN ('running','cancelling')").all(chatJid,queryId) as any[];
+ for(const row of rows)if(!conversationReceiptCurrent(readBotConversationReceipt(row.receipt_id)))throw Error('D3_EXECUTION_AUTHORITY_CHANGED');
+}
+
+
+function conversationReceiptCurrent(receipt:ReturnType<typeof readBotConversationReceipt>):boolean {
+ if(!receipt)return false;
+ const observed=Object.freeze({...receipt,actor:Object.freeze({...receipt.actor})});
+ if(conversationAuthority?.(observed)!==true)return false;
+ const actor=receipt.actor,owner=getUserById(actor.accountId);
+ if(!owner||owner.role!=='member'||owner.status!=='active'||owner.must_change_password)return false;
+ const key=conversationDigest([actor.tenantId,actor.accountId,actor.storeId,receipt.role]);
+ const claim=getOwnedRoleWorkspaceClaim(key),group=getRegisteredGroup(receipt.workspaceJid),profile=getAgentProfileForUser(receipt.profileId,actor.accountId);
+ return !!claim&&claim.state==='ready'&&claim.ownerId===actor.accountId&&claim.tenantId===actor.tenantId&&claim.storeId===actor.storeId&&claim.role===receipt.role&&claim.corpId===actor.corpId&&claim.botId===actor.botId&&claim.memberId===actor.memberId&&claim.bindingVersion===actor.bindingVersion&&claim.grantVersion===actor.grantVersion&&claim.workspaceJid===receipt.workspaceJid&&claim.profileId===receipt.profileId&&!!group&&!group.is_home&&group.executionMode==='container'&&group.created_by===actor.accountId&&!!profile&&profile.status!=='archived'&&getWorkspaceAgentProfileId(group.folder)===receipt.profileId;
+}
+
+export function listQueuedConversationReceipts():string[] {
+ const rows=db.prepare("SELECT receipt_id FROM wecom_conversation_execution WHERE state='queued'").all() as any[];
+ return rows.filter(row=>conversationReceiptCurrent(readBotConversationReceipt(row.receipt_id))).map(row=>row.receipt_id);
+}

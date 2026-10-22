@@ -109,6 +109,77 @@ it('routes selected natural text to a fixed Native receipt and resolves it after
  s.offline.frame(text('member-a','d2-natural','写三条朋友圈文案'));await app.idle();
  expect(submits).toBe(1);expect(s.counts().reports).toBe(before);
 });
+function conversationExecutionSetup(execution: any, cancel?: (input:any)=>Promise<any>, extra:{executionBoundary?:WecomBotExecutionBoundary;requestTimeoutMs?:number}={}){
+ const s=setup();s.app.close();
+ const receipt={receiptId:'d'.repeat(64),messageId:'original-input',acceptedAt:'2026-10-22T00:00:00.000Z',state:'accepted' as const,role:'marketing' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',selectionId:'selection',fingerprint:'a'.repeat(64),execution};
+ const intake={readReceipt:vi.fn(async()=>receipt),submitMessage:vi.fn(async()=>{throw Error('query_must_not_submit');}),...(cancel?{cancelReceipt:vi.fn(cancel)}:{})};
+ const app=createWecomBotAssembly({...s.options,...extra,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{async readRoleWorkspace(){throw Error('query_must_not_prepare');},async prepareRoleWorkspace(){throw Error('query_must_not_prepare');}},intake}}))});
+ cleanup.push(()=>app.close());s.offline.authenticate();
+ const dispatch=async(id:string,command:string)=>{s.offline.frame(text('member-a',id,command));await app.idle();return JSON.stringify(s.offline.sent.at(-1)?.body);};
+ return {...s,app,intake,receipt,dispatch};
+}
+it.each([
+ ['queued','排队中'],['running','执行中'],['cancelling','取消处理中'],['cancelled','已取消'],['completed','执行已结束'],['failed','执行失败'],['unknown','执行结果待核实'],
+])('D3 query shows persisted %s without inventing an answer',async(state,label)=>{
+ const s=conversationExecutionSetup({state,queryId:'original-query',turnId:'original-turn',sessionId:'original-session'});
+ const reply=await s.dispatch('d3-state-'+state,'查询对话 '+s.receipt.receiptId);
+ expect(reply).toContain(label);expect(reply).toContain(s.receipt.receiptId);expect(reply).not.toContain('执行尚未接通');
+ expect(s.intake.submitMessage).not.toHaveBeenCalled();expect(s.counts().reports).toBe(0);
+});
+it('D3 cancels only the addressed receipt and reports shared execution as cancelling until terminal',async()=>{
+ let s:ReturnType<typeof conversationExecutionSetup>;
+ const cancel=vi.fn(async(input:any)=>({...s.receipt,execution:{state:'cancelling',queryId:'original-query',turnId:'original-turn',batchSize:2}}));
+ s=conversationExecutionSetup({state:'running',queryId:'original-query',turnId:'original-turn',batchSize:2},cancel);
+ const substituted=vi.fn(async()=>{throw Error('late_callback_must_not_run');});s.intake.cancelReceipt=substituted;
+ const reply=await s.dispatch('d3-cancel','取消对话 '+s.receipt.receiptId);
+ expect(cancel).toHaveBeenCalledTimes(1);expect(substituted).not.toHaveBeenCalled();
+ expect(cancel.mock.calls[0]?.[0]).toMatchObject({receiptId:s.receipt.receiptId,actor:{accountId:'a',storeId:'store-b'}});
+ expect(reply).toContain('取消处理中');expect(reply).toContain('同批');expect(reply).not.toContain('已取消');
+ s.receipt.execution={state:'cancelled'};
+ expect(await s.dispatch('d3-cancel-query','查询对话 '+s.receipt.receiptId)).toContain('已取消');
+ expect(s.counts().reports).toBe(0);expect(s.intake.submitMessage).not.toHaveBeenCalled();
+});
+it('D3 uncertain cancellation gives lookup instructions and does not repeat the side effect on redelivery',async()=>{
+ const cancel=vi.fn(async()=>{throw Error('synthetic_lost_cancel_response');});
+ const s=conversationExecutionSetup({state:'running',queryId:'original-query',turnId:'original-turn'},cancel);
+ const reply=await s.dispatch('d3-cancel-unknown','取消对话 '+s.receipt.receiptId);
+ expect(reply).toContain('取消结果待核实');expect(reply).toContain('查询对话 '+s.receipt.receiptId);
+ await s.dispatch('d3-cancel-unknown','取消对话 '+s.receipt.receiptId);
+ expect(cancel).toHaveBeenCalledTimes(1);expect(s.counts().reports).toBe(0);
+});
+it('D3 checks receipt role before cancellation and rejects malformed execution state',async()=>{
+ const cancel=vi.fn(async()=>{throw Error('not_authorized');});const s=conversationExecutionSetup({state:'running'},cancel);
+ s.grants.change('admin',{accountId:'a',storeId:'store-b',roles:['manager'],active:true,expectedVersion:1,requestKey:'d3-role-revoke'});
+ await s.dispatch('d3-denied-cancel','取消对话 '+s.receipt.receiptId);
+ expect(cancel).not.toHaveBeenCalled();expect(s.outcomes.at(-1)?.state).toBe('rejected');
+ s.receipt.role='manager' as any;s.receipt.execution={state:'fabricated-success'};
+ await s.dispatch('d3-invalid-state','查询对话 '+s.receipt.receiptId);
+ expect(s.outcomes.at(-1)?.state).toBe('rejected');expect(s.counts().reports).toBe(0);
+});
+it('D3 cancellation is unavailable on a D2-only port without falling back to reporting',async()=>{
+ const s=conversationExecutionSetup(undefined);
+ const substituted=vi.fn(async()=>s.receipt);s.intake.cancelReceipt=substituted;
+ expect(await s.dispatch('d3-no-cancel-port','取消对话 '+s.receipt.receiptId)).toContain('取消尚未接通');
+ expect(substituted).not.toHaveBeenCalled();expect(s.intake.submitMessage).not.toHaveBeenCalled();expect(s.counts().reports).toBe(0);
+});
+it('D3 holds the write ticket until a timed-out cancellation physically settles',async()=>{
+ let release!:()=>void;const waiting=new Promise<void>(resolve=>{release=resolve;});
+ let s:ReturnType<typeof conversationExecutionSetup>;
+ const cancel=vi.fn(async()=>{await waiting;return {...s.receipt,execution:{state:'cancelled'}};});
+ const finish=vi.fn(),boundary:WecomBotExecutionBoundary={admit:()=>true,enter:()=>({id:'d3-ticket'}),check:()=>true,close:finish};
+ s=conversationExecutionSetup({state:'running'},cancel,{executionBoundary:boundary,requestTimeoutMs:100});
+ s.offline.frame(text('member-a','d3-cancel-timeout','取消对话 '+s.receipt.receiptId));
+ await vi.waitFor(()=>expect(cancel).toHaveBeenCalledTimes(1));
+ await vi.waitFor(()=>expect(s.outcomes.at(-1)?.state).toBe('rejected'));
+ expect(finish).not.toHaveBeenCalled();expect(s.offline.sent).toHaveLength(0);
+ release();await s.app.idle();expect(finish).toHaveBeenCalledTimes(1);expect(s.offline.sent).toHaveLength(0);
+});
+it('D3 rejects a cancellation response that mutates the prior receipt identity',async()=>{
+ let s:ReturnType<typeof conversationExecutionSetup>;
+ s=conversationExecutionSetup({state:'running'},async()=>{s.receipt.workspaceJid='web:different';return {...s.receipt,execution:{state:'cancelled'}};});
+ const reply=await s.dispatch('d3-cancel-mutated','取消对话 '+s.receipt.receiptId);
+ expect(reply).toContain('取消结果待核实');expect(reply).not.toContain('已取消');expect(s.counts().reports).toBe(0);
+});
 it('gives a deterministic lookup hint for an unconfirmed Native submit without retrying it',async()=>{
  const s=setup();s.app.close();let submits=0;
  const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{async readRoleWorkspace(){return {state:'ready' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',ownerAccountId:'a',storeId:'store-b',role:'marketing' as const};},async prepareRoleWorkspace(){throw Error('unexpected_create');}},intake:{async readReceipt(){return undefined;},async submitMessage(input){submits++;return {...input.target,receiptId:input.receiptId,messageId:input.originMessageId,fingerprint:input.fingerprint,state:'accepted' as const,acceptedAt:''};}}}}))});cleanup.push(()=>app.close());s.offline.authenticate();

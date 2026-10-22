@@ -10,6 +10,7 @@ import {applyProjectResidueOverlay} from './project-residue-overlay.mjs';
 import {applyQueueRecoveryOverlay} from './queue-recovery-overlay.mjs';
 import {extractOwnedWorkspaceService,extractOwnedProfileService,addOwnedWorkspaceClaims} from './role-workspace-overlay.mjs';
 import {addBotConversationReceipts} from './conversation-overlay.mjs';
+import {applyConversationExecution} from './conversation-execution-overlay.mjs';
 
 const digest=value=>createHash('sha256').update(value).digest('hex');
 export const fullHostSourceIdentity='8611519397c78b1f5d9591ae18ea2c5d1c399aab3d63b9ea5311ebd8c18b0bad';
@@ -26,7 +27,9 @@ function replaceOnce(source,before,after){if(source.split(before).length!==2)thr
 function declaration(source,name){const parsed=ts.createSourceFile('db.ts',source,ts.ScriptTarget.Latest,true);const nodes=parsed.statements.filter(node=>ts.isFunctionDeclaration(node)&&node.name?.text===name);if(nodes.length!==1)throw Error('FULL_HOST_DECLARATION_CHANGED: '+name);return source.slice(nodes[0].getStart(parsed),nodes[0].end);}
 
 /** Build strings only; never evaluate original config/index/DB, or write N/O. */
-export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversationIntake=false}={}){
+export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversationIntake=false,conversationExecution=false}={}){
+ if(conversationExecution && !conversationIntake)throw Error('D3_INTAKE_REQUIRED');
+ if(typeof conversationExecution!=='boolean')throw Error('D3_INVALID_SCOPE');
  if(typeof conversationIntake!=='boolean')throw Error('FULL_HOST_INVALID_CONVERSATION_SCOPE');
  const native=tree(nativeRoot,name=>name.endsWith('.ts')&&!/\.(test|spec)\.ts$/.test(name));
  const overlay=tree(overlayRoot,name=>/\.(ts|mjs|fragment)$/.test(name)&&!name.endsWith('.d.mts'));
@@ -79,7 +82,7 @@ export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversati
   if(rewritten.includes(privateRoot)||rewritten.includes('../../../full-instance/stage/app/src/'))throw Error('FULL_HOST_PRIVATE_IMPORT_REMAINS: '+name+' '+rewritten.slice(rewritten.indexOf(privateRoot)-80,rewritten.indexOf(privateRoot)+180));
   files.set(name,rewritten);
  }
- const adapted=applyRecoveryInspectionOverlay(files);
+ let adapted=applyRecoveryInspectionOverlay(files);
  adapted.set('group-queue.ts',applyQueueRecoveryOverlay(adapted.get('group-queue.ts')));
  adapted.set('appointment-boot-inventory.ts',applyProjectResidueOverlay(adapted.get('appointment-boot-inventory.ts')));
  adapted.set('recovery-inspection.ts',fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)),'recovery-inspection.ts'),'utf8'));
@@ -87,5 +90,6 @@ export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversati
  adapted.set('routes/agent-profiles.ts',extractOwnedProfileService(adapted.get('routes/agent-profiles.ts')));
  const ownedDb=addOwnedWorkspaceClaims(adapted.get('db.ts'));
  adapted.set('db.ts',conversationIntake?addBotConversationReceipts(ownedDb):ownedDb);
- return {files:adapted,audit:{nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationIntake,conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'current-admin read-only diagnostics; no restore permit',projectConfigurationCoverage:'original descriptor scanner extended to project .env/config; all original blockers retained',scope:conversationIntake?'isolated D2 original-service candidate only; index/main not executed or bound; T7 scanner retains unknown-table blocker':'actual original index main, complete O host/queue/Web/DB stack plus exact T7 DB/scheduler and recovery inspection; no inventory completion bypass'}};
+ if(conversationExecution)adapted=applyConversationExecution(adapted,native);
+ return {files:adapted,audit:{conversationExecution,isolatedExecutionScope:conversationExecution?'N original index closure and GroupQueue; deterministic terminal runner; O complete-host not exercised':undefined,nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationIntake,conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'current-admin read-only diagnostics; no restore permit',projectConfigurationCoverage:'original descriptor scanner extended to project .env/config; all original blockers retained',scope:conversationExecution?'isolated D3 N original queue/index processGroupMessages/runAgent/fallback with synthetic terminal runner; main and O complete-host not executed':conversationIntake?'isolated D2 original-service candidate only; index/main not executed or bound; T7 scanner retains unknown-table blocker':'actual original index main, complete O host/queue/Web/DB stack plus exact T7 DB/scheduler and recovery inspection; no inventory completion bypass'}};
 }

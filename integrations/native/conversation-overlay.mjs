@@ -91,11 +91,13 @@ export function submitBotConversationMessage(input:BotConversationNativeSubmit):
 }
 
 /** Isolated Native boundary; the caller's authority callback encloses the synchronous DB commit. */
-export function createBotConversationNativePort({mode,gate,native,readActor}){
+export function createBotConversationNativePort({mode,gate,native,readActor,execution}){
  if(mode!=='isolated-synthetic'||!gate||!native||typeof readActor!=='function'||
    typeof gate.isPaused!=='function'||typeof gate.beginWrite!=='function'||typeof gate.finishWrite!=='function'||
    typeof native.readBotConversationReceipt!=='function'||typeof native.submitBotConversationMessage!=='function')
    throw Error('CONVERSATION_BINDING_INCOMPLETE');
+ if(execution&&(typeof execution.enqueue!=='function'||typeof execution.cancel!=='function'||typeof native.readConversationExecution!=='function'))throw Error('CONVERSATION_EXECUTION_BINDING_INCOMPLETE');
+ const dispatch=execution?Object.freeze({...execution}):undefined;
  const policy=Object.freeze({...gate}),source=Object.freeze({...native}),trustedReadActor=readActor;
  function snapshot(input){
   const actor=Object.freeze({...input.actor}),roles=Object.freeze([...input.roles]);
@@ -121,7 +123,7 @@ export function createBotConversationNativePort({mode,gate,native,readActor}){
   if(actorFields.some(field=>stored.actor?.[field]!==input.actor[field])||
     !input.roles.includes(stored.role)||stored.receiptId!==input.receiptId)throw Error('CONVERSATION_RECEIPT_DENIED');
   const {actor:_actor,originMessageId:_origin,textHash:_hash,...receipt}=stored;
-  return receipt;
+  return {...receipt,...(dispatch?{execution:source.readConversationExecution(stored.receiptId)}:{})};
  }
  function checkTarget(input){
   const t=input.target,a=input.actor;
@@ -155,6 +157,16 @@ export function createBotConversationNativePort({mode,gate,native,readActor}){
     });
     return result;
   });},
+  ...(dispatch?{cancelReceipt(raw){const input=snapshot(raw);return guarded(input,async()=>{
+    await current(input);owner(input.actor);
+    return input.withCurrent(()=>{
+      if(!budget(input.scope)||policy.isPaused())throw Error('CONVERSATION_BUDGET_EXPIRED');
+      owner(input.actor);
+      const stored=source.readBotConversationReceipt(input.receiptId);checkReceipt(input,stored);
+      if(!stored)return undefined;
+      dispatch.cancel(input.receiptId);return checkReceipt(input,source.readBotConversationReceipt(input.receiptId));
+    });
+  });}}:{}),
   submitMessage(raw){const input=snapshot(raw);return guarded(input,async()=>{
     await current(input);
     return input.withCurrent(()=>{
@@ -168,8 +180,10 @@ export function createBotConversationNativePort({mode,gate,native,readActor}){
         return checkReceipt(input,existing);
       }
       checkTarget(input);
-      return source.submitBotConversationMessage({receiptId:input.receiptId,originMessageId:input.originMessageId,
+      const saved=source.submitBotConversationMessage({receiptId:input.receiptId,originMessageId:input.originMessageId,
         fingerprint:input.fingerprint,text:input.text,actor:{...input.actor},target:{...input.target}});
+      dispatch?.enqueue(saved.receiptId);
+      return checkReceipt(input,source.readBotConversationReceipt(saved.receiptId));
     });
   });},
  });
