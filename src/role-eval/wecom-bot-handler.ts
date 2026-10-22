@@ -18,7 +18,7 @@ export interface BotReportOptions {
  /** Already authenticated SDK callback snapshot, never an HTTP/client payload. Synchronous and bounded by caller. */
  readEvent():unknown;now?:()=>Date;
  /** Trusted synchronous reservation; a persisted file result can short-circuit regeneration on replay. */
- beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):BotReportResult|void;
+ beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):{replayState:'none'|'reserved'|'completed-report'|'completed-nonreport';cached?:BotReportResult}|void;
 }
 export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file'|'task';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;taskId?:string;taskStatus?:string;reply:BotReplyPlan;}
 export interface BotReplyExecution {context:WecomBotContext;event:BotEvent;actor:StaffContext;result:BotReportResult;}
@@ -55,8 +55,9 @@ export function createBotReportHandler(options:BotReportOptions){
   if(event.botId!==context.channel.botId||event.memberId!==context.channel.memberId||event.corpId!==undefined&&event.corpId!==context.channel.corpId||scope.tenant!==context.identity.tenantId||scope.store!==context.identity.storeId)throw Error('access_denied');
   const actor=resolveActor(context);
   // Reserve the original reply fingerprint before a role route may persist a selection or call Native.
-  const reservedReply=conversations?await authority.withCurrent(context,checkActive=>{const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();return replay?structuredClone(replay):undefined;}):undefined;
-  const conversationResult=await conversations?.route(context,event,input);
+  const reservation=conversations?await authority.withCurrent(context,checkActive=>{const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();return replay?structuredClone(replay):undefined;}):undefined;
+  const reservedReply=reservation?.cached;
+  const conversationResult=await conversations?.route(context,event,input,reservation?.replayState??'none');
   if(taskCommand&&!context.roles.includes(taskCommand.role)||!taskCommand&&!conversationResult&&!context.roles.includes('manager')||conversationResult?.reportText&&!context.roles.includes('manager'))throw Error('access_denied');
   const plan=(status:BotReportResult['status'],content:string,report?:StaffReport,card=false):BotReportResult=>({status,...(report?{reportId:report.id}:{}),reply:{reqId:event.reqId,body:{msgtype:card?'stream_with_template_card':'stream',stream:{id:hash('report-reply|'+event.reqId),finish:true,content},...(card&&report?{template_card:{card_type:'button_interaction' as const,main_title:{title:'核对本人报数'},task_id:'report-'+report.id+'-'+hash(JSON.stringify([context.channel.corpId,event.botId,event.memberId,event.messageId,event.reqId])).slice(0,32),button_list:[{text:'确认入账',key:'confirm:'+report.hash,style:1 as const}]}}:{})}}});
   const view=(r:StaffReport):BotReportResult=>{
@@ -78,7 +79,7 @@ export function createBotReportHandler(options:BotReportOptions){
   try{
    result=await authority.withCurrent(context,checkActive=>{
     if(reservedReply)return structuredClone(reservedReply);
-    if(!conversations){const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay)return structuredClone(replay);}
+    if(!conversations){const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay?.cached)return structuredClone(replay.cached);}
     if(conversationResult?.reply)return plan('needs-input',conversationResult.reply);
     if(taskCommand)return plan('needs-input','正在核实任务。');
     if(event.action.kind==='confirm'){

@@ -187,7 +187,7 @@ export class ManagerStore {
   return report;
  }
  private saveBotReply(intent:StoredBotReply){this.db.prepare('UPDATE bot_reply_intents SET body=? WHERE id=?').run(JSON.stringify(intent),intent.id);}
- reserveBotReply(actor:StaffContext,input:BotReplyReservation,checkActive?:()=>void):void {
+ reserveBotReply(actor:StaffContext,input:BotReplyReservation,checkActive?:()=>void):boolean {
   const owner={...actor},s=scope(owner),reservation=replyReservation(input);
   this.db.exec('BEGIN IMMEDIATE');try{
    checkActive?.();
@@ -199,7 +199,7 @@ export class ManagerStore {
    // It fixes provenance before business work and cannot be dispatched.
    if(!existing){const next:ReservedBotReply={phase:'reserved',id:reservation.id,fingerprint:reservation.fingerprint,target:reservation.target,actor:owner,reply:{reqId:reservation.reqId}};this.db.prepare('INSERT INTO bot_reply_intents VALUES (?,?,?,?)').run(next.id,s,owner.employeeId,JSON.stringify(next));}
    else if(reserved(existing)&&existing.reply.reqId!==reservation.reqId)this.saveBotReply({...existing,reply:{reqId:reservation.reqId}});
-   checkActive?.();this.db.exec('COMMIT');
+   checkActive?.();this.db.exec('COMMIT');return !!existing;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  prepareBotReply(actor:StaffContext,input:BotReplySeed,checkActive?:()=>void):BotReplyIntent {

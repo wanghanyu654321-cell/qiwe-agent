@@ -24,7 +24,16 @@ export interface BotRoleWorkspacePort {
  readRoleWorkspace(input:BotRoleWorkspaceInput):Promise<BotRoleWorkspaceRead>;
  prepareRoleWorkspace(input:BotRoleWorkspaceInput):Promise<Exclude<BotRoleWorkspaceRead,{state:'missing'}>>;
 }
-export interface BotConversationsOptions {store:BotTaskStore;native:BotRoleWorkspacePort;authority:ReturnType<typeof createWecomBotContext>}
+export interface BotConversationReceipt {receiptId:string;messageId:string;acceptedAt:string;state:'accepted';role:WorkbenchRole;workspaceJid:string;profileId:string;selectionId:string;fingerprint:string}
+export interface BotConversationReadInput {
+ actor:BotConversationActor;roles:readonly WorkbenchRole[];receiptId:string;scope:BotContextRequest;
+ assertCurrent():Promise<void>;withCurrent<T>(work:()=>T extends PromiseLike<unknown>?never:T):Promise<T>;
+}
+export interface BotConversationSubmitInput extends BotConversationReadInput {
+ originMessageId:string;fingerprint:string;text:string;target:{workspaceJid:string;profileId:string;role:WorkbenchRole;selectionId:string};
+}
+export interface BotConversationIntakePort {readReceipt(input:BotConversationReadInput):Promise<BotConversationReceipt|undefined>;submitMessage(input:BotConversationSubmitInput):Promise<BotConversationReceipt>}
+export interface BotConversationsOptions {store:BotTaskStore;native:BotRoleWorkspacePort;intake?:BotConversationIntakePort;authority:ReturnType<typeof createWecomBotContext>}
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function bounded<T>(scope:BotContextRequest,physical:Promise<T>):Promise<T>{
  return new Promise<T>((resolve,reject)=>{
@@ -37,14 +46,30 @@ function bounded<T>(scope:BotContextRequest,physical:Promise<T>):Promise<T>{
   physical.then(value=>finish(undefined,value),error=>finish(error instanceof Error?error:Error('authority_unavailable')));
  });
 }
-export function createBotConversations({store,native,authority}:BotConversationsOptions){
+export function createBotConversations({store,native,intake,authority}:BotConversationsOptions){
  const reconcileHint='重新发送选岗命令可核实准备结果；不会重复创建。如仍无法核实，请联系管理员。';
  const actor=(context:WecomBotContext):BotConversationActor=>({tenantId:context.identity.tenantId,storeId:context.identity.storeId,accountId:context.identity.accountId,corpId:context.channel.corpId,botId:context.channel.botId,memberId:context.channel.memberId,bindingVersion:context.channel.bindingVersion,grantVersion:context.identity.grantVersion});
  const event=(context:WecomBotContext,source:BotEvent,role:WorkbenchRole):BotConversationEvent=>({actor:actor(context),messageId:source.messageId,fingerprint:hash([source.botId,source.memberId,source.messageId,source.createTime??null,source.action]),role});
  const name=(role:WorkbenchRole)=>Object.entries(roles).find(([key,value])=>value===role&&/[^\x00-\x7f]/.test(key))?.[0]??role;
- return {async route(context:WecomBotContext,source:BotEvent,scope:BotContextRequest):Promise<{reply?:string;reportText?:string}|undefined>{
+ const receiptId=(context:WecomBotContext,messageId:string)=>hash([context.channel.corpId,context.channel.botId,context.channel.memberId,messageId]);
+ const scopeCopy=(scope:BotContextRequest):BotContextRequest=>Object.freeze({signal:scope.signal,deadline:scope.deadline,correlationId:scope.correlationId});
+ const readInput=(context:WecomBotContext,scope:BotContextRequest,id:string):BotConversationReadInput=>Object.freeze({actor:Object.freeze({...actor(context)}),roles:Object.freeze([...context.roles]),receiptId:id,scope:scopeCopy(scope),assertCurrent:()=>authority.assertCurrent(context),withCurrent:<T>(work:()=>T extends PromiseLike<unknown>?never:T)=>authority.withCurrent(context,work)});
+ const validReceipt=(value:BotConversationReceipt|undefined,id:string)=>value&&value.state==='accepted'&&value.receiptId===id&&/^[a-f0-9]{64}$/.test(value.fingerprint)&&typeof value.messageId==='string'&&!!value.messageId&&!!value.acceptedAt&&!!value.workspaceJid&&!!value.profileId&&!!value.selectionId&&Object.values(roles).includes(value.role);
+ const receiptView=(value:BotConversationReceipt)=>`已保存需求，受理编号：${value.receiptId}。原${name(value.role)}岗位；查询对话 ${value.receiptId}。执行尚未接通，本次未生成答案。`;
+ return {async route(context:WecomBotContext,source:BotEvent,scope:BotContextRequest,replayState:'none'|'reserved'|'completed-report'|'completed-nonreport'='none'):Promise<{reply?:string;reportText?:string}|undefined>{
   if(source.action.kind!=='text')return undefined;
   const text=source.action.text.trim(),command=parseBotConversationCommand(text),current=store.currentConversation(actor(context));
+  if(text.startsWith('查询对话')){
+   const match=/^查询对话\s+([a-f0-9]{64})$/.exec(text);
+   if(!match)return {reply:'请发送“查询对话 受理编号”，使用原消息中的完整编号。'};
+   if(!intake)return {reply:'对话受理尚未接通，无法查询对话编号。'};
+   const input=readInput(context,scope,match[1]!);await authority.assertCurrent(context);
+   const receipt=await bounded(scope,intake.readReceipt(input));await authority.assertCurrent(context);
+   if(!receipt)return {reply:'未找到你有权访问的对话受理记录，请核对受理编号。'};
+   if(!validReceipt(receipt,input.receiptId))throw Error('authority_unavailable');
+   if(!context.roles.includes(receipt.role))throw Error('access_denied');
+   return {reply:receiptView(receipt)};
+  }
   if(command?.kind==='invalid')return {reply:'请发送：岗位 内容营销（或其他已开通岗位）；退出岗位对话。'};
   if(command?.kind==='status')return {reply:current?.state==='stale'?'原岗位选择已因授权或绑定变化失效，请重新选择获准岗位或退出。':current?.state==='ready'?`当前${name(current.role)}岗位对话，门店${current.actor.storeId}。`:current?`岗位空间准备结果待核实。${reconcileHint}`:'当前未选择岗位对话。'};
   if(command?.kind==='exit'){
@@ -55,7 +80,7 @@ export function createBotConversations({store,native,authority}:BotConversations
    if(!context.roles.includes(command.role))throw Error('access_denied');
    const seed=event(context,source,command.role),reservation=await authority.withCurrent(context,guard=>store.beginConversationSelection(seed,guard));
    if(store.currentConversation(actor(context))?.eventId!==reservation.eventId)return {reply:'这条选岗消息已由更新的岗位选择覆盖；请以当前岗位为准。'};
-   if(reservation.state==='ready')return {reply:`已选择${name(command.role)}岗位对话，当前门店${context.identity.storeId}。后续自然语言对话执行尚未接通。`};
+   if(reservation.state==='ready')return {reply:`已选择${name(command.role)}岗位对话，当前门店${context.identity.storeId}。${intake?'可保存需求并查询受理编号；对话执行尚未接通。':'后续自然语言对话执行尚未接通。'}`};
    const trustedActor=Object.freeze({...actor(context),role:command.role}),input:BotRoleWorkspaceInput={actor:Object.freeze({...trustedActor}),scope:Object.freeze({signal:scope.signal,deadline:scope.deadline,correlationId:scope.correlationId}),idempotencyKey:hash([trustedActor.tenantId,trustedActor.accountId,trustedActor.storeId,command.role]),assertCurrent:()=>authority.assertCurrent(context),withCurrent:work=>authority.withCurrent(context,work)};
    Object.freeze(input);
    await authority.assertCurrent(context);
@@ -72,11 +97,33 @@ export function createBotConversations({store,native,authority}:BotConversations
    }
    if(result.ownerAccountId!==trustedActor.accountId||result.storeId!==trustedActor.storeId||result.role!==command.role||!/^web:(?!home(?:-|:|$))[^\s#]{1,196}$/.test(result.workspaceJid)||!result.profileId)throw Error('access_denied');
    const saved=await authority.withCurrent(context,guard=>store.finishConversationSelection(seed,{workspaceJid:result.workspaceJid,profileId:result.profileId},guard));
-   return {reply:saved.state==='ready'?`已选择${name(command.role)}岗位对话，当前门店${context.identity.storeId}。后续自然语言对话执行尚未接通。`:'这条选岗消息已由更新的岗位选择覆盖；请以当前岗位为准。'};
+   return {reply:saved.state==='ready'?`已选择${name(command.role)}岗位对话，当前门店${context.identity.storeId}。${intake?'可保存需求并查询受理编号；对话执行尚未接通。':'后续自然语言对话执行尚未接通。'}`:'这条选岗消息已由更新的岗位选择覆盖；请以当前岗位为准。'};
   }
   const report=/^报数\s+([\s\S]+)$/.exec(text);
   if(report){if(!context.roles.includes('manager'))throw Error('access_denied');return {reportText:report[1]!.trim()};}
   if(parseBotTaskCommand(text)||parseManagerCommand(text)||/^(查询|导出Excel|经营汇总|查询汇总|查询文件)(?:\s|$)/.test(text))return undefined;
+  if(intake){
+   const id=receiptId(context,source.messageId),input=readInput(context,scope,id),fingerprint=hash([source.botId,source.memberId,source.messageId,source.createTime??null,source.action]);
+   await authority.assertCurrent(context);
+   let existing:BotConversationReceipt|undefined;
+   try{existing=await bounded(scope,intake.readReceipt(input));}catch(error){await authority.assertCurrent(context);throw error;}
+   await authority.assertCurrent(context);
+   if(existing){if(!validReceipt(existing,id)||existing.fingerprint!==fingerprint)throw Error('bot_reply_conflict');if(!context.roles.includes(existing.role))throw Error('access_denied');return {reply:receiptView(existing)};}
+   // Only a completed report may return to the original reporting route.
+   // Another completed reply might be an uncertain Native submit.
+   if(replayState==='completed-report')return undefined;
+   if(replayState==='reserved'||replayState==='completed-nonreport')return {reply:`受理结果待核实。请稍后发送：查询对话 ${id}；请勿重复提交。`};
+   if(current?.state==='ready'){
+    if(!context.roles.includes(current.role))throw Error('access_changed');
+    const target=Object.freeze({workspaceJid:current.workspaceJid!,profileId:current.profileId!,role:current.role,selectionId:current.eventId});
+    const submitInput:BotConversationSubmitInput=Object.freeze({...input,originMessageId:source.messageId,fingerprint,text,target});
+    let saved:BotConversationReceipt;
+    try{saved=await bounded(scope,intake.submitMessage(submitInput));}catch(error){await authority.assertCurrent(context);if(error instanceof Error&&['authority_cancelled','authority_timeout','access_changed','access_denied'].includes(error.message))throw error;return {reply:`受理结果待核实。请稍后发送：查询对话 ${id}；请勿重复提交。`};}
+    await authority.assertCurrent(context);
+    if(!validReceipt(saved,id)||saved.fingerprint!==fingerprint||saved.role!==target.role||saved.workspaceJid!==target.workspaceJid||saved.profileId!==target.profileId||saved.selectionId!==target.selectionId)return {reply:`受理结果待核实。请稍后发送：查询对话 ${id}；请勿重复提交。`};
+    return {reply:receiptView(saved)};
+   }
+  }
   if(current?.state==='stale')throw Error('access_changed');
   if(!current)return undefined;
   if(current.state!=='ready')return {reply:`岗位空间正在准备或结果待核实。${reconcileHint}`};

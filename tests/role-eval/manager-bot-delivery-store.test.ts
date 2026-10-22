@@ -48,9 +48,10 @@ async function race(file:string,operations:({kind:'event';id:string}|{kind:'retu
 
 describe('business-before-reply event reservation',()=>{
  it('fixes the first fingerprint without exposing or claiming an unfinished plan',()=>{
-  const {s,file}=open(),input=reservation();s.reserveBotReply(actor,input);
+  const {s,file}=open(),input=reservation();expect(s.reserveBotReply(actor,input)).toBe(false);
   expect(s.getBotReply(actor,input.id)).toBeUndefined();expect(s.claimBotReply(actor,input.id)).toBeUndefined();
   const second=open(file).s;
+  expect(second.reserveBotReply(actor,input)).toBe(true);
   expect(()=>second.reserveBotReply(actor,{...input,fingerprint:'b'.repeat(64)})).toThrow('bot_reply_conflict');
   expect(()=>second.prepareBotReply(actor,{...seed(),fingerprint:'b'.repeat(64)})).toThrow('bot_reply_conflict');
   expect(s.getBotReply(actor,input.id)).toBeUndefined();expect(s.list(actor)).toEqual([]);
