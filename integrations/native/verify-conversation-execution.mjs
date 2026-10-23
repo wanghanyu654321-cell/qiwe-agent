@@ -11,7 +11,7 @@ import {verifyOriginalLinuxSqlite} from './linux-runtime.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url)),project=path.resolve(here,'../..');
 const [source,overlay,driver]=process.argv.slice(2);
-const migration=process.env.QIWE_CONVERSATION_MIGRATION==='1';
+const migration=process.env.QIWE_CONVERSATION_MIGRATION==='1',migration71=process.env.QIWE_D5_MIGRATION71==='1';
 if(![source,overlay].every(value=>value&&path.isAbsolute(value))||
   (process.platform==='win32'&&(!driver||!path.isAbsolute(driver)))||
   (driver&&(!path.isAbsolute(driver)||process.platform!=='win32')))
@@ -51,7 +51,7 @@ try{
   if(entry.isDirectory()||entry.isSymbolicLink())fs.symlinkSync(from,to,process.platform==='win32'?'junction':'dir');else fs.copyFileSync(from,to);
  }
  if(driver)fs.symlinkSync(fs.realpathSync(driver),path.join(target,'better-sqlite3'),process.platform==='win32'?'junction':'dir');
- const env={PATH:process.env.PATH,SystemRoot:process.env.SystemRoot,TEMP:root,TMP:root,HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),NODE_ENV:'test',TZ:'UTC',NO_COLOR:'1',WEB_PORT:'0',WEB_SESSION_SECRET:'synthetic-conversation-secret-fixed-for-isolation-only',PLUGIN_AUTO_SCAN:'false',MINICLAW_EXECUTION_BOUNDARY:'member-container-only',MINICLAW_WEB_URL:'http://127.0.0.1:19777'};
+ const env={PATH:process.env.PATH,SystemRoot:process.env.SystemRoot,TEMP:root,TMP:root,HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),QIWE_D5_MIGRATION71:migration71?'1':'0',NODE_ENV:'test',TZ:'UTC',NO_COLOR:'1',WEB_PORT:'0',WEB_SESSION_SECRET:'synthetic-conversation-secret-fixed-for-isolation-only',PLUGIN_AUTO_SCAN:'false',MINICLAW_EXECUTION_BOUNDARY:'member-container-only',MINICLAW_WEB_URL:'http://127.0.0.1:19777'};
  fs.mkdirSync(env.HOME);
  fs.copyFileSync(path.resolve(source,'../tsconfig.json'),path.join(root,'tsconfig.json'));
  const check=spawnSync(process.execPath,[path.join(project,'node_modules/typescript/bin/tsc'),'--noEmit','--incremental','false'],{cwd:root,env,encoding:'utf8',timeout:60000});
@@ -73,7 +73,7 @@ try{
   if(result.status!==0)throw Error('CONVERSATION_'+phase.toUpperCase()+'_FAILED');
  }
  if(!phases.every(p=>p.processEvidence)||phases[0].processEvidence.processId===phases[1].processEvidence.processId)throw Error('CONVERSATION_DISTINCT_PROCESS_RESTART_NOT_PROVEN');
- const audit={runId,status:'passed',migration,migrationSeedHashes:migrationSeed?.audit.composedHashes,conversationExecution:candidate.audit.conversationExecution,composedHashes:candidate.audit.composedHashes,executionSourceHashes:Object.fromEntries(['conversation-execution-overlay.mjs','conversation-execution-index.fragment','conversation-execution-db.fragment','verify-conversation-execution.mjs'].map(name=>[name,digest(fs.readFileSync(path.join(here,name)))])),conversationIntake:candidate.audit.conversationIntake,scope:candidate.audit.scope,typecheck:{status:check.status},sourceTree:candidate.audit.nativeTree,overlayTree:candidate.audit.overlayTree,dbHash:digest(candidate.files.get('db.ts')),testHash:digest(fs.readFileSync(path.join(root,'tests/conversation-execution-candidate.test.mts'))),overlayHash:digest(fs.readFileSync(path.join(root,'test-support/conversation-overlay.mjs'))),publicHashes,phases};
+ const audit={runId,status:'passed',migration,migration71,migrationSeedHashes:migrationSeed?.audit.composedHashes,conversationExecution:candidate.audit.conversationExecution,composedHashes:candidate.audit.composedHashes,executionSourceHashes:Object.fromEntries(['conversation-execution-overlay.mjs','conversation-execution-index.fragment','conversation-execution-db.fragment','verify-conversation-execution.mjs'].map(name=>[name,digest(fs.readFileSync(path.join(here,name)))])),conversationIntake:candidate.audit.conversationIntake,scope:candidate.audit.scope,typecheck:{status:check.status},sourceTree:candidate.audit.nativeTree,overlayTree:candidate.audit.overlayTree,dbHash:digest(candidate.files.get('db.ts')),testHash:digest(fs.readFileSync(path.join(root,'tests/conversation-execution-candidate.test.mts'))),overlayHash:digest(fs.readFileSync(path.join(root,'test-support/conversation-overlay.mjs'))),publicHashes,phases};
  fs.writeFileSync(path.join(evidenceRoot,'audit.json'),JSON.stringify(audit,null,2));
  console.log('CONVERSATION_AUDIT',JSON.stringify({runId,evidenceRoot,...audit}));
 }finally{

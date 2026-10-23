@@ -72,6 +72,7 @@ it('migrates actual D2 accepted receipt/message into recoverable queued executio
  expect(unchanged.prepare("SELECT value FROM router_state WHERE key='schema_version'").get()).toEqual({value:'70'});
  expect(unchanged.prepare("SELECT name FROM sqlite_master WHERE name='wecom_conversation_execution'").get()).toBeUndefined();unchanged.close();delete process.env.MINICLAW_MIGRATION_BACKUP_DIR;
  db.initDatabase();initialized=true;
+ expect(db.readConversationResults(first.sdkReceipt.receiptId)).toEqual([]);
  expect(db.readBotConversationReceipt(first.sdkReceipt.receiptId)).toMatchObject(first.sdkReceipt);
  expect(db.readConversationExecution(first.sdkReceipt.receiptId)).toEqual({state:'queued'});
  let permitted=false;db.bindConversationAuthority(()=>permitted);
@@ -83,6 +84,6 @@ it('migrates actual D2 accepted receipt/message into recoverable queued executio
  const after=new Database(file);
  expect(after.prepare('SELECT * FROM wecom_conversation_receipts WHERE receipt_id=?').get(first.sdkReceipt.receiptId)).toEqual(oldReceipt);
  expect(after.prepare('SELECT * FROM messages WHERE id=?').get(first.sdkReceipt.messageId)).toEqual(oldMessage);after.close();
- expect(fs.readdirSync(path.join(STORE_DIR,'migration-backups')).some(name=>name.startsWith('messages-v70-to-v71-'))).toBe(true);
+ expect(fs.readdirSync(path.join(STORE_DIR,'migration-backups')).some(name=>name.startsWith('messages-v70-to-v72-'))).toBe(true);
  fs.writeFileSync(process.env.QIWE_CONVERSATION_EVIDENCE!,JSON.stringify({phase:'migration',processId:process.pid,priorProcessId:first.processId,receiptId:first.sdkReceipt.receiptId,state:'queued',unauthorizedDispatch:0,authorizedPending:1,originalInputPreserved:true}));
 });

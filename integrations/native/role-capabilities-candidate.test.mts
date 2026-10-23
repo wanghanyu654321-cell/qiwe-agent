@@ -6,6 +6,9 @@ import {setWebDeps} from '../src/web-context.js';
 import {prepareOwnProfiles} from '../test-support/workbench-opening.mjs';
 import {createRoleWorkspaceNativePort} from '../test-support/role-workspace-overlay.mjs';
 import {createBotConversationNativePort} from '../test-support/conversation-overlay.mjs';
+import {createBotConversationDelivery} from '../test-support/wecom-bot-delivery.mjs';
+import {createWecomBotContext} from '../test-support/wecom-bot-context.mjs';
+import {createBotSender} from '../test-support/wecom-bot-sender.mjs';
 import {createWecomBotAssembly} from '../test-support/wecom-bot-assembly.mjs';
 import {createBotSdkAdapter} from '../test-support/wecom-bot-sdk.mjs';
 import {WorkbenchAccessStore} from '../test-support/workbench-access.mjs';
@@ -136,7 +139,8 @@ it.each([
  grants.change('admin',{accountId:actor.accountId,storeId:actor.storeId,roles:['marketing'],active:true,expectedVersion:0,requestKey:'grant'});
  const host=await import('../src/index.js');
  const authorizations:Array<{receiptId:string;allowed:boolean}>=[];
- const execution=host.initializeIsolatedConversationExecution({mode:'isolated-synthetic',authorize:receipt=>{const grant=grants.get(actor.accountId);const allowed=!!receipt&&!!grant?.active&&receipt.actor.accountId===actor.accountId&&receipt.actor.grantVersion===grant.version&&grant.roles.includes(receipt.role);if(receipt)authorizations.push({receiptId:receipt.receiptId,allowed});return allowed;},runner:async(group,input,onProcess,onOutput)=>{
+ let completedDelivery:(ids:string[])=>Promise<void>=async()=>{};const notifications:any[]=[];
+ const execution=host.initializeIsolatedConversationExecution({mode:'isolated-synthetic',onCompleted:ids=>completedDelivery(ids),authorize:receipt=>{const grant=grants.get(actor.accountId);const allowed=!!receipt&&!!grant?.active&&receipt.actor.accountId===actor.accountId&&receipt.actor.grantVersion===grant.version&&grant.roles.includes(receipt.role);if(receipt)authorizations.push({receiptId:receipt.receiptId,allowed});return allowed;},runner:async(group,input,onProcess,onOutput)=>{
   captures.push(structuredClone(input));
   const policy=resolveAgentProfileUserSkillsPolicy(actor.accountId,input.agentProfile);expect(policy.mountUserSkills).toBe(true);
   expect(input.agentProfile.runtimePolicy.skills.ids).toEqual(skillIds);
@@ -159,8 +163,14 @@ it.each([
  const offline=offlineBotSdk(),adapter=createBotSdkAdapter({mode:'isolated-synthetic',client:offline.client});
  const assembly=createWecomBotAssembly({mode:'isolated-synthetic',client:offline.client,botId:actor.botId,corpId:actor.corpId,
  identity:{tenantId:actor.tenantId,stores:[{id:actor.storeId}],roles:['marketing'],store:grants,readBinding:async()=>({botId:actor.botId,corpId:actor.corpId,memberId:actor.memberId,accountId:actor.accountId,active:true,version:1}),readNative:async()=>({user:{id:actor.accountId,role:'member',status:'active',must_change_password:false},workspaceJid:'web:home-'+actor.accountId})},
- businesses:[{scope:{tenant:actor.tenantId,store:actor.storeId,workspace:'web:original'},employees:[{accountId:actor.accountId,employeeId:'synthetic-employee',employeeName:'合成员工'}],ledger,conversations:{store:tasks,native:rolePort,intake:port}}],sender:{sdk:adapter}});
+ businesses:[{scope:{tenant:actor.tenantId,store:actor.storeId,workspace:'web:original'},employees:[{accountId:actor.accountId,employeeId:'synthetic-employee',employeeName:'合成员工'}],ledger,conversations:{store:tasks,native:rolePort,intake:port,deliveryGate:gate}}],sender:{sdk:adapter}});
  const send=async(id:string,text:string)=>{offline.frame({cmd:'aibot_msg_callback',headers:{req_id:id},body:{msgid:id,aibotid:actor.botId,msgtype:'text',chattype:'single',from:{userid:actor.memberId,corpid:actor.corpId},text:{content:text}}});await assembly.idle();};
+ completedDelivery=async ids=>{
+  const authority=createWecomBotContext({mode:'isolated-synthetic',botId:actor.botId,corpId:actor.corpId,tenantId:actor.tenantId,stores:[{id:actor.storeId}],roles:['marketing'],store:grants,readSubject:async()=>({botId:actor.botId,memberId:actor.memberId}),readBinding:async()=>({botId:actor.botId,corpId:actor.corpId,memberId:actor.memberId,accountId:actor.accountId,active:true,version:1}),readNative:async()=>({user:{id:actor.accountId,role:'member',status:'active',must_change_password:false},workspaceJid:'web:home-'+actor.accountId})});
+  const sender=createBotSender({sdk:adapter});
+  try{const service=createBotConversationDelivery({authority,ledger,sender,intake:port,gate,scope:{tenant:actor.tenantId,store:actor.storeId,workspace:'web:original'},employees:[{accountId:actor.accountId,employeeId:'synthetic-employee',employeeName:'合成员工'}]});for(const receiptId of ids)notifications.push({receiptId,...await service.recover({...scope(),deadline:performance.now()+3000,correlationId:'completion-'+receiptId},receiptId)});}
+  finally{sender.close();authority.close();}
+ };
  const id=hash([actor.corpId,actor.botId,actor.memberId,'joint']);
  try{
   offline.authenticate();await send('select','岗位 内容营销');await send('joint','读取批准方案，并给出当前渠道上下文。');
@@ -177,7 +187,12 @@ it.each([
   expect(observed.find((m:any)=>m.toolCallId==='read-approved').content[0].text).toContain('synthetic-approved-v1');
   expect(modelRequests.at(-1).messages.filter((m:any)=>m.role==='toolResult').map((m:any)=>m.toolName)).toEqual(['read','read','read','read','mcp__miniclaw__get_channel_context']);
   expect(db.getMessagesPage(prepared.workspaceJid).find(message=>message.content===result)).toMatchObject({is_from_me:true});
-  await send('lookup','查询对话 '+id);expect(JSON.stringify(offline.sent.at(-1))).toContain('执行已结束');
+  for(let n=0;n<300&&!notifications.some(item=>item.receiptId===id);n++)await new Promise(resolve=>setTimeout(resolve,10));
+  expect(notifications.find(item=>item.receiptId===id)?.deliveries[0].state).toBe('accepted');
+  const frozen=db.readConversationResults(id)[0];expect(frozen.content).toBe(result);expect(frozen.turnId).toBe(captures[0].turnId);
+  const actualNotification=offline.sent.find(frame=>frame.cmd==='aibot_send_msg'&&JSON.stringify(frame).includes(id));
+  expect(actualNotification).toBeDefined();expect(actualNotification?.body.chatid).toBe(actor.memberId);expect((actualNotification?.body.markdown as any)?.content).toContain(result);
+  await send('lookup','查询对话 '+id);expect(JSON.stringify(offline.sent.at(-1))).toContain('对话答案');expect(JSON.stringify(offline.sent.at(-1))).toContain('版本1');
   for(let n=0;n<200&&execution.queue.hasDirectActiveRunner(prepared.workspaceJid);n++)await new Promise(resolve=>setTimeout(resolve,10));
   await send('wrong-role','岗位 前台办理');expect(captures).toHaveLength(1);
   const revised=db.updateAgentProfile(prepared.profileId,actor.accountId,{identityPrompt:'合成岗位修订：仍只使用已审资料。'});expect(revised?.version).toBe(2);
@@ -205,6 +220,6 @@ it.each([
   expect(captures).toHaveLength(3);
   expect(modelRequests).toHaveLength(beforeRevocationModelCalls);
   expect(blocked).toEqual([]);
-  fs.writeFileSync(process.env.QIWE_CONVERSATION_EVIDENCE!,JSON.stringify({processId:process.pid,receipt:db.readConversationExecution(id),revisedReceipt:db.readConversationExecution(revisedId),revokedReceipt:db.readConversationExecution(revokedId),profileId:prepared.profileId,toolNames:['read','mcp__miniclaw__get_channel_context'],result,modelRequests:modelRequests.length,networkCalls:0}));
+  fs.writeFileSync(process.env.QIWE_CONVERSATION_EVIDENCE!,JSON.stringify({processId:process.pid,receipt:db.readConversationExecution(id),revisedReceipt:db.readConversationExecution(revisedId),revokedReceipt:db.readConversationExecution(revokedId),profileId:prepared.profileId,toolNames:['read','mcp__miniclaw__get_channel_context'],result,modelRequests:modelRequests.length,networkCalls:0,frozen:db.readConversationResults(id),notifications}));
  }finally{assembly.close();grants.close();ledger.close();tasks.close();modelSpy.mockRestore();}
 });

@@ -2,18 +2,21 @@
 // paths are intentionally NOT run by this candidate.
 let d3TerminalRunner: typeof runContainerAgent|undefined;
 let d3Bound=false;
+let d5OnCompleted:((ids:string[])=>Promise<void>|void)|undefined;
 const d3Runner:typeof runContainerAgent=async(group,input,onProcess,onOutput,ownerHomeFolder)=>{
  if(!d3TerminalRunner||!input.queryRunId||!input.turnId)throw Error('D3_NOT_BOUND');
- const queryId=input.queryRunId;
+ const queryId=input.queryRunId,initialTurnId=input.turnId;
  let interrupted=false,completed=false;
  try {
   assertConversationBatchCurrent(input.chatJid,queryId);
   const observe=(event:Awaited<ReturnType<typeof runContainerAgent>>)=>{
    for(const supplied of [event.turnId,event.inputTurnId,event.streamEvent?.turnId]){
-    if(supplied!==undefined&&supplied!==input.turnId)throw Error('D3_RUNNER_TURN_MISMATCH');
+    if(supplied!==undefined&&supplied!==initialTurnId)throw Error('D3_RUNNER_TURN_MISMATCH');
    }
-   if(event.inputTurnCompleted){
-    if(event.inputTurnId!==input.turnId)throw Error('D3_RUNNER_TURN_MISMATCH');
+   const unhealthy=event.status==='error'||!!event.providerFailure||event.finalizationReason==='truncated'||event.sourceKind==='compact_partial'||event.sourceKind==='overflow_partial'||(event.pendingBgTasks??0)>0;
+   if(unhealthy||!!event.result&&!event.inputTurnCompleted){completed=false;invalidateConversationProjection(input.chatJid,queryId);}
+   if(event.inputTurnCompleted&&!unhealthy){
+    if(event.inputTurnId!==initialTurnId)throw Error('D3_RUNNER_TURN_MISMATCH');
     completed=true;
    }
   };
@@ -24,7 +27,9 @@ const d3Runner:typeof runContainerAgent=async(group,input,onProcess,onOutput,own
    await onOutput?.(event);
   },ownerHomeFolder);
   observe(output);
-  finishConversationBatch(input.chatJid,queryId,interrupted?'cancelled':output.status==='success'&&completed?'completed':output.status==='error'?'failed':'unknown',output.status==='success'?output.newSessionId:undefined);
+  const frozen=finishConversationBatch(input.chatJid,queryId,interrupted?'cancelled':output.status==='success'&&completed?'completed':output.status==='error'?'failed':'unknown',output.status==='success'?output.newSessionId:undefined);
+  // Delivery failure cannot change the already committed execution result.
+  if(frozen.length&&d5OnCompleted){try{await d5OnCompleted(frozen);}catch(error){logger.warn({err:error},'Conversation notification deferred');}}
   return output;
  }catch(error){finishConversationBatch(input.chatJid,queryId,'unknown');throw error;}
 };
@@ -35,10 +40,11 @@ const runConversationAgent:typeof runAgent=async(...args)=>{
 };
 export function initializeIsolatedConversationExecution(options:{
  mode:'isolated-synthetic';runner:typeof runContainerAgent;
+ onCompleted?:(receiptIds:string[])=>Promise<void>|void;
  authorize:(receipt:ReturnType<typeof readBotConversationReceipt>)=>boolean;
 }) {
  if(d3Bound||options.mode!=='isolated-synthetic'||typeof options.runner!=='function'||typeof options.authorize!=='function')throw Error('D3_BINDING_INVALID');
- d3Bound=true;d3TerminalRunner=options.runner;
+ d3Bound=true;d3TerminalRunner=options.runner;d5OnCompleted=options.onCompleted;
  bindConversationAuthority(options.authorize);
  loadState();
  queue.setProcessMessagesFn(processGroupMessages);

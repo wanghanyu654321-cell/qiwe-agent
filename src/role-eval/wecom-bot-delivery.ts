@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {createBotReportHandler,type BotReportOptions,type BotReportResult} from './wecom-bot-handler.js';
-import type {BotContextRequest} from './wecom-bot-context.js';
+import type {BotContextRequest,BotReadScope} from './wecom-bot-context.js';
 import type {ReportDelivery} from './manager-store.js';
 import type {createBotSender} from './wecom-bot-sender.js';
 import {parseManagerCommand} from './manager-commands.js';
@@ -38,7 +38,7 @@ export function createBotDelivery(options:BotReportOptions&{sender:ReturnType<ty
    await authority.withCurrent(context,guard=>{checkOpen();return ledger.prepareBotReply(actor,seed,guard);});
    const claim=await authority.withCurrent(context,guard=>{checkOpen();return ledger.claimBotReply(actor,seed.id,guard);});
    if(!claim){const delivery=ledger.getBotReply(actor,seed.id)?.delivery??null,reportDelivery=readReportDelivery();return {result,delivery,...(reportDelivery?{reportDelivery}:{}),suppressed:true};}
-   const preflight=async()=>{checkOpen();await authority.assertCurrent(context);};
+   const preflight=async(sendScope:BotReadScope=input)=>{checkOpen();await authority.assertCurrent(context);await value.beforeReply?.(sendScope);};
    let outcome;
    if(claim.attachment){
     const descriptor=claim.attachment,owner={accountId:context.identity.accountId,actor};
@@ -69,5 +69,83 @@ export function createBotDelivery(options:BotReportOptions&{sender:ReturnType<ty
   });
  },
  close(){closed=true;sender.close();}
+ };
+}
+
+import {conversationResultPages,type BotConversationIntakePort,type BotConversationReadInput,type BotConversationReceipt,type BotConversationResult} from './wecom-bot-conversations.js';
+import type {createWecomBotContext,WecomBotContext} from './wecom-bot-context.js';
+import type {ManagerStore,StaffContext} from './manager-store.js';
+/** Caller-driven, receipt-scoped delivery; no retained request or autonomous loop. */
+export function createBotConversationDelivery(options:{
+ authority:ReturnType<typeof createWecomBotContext>;ledger:ManagerStore;sender:ReturnType<typeof createBotSender>;intake:BotConversationIntakePort;
+ scope:{tenant:string;store:string;workspace:string};employees:readonly {accountId:string;employeeId:string;employeeName:string}[];
+ gate:{isPaused():boolean;beginWrite():unknown;finishWrite(ticket:unknown):void};
+}){
+ const {authority,ledger,sender}=options,intake={readReceipt:options.intake.readReceipt.bind(options.intake),readResults:options.intake.readResults?.bind(options.intake)},gate={isPaused:options.gate.isPaused.bind(options.gate),beginWrite:options.gate.beginWrite.bind(options.gate),finishWrite:options.gate.finishWrite.bind(options.gate)};
+ const business=structuredClone(options.scope),employees=structuredClone(options.employees);
+ const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+ function check(request:BotContextRequest){if(gate.isPaused())throw Error('conversation_maintenance');if(request.signal.aborted)throw Error('authority_cancelled');if(!Number.isFinite(request.deadline)||performance.now()>=request.deadline)throw Error('authority_timeout');}
+ const readInput=(context:WecomBotContext,request:BotContextRequest,receiptId:string):BotConversationReadInput=>Object.freeze({actor:Object.freeze({tenantId:context.identity.tenantId,accountId:context.identity.accountId,storeId:context.identity.storeId,...context.channel,grantVersion:context.identity.grantVersion}),roles:Object.freeze([...context.roles]),receiptId,scope:Object.freeze({...request}),assertCurrent:()=>authority.assertCurrent(context),withCurrent:<T>(work:()=>T extends PromiseLike<unknown>?never:T)=>authority.withCurrent(context,work)});
+ function owner(context:WecomBotContext):StaffContext {
+  const employee=employees.find(item=>item.accountId===context.identity.accountId);
+  if(!employee||context.identity.tenantId!==business.tenant||context.identity.storeId!==business.store)throw Error('access_denied');
+  return {...business,employeeId:employee.employeeId,employeeName:employee.employeeName};
+ }
+ async function prepare(context:WecomBotContext,request:BotContextRequest,id:string,afterRevision=0,afterPage=0,track=<T>(promise:Promise<T>)=>promise){
+  check(request);const actor=owner(context),input=readInput(context,request,id);
+  if(!intake.readResults)throw Error('conversation_results_unavailable');
+  await authority.assertCurrent(context);const receipt=structuredClone(await track(intake.readReceipt(input)));await authority.assertCurrent(context);check(request);
+  if(!receipt||receipt.receiptId!==id||!context.roles.includes(receipt.role)||receipt.execution?.state!=='completed')throw Error('conversation_result_not_found');
+  const results=structuredClone(await track(intake.readResults(Object.freeze({...input,afterRevision}))));await authority.assertCurrent(context);check(request);
+  if(results.length>32)throw Error('authority_unavailable');
+  const intents=[];let next:{afterRevision:number;afterPage:number}|undefined;
+  for(const result of results){
+   if(result.receiptId!==id||!Number.isSafeInteger(result.revision)||result.revision<=afterRevision)throw Error('authority_unavailable');
+   const pages=conversationResultPages(result);
+   for(let n=0;n<pages.length;n++){
+    if(result.revision===afterRevision+1&&n<afterPage)continue;
+    if(intents.length===32){next={afterRevision:result.revision-1,afterPage:n};break;}
+    const key=hash(['conversation',id,result.revision,result.digest,context.channel.corpId,context.channel.botId,context.channel.memberId,n+1]);
+    const seed={id:key,fingerprint:hash([id,result.revision,result.digest,n+1,pages.length]),target:{...context.channel,accountId:context.identity.accountId,storeId:context.identity.storeId,workspaceJid:receipt.workspaceJid},conversation:{receiptId:id,revision:result.revision,digest:result.digest,page:n+1,pages:pages.length},reply:{reqId:'conversation-'+key,body:{msgtype:'stream' as const,stream:{id:key,finish:true as const,content:pages[n]!}}}};
+    const intent=await authority.withCurrent(context,guard=>{check(request);return ledger.prepareBotReply(actor,seed,guard);});intents.push({intent,result,receipt});
+   }
+   if(next)break;
+  }
+  return {actor,input,intents,next:next??(results.length===32?{afterRevision:results.at(-1)!.revision,afterPage:0}:undefined)};
+ }
+ async function ticketed<T>(request:BotContextRequest,work:(track:<V>(promise:Promise<V>)=>Promise<V>)=>Promise<T>):Promise<T>{
+  check(request);const ticket=gate.beginWrite();if(ticket===null||ticket===undefined)throw Error('conversation_maintenance');
+  // Keep the gate ticket through actual read settlement, even if caller budget wins.
+  const physicalReads=new Set<Promise<void>>();
+  const track=<V>(promise:Promise<V>):Promise<V>=>{const settled=promise.then(()=>{},()=>{});physicalReads.add(settled);void settled.then(()=>physicalReads.delete(settled));return promise;};
+  const physical=Promise.resolve().then(()=>work(track));
+  const release=async()=>{while(physicalReads.size)await Promise.all([...physicalReads]);gate.finishWrite(ticket);};
+  void physical.then(release,release);
+  return new Promise<T>((resolve,reject)=>{let settled=false;const done=(error?:unknown,value?:T)=>{if(settled)return;settled=true;clearTimeout(timer);request.signal.removeEventListener('abort',cancel);if(error)reject(error);else resolve(value!);};const cancel=()=>done(Error('authority_cancelled'));const timer=setTimeout(()=>done(Error('authority_timeout')),Math.max(1,request.deadline-performance.now()));request.signal.addEventListener('abort',cancel,{once:true});physical.then(value=>done(undefined,value),error=>done(error));if(request.signal.aborted)cancel();});
+ }
+ return {
+  prepare(context:WecomBotContext,request:BotContextRequest,id:string){return ticketed(request,track=>prepare(context,request,id,0,0,track));},
+  recover(request:BotContextRequest,id:string,retry:{retryRejected?:boolean;afterRevision?:number;afterPage?:number}={}){return ticketed(request,async track=>{
+   if(!/^[a-f0-9]{64}$/.test(id))throw Error('conversation_result_not_found');
+   const context=await authority.authorize(request,null),prepared=await prepare(context,request,id,retry.afterRevision??0,retry.afterPage??0,track),deliveries:ReportDelivery[]=[];
+   let dispatched=0,next:{afterRevision:number;afterPage:number}|undefined;
+   for(const {intent,result,receipt} of prepared.intents){
+    if(result.revision===(retry.afterRevision??0)+1&&intent.conversation!.page<=(retry.afterPage??0))continue;
+    if(dispatched===32){next={afterRevision:result.revision-1,afterPage:intent.conversation!.page-1};break;}
+    const claim=await authority.withCurrent(context,guard=>{check(request);return ledger.claimBotReply(prepared.actor,intent.id,guard,retry.retryRejected===true);});
+    if(!claim){deliveries.push(ledger.getBotReply(prepared.actor,intent.id)!.delivery);continue;}dispatched++;
+    const preflight=async()=>{
+     check(request);await authority.assertCurrent(context);
+     const observed=structuredClone(await track(intake.readReceipt(prepared.input)));
+     const frozen=structuredClone(await track(intake.readResults!(Object.freeze({...prepared.input,revision:result.revision}))));
+     await authority.assertCurrent(context);check(request);
+     if(!observed||observed.workspaceJid!==receipt.workspaceJid||observed.profileId!==receipt.profileId||observed.role!==receipt.role||observed.selectionId!==receipt.selectionId||!context.roles.includes(observed.role)||frozen.length!==1||JSON.stringify(frozen[0])!==JSON.stringify(result))throw Error('access_changed');
+    };
+    const outcome=await sender.notify(claim.target.memberId,claim.reply.body.stream.content,request,preflight);
+    try{deliveries.push(ledger.finishBotReply(prepared.actor,claim.id,claim.delivery.id,claim.delivery.attempt,outcome)!.delivery);}catch{deliveries.push(claim.delivery);}
+   }
+   if(!next)next=prepared.next;
+   return {deliveries,...(next?{next}:{} )};
+  });},
  };
 }

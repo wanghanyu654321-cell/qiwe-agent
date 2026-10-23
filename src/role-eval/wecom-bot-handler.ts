@@ -6,7 +6,7 @@ import {botDeliveryNotice} from './wecom-bot-notice.js';
 import {parseBotTaskCommand} from './wecom-bot-task-commands.js';
 import type {createBotTasks} from './wecom-bot-tasks.js';
 import type {createBotConversations} from './wecom-bot-conversations.js';
-import type {BotContextRequest,WecomBotContext,createWecomBotContext} from './wecom-bot-context.js';
+import type {BotContextRequest,BotReadScope,WecomBotContext,createWecomBotContext} from './wecom-bot-context.js';
 import {normalizeBotFrame,type BotEvent,type BotReplyPlan} from './wecom-bot-transport.js';
 export interface BotReportOptions {
  mode:'isolated-synthetic';authority:ReturnType<typeof createWecomBotContext>;ledger:ManagerStore;
@@ -21,7 +21,7 @@ export interface BotReportOptions {
  beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):{replayState:'none'|'reserved'|'completed-report'|'completed-nonreport';cached?:BotReportResult}|void;
 }
 export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file'|'task';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;taskId?:string;taskStatus?:string;reply:BotReplyPlan;}
-export interface BotReplyExecution {context:WecomBotContext;event:BotEvent;actor:StaffContext;result:BotReportResult;}
+export interface BotReplyExecution {beforeReply?:(scope:BotReadScope)=>Promise<void>;context:WecomBotContext;event:BotEvent;actor:StaffContext;result:BotReportResult;}
 export function createBotReportHandler(options:BotReportOptions){
  const valid=(s:unknown):s is string=>typeof s==='string'&&!!s.trim()&&s.length<=120&&!/[\u0000-\u001f]/.test(s);
  if(options.mode!=='isolated-synthetic'||!options.scope||Object.values(options.scope).length!==3||!['tenant','store','workspace'].every(k=>valid(Reflect.get(options.scope,k)))||!Array.isArray(options.employees)||!options.employees.length||options.employees.some(p=>!p||![p.accountId,p.employeeId,p.employeeName].every(valid))||new Set(options.employees.map(p=>p.accountId)).size!==options.employees.length||new Set(options.employees.map(p=>p.employeeId)).size!==options.employees.length)throw Error('invalid_report_catalog');
@@ -38,7 +38,7 @@ export function createBotReportHandler(options:BotReportOptions){
  return {
  async consumeReply<T>(result:BotReportResult,work:(value:BotReplyExecution)=>Promise<T>):Promise<T>{
   const own=result&&issued.get(result);if(!own)throw Error('access_denied');await authority.assertCurrent(own.context);
-  return work({context:own.context,event:structuredClone(own.event),actor:{...own.actor},result:structuredClone(own.result)});
+  return work({context:own.context,event:structuredClone(own.event),actor:{...own.actor},result:structuredClone(own.result),...(own.beforeReply?{beforeReply:own.beforeReply}:{})});
  },
  async consumeReport<T>(request:BotContextRequest,id:string,work:(value:{context:WecomBotContext;actor:StaffContext;report:StaffReport})=>Promise<T>):Promise<T>{
   if(!/^[a-f0-9]{64}$/.test(id))throw Error('report_not_found');const context=await authority.authorize(request,'manager'),actor=resolveActor(context);
@@ -131,6 +131,6 @@ export function createBotReportHandler(options:BotReportOptions){
     button_list:[{text:'核对结果',key:'confirm:'+event.action.hash,style:1}]}};
   }
   // A committed report survives response failure. Do not roll it back or mark it delivered.
-  await authority.assertCurrent(context);issued.set(result,{context,event:structuredClone(event),actor:{...actor},result:structuredClone(result)});return result;
+  await authority.assertCurrent(context);issued.set(result,{context,event:structuredClone(event),actor:{...actor},result:structuredClone(result),...(conversationResult&&conversations?.beforeReply(conversationResult)?{beforeReply:conversations.beforeReply(conversationResult)!}:{})});return result;
  }};
 }
