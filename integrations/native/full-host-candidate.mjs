@@ -28,7 +28,9 @@ function replaceOnce(source,before,after){if(source.split(before).length!==2)thr
 function declaration(source,name){const parsed=ts.createSourceFile('db.ts',source,ts.ScriptTarget.Latest,true);const nodes=parsed.statements.filter(node=>ts.isFunctionDeclaration(node)&&node.name?.text===name);if(nodes.length!==1)throw Error('FULL_HOST_DECLARATION_CHANGED: '+name);return source.slice(nodes[0].getStart(parsed),nodes[0].end);}
 
 /** Build strings only; never evaluate original config/index/DB, or write N/O. */
-export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversationIntake=false,conversationExecution=false}={}){
+export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversationIntake=false,conversationExecution=false,fullHostConversationExecution=false}={}){
+ if(typeof fullHostConversationExecution!=='boolean')throw Error('FULL_HOST_INVALID_EXECUTION_SCOPE');
+ if(fullHostConversationExecution&&(!conversationIntake||conversationExecution))throw Error('FULL_HOST_CONVERSATION_SCOPE_CONFLICT');
  if(conversationExecution && !conversationIntake)throw Error('D3_INTAKE_REQUIRED');
  if(typeof conversationExecution!=='boolean')throw Error('D3_INVALID_SCOPE');
  if(typeof conversationIntake!=='boolean')throw Error('FULL_HOST_INVALID_CONVERSATION_SCOPE');
@@ -91,7 +93,8 @@ export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversati
  adapted.set('routes/agent-profiles.ts',extractOwnedProfileService(adapted.get('routes/agent-profiles.ts')));
  const ownedDb=addOwnedWorkspaceClaims(adapted.get('db.ts'));
  adapted.set('db.ts',conversationIntake?addBotConversationReceipts(ownedDb):ownedDb);
- if(conversationExecution)adapted=applyConversationExecution(adapted,native);
- if(conversationIntake)adapted=applyConversationRecoveryInventory(adapted,{conversationExecution});
+ if(conversationExecution||fullHostConversationExecution)adapted=applyConversationExecution(adapted,native,{fullHost:fullHostConversationExecution});
+ if(conversationIntake)adapted=applyConversationRecoveryInventory(adapted,{conversationExecution:conversationExecution||fullHostConversationExecution});
+ if(fullHostConversationExecution)return {files:adapted,audit:{fullHostConversationExecution:true,conversationExecution:false,conversationIntake:true,nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'original read-only maintenance diagnostics; no restore permit',scope:'complete O index/main/queue/Web/DB/gate plus D1-D5 hooks; original runner retained; paused admission/query/cancel/delivery refused; no startup replay or recovery permission'}};
  return {files:adapted,audit:{conversationExecution,isolatedExecutionScope:conversationExecution?'N original index closure and GroupQueue; deterministic terminal runner; O complete-host not exercised':undefined,nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationIntake,conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'current-admin read-only diagnostics; no restore permit',projectConfigurationCoverage:'original descriptor scanner extended to project .env/config; all original blockers retained',scope:conversationExecution?'isolated D3 N original queue/index processGroupMessages/runAgent/fallback with synthetic terminal runner; main and O complete-host not executed':conversationIntake?'isolated D2 original-service candidate only; index/main not executed or bound; known receipt metadata remains blocked, no recovery permission':'actual original index main, complete O host/queue/Web/DB stack plus exact T7 DB/scheduler and recovery inspection; no inventory completion bypass'}};
 }

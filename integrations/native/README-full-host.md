@@ -8,6 +8,8 @@
 node integrations/native/verify-full-host.mjs $NROOT --host-overlay $OROOT --sqlite-driver $PREPARED_DRIVER --typecheck
 ```
 
+2026-10-23 的完整 O+D1–D5 候选使用同入口追加 `--full-host-conversations`。它保留原 main/queue/Web/DB/gate 和原 runner，绑定后仍按原维护规则拒绝受理、员工查询、取消及投递；不重放历史 receipt、不恢复宿主。新选项、同宿主暂停证据与原片段正向证据的边界见 [本轮验收记录](../../docs/t7a-fullhost-conversation-acceptance.md)。
+
 Linux 在固定原 ELF、ABI 和依赖通过 `linux-runtime.mjs` 核验后省略 `--sqlite-driver`。使用 `README-linux.md` 的断网、只读容器，不把 Windows 适配驱动称为原 Linux 驱动。只读源码挂载时设置 `QIWE_EVIDENCE_ROOT` 为容器可写临时目录；最终合成证据也输出到 stdout。
 
 ## 队列证据及企微准备（2026-10-21后续）

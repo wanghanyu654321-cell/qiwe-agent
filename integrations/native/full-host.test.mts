@@ -66,6 +66,7 @@ it('boots the actual original main and real loopback Web stack while preserving 
  const restarting=process.env.QIWE_FULL_HOST_PHASE==='restart';
  const now=new Date().toISOString(),adminId='synthetic-full-admin',sessionId='a'.repeat(64);
  const {default:Database}=await import('better-sqlite3');
+ const conversationFixture=process.env.QIWE_FULL_HOST_CONVERSATIONS==='1'?await import('./full-host-conversation.fixture.mts'):undefined;
  if(!restarting){
  db.initDatabase();
  const seedSql=new Database(path.join(config.STORE_DIR,'messages.db'));
@@ -81,10 +82,11 @@ it('boots the actual original main and real loopback Web stack while preserving 
  db.createTask({id:'full-unselected',group_folder:'full-role',chat_jid:'web:full-role',prompt:'synthetic task never execute',context_mode:'isolated',execution_type:'agent',execution_mode:'container',script_command:null,schedule_type:'cron',schedule_value:'0 * * * *',next_run:'2000-01-01T00:00:00.000Z',status:'active',created_at:now,created_by:adminId,notify_channels:null});
  const run=db.createTaskRun({task:db.getTaskById('full-unselected')!,triggerType:'manual',idempotencyKey:'synthetic-full-stale'}).run;
  seedSql.prepare("UPDATE task_runs SET status='success',notification_status='failed',notification_payload=?,notification_available_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(JSON.stringify({kind:'send_message',chatJid:'web:full-role',text:'synthetic never deliver'}),run.id);
+ if(conversationFixture)await conversationFixture.seed(db,seedSql,config);
  seedSql.close();
  }
  const sql=new Database(path.join(config.STORE_DIR,'messages.db'),{fileMustExist:true});
- const snapshot=()=>({messages:sql.prepare('SELECT * FROM messages ORDER BY id').all(),tasks:sql.prepare('SELECT * FROM scheduled_tasks ORDER BY id').all(),runs:sql.prepare('SELECT * FROM task_runs ORDER BY id').all()});
+ const snapshot=()=>({messages:sql.prepare('SELECT * FROM messages ORDER BY id').all(),tasks:sql.prepare('SELECT * FROM scheduled_tasks ORDER BY id').all(),runs:sql.prepare('SELECT * FROM task_runs ORDER BY id').all(),...(conversationFixture?{conversations:conversationFixture.snapshot(sql,config)}:{})});
  const before=restarting?JSON.parse(fs.readFileSync(process.env.QIWE_FULL_HOST_SNAPSHOT!,'utf8')):snapshot();
  if(restarting)expect(snapshot()).toEqual(before);
  else{fs.writeFileSync(process.env.QIWE_FULL_HOST_SNAPSHOT!,JSON.stringify(before));db.closeDatabase();}
@@ -101,6 +103,7 @@ it('boots the actual original main and real loopback Web stack while preserving 
   const headers={cookie:'miniclaw_session='+signSessionToken(sessionId),Origin:'http://127.0.0.1:19777','content-type':'application/json'};
   const status=await fetch(base+'/api/appointment/maintenance',{headers});expect(status.status).toBe(200);expect(await status.json()).toMatchObject({maintenance:true,phase:'paused',executionStart:'not_started'});
   events.push('actual-main-loopback-http-paused');
+  if(conversationFixture)await conversationFixture.exercise({db,host,context,config,sql,snapshot,before,events});
   const unauth=await fetch(base+'/api/appointment/maintenance');expect(unauth.status).toBe(401);
   const inspectionGateCalls=['beginReview','publishReview','claimRestore','noteArrival','beginWrite','commitRestore'].map(name=>vi.spyOn(host.fullHostBootGate,name));
   const inspection=await fetch(base+'/api/appointment/maintenance/inspect',{method:'POST',headers,body:'{}'});

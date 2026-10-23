@@ -1,0 +1,27 @@
+// Full O main owns this queue and gate. Binding configures trusted callbacks;
+// it never resets interrupted rows, loads state again, or replays old work.
+let fullHostConversationBound=false;
+export function initializeFullHostConversationExecution(options:{
+ mode:'isolated-synthetic';
+ authorize:(receipt:ReturnType<typeof readBotConversationReceipt>)=>boolean;
+ onCompleted?:(receiptIds:string[])=>Promise<void>|void;
+}) {
+ if(fullHostConversationBound||options.mode!=='isolated-synthetic'||typeof options.authorize!=='function'||
+    options.onCompleted!==undefined&&typeof options.onCompleted!=='function'||'runner' in options)throw Error('FULL_HOST_CONVERSATION_BINDING_INVALID');
+ bindConversationAuthority(options.authorize);
+ fullHostConversationBound=true;d5OnCompleted=options.onCompleted;
+ function guarded(work:()=>void):void {
+  if(appointmentBootGate.isPaused()){appointmentBootGate.noteArrival();throw Error('CONVERSATION_MAINTENANCE');}
+  const ticket=appointmentBootGate.beginWrite();
+  if(!ticket){appointmentBootGate.noteArrival();throw Error('CONVERSATION_MAINTENANCE');}
+  try{work();}finally{appointmentBootGate.finishWrite(ticket);}
+ }
+ return Object.freeze({
+  queue,gate:appointmentBootGate,
+  enqueue(receiptId:string){guarded(()=>{
+   const receipt=readBotConversationReceipt(receiptId);if(!receipt)throw Error('D3_RECEIPT_MISSING');
+   queueConversationReceipt(receiptId);queue.enqueueMessageCheck(receipt.workspaceJid);
+  });},
+  cancel(receiptId:string){guarded(()=>cancelConversationReceipt(receiptId,(jid,queryId)=>queue.interruptQuery(jid,queryId)));},
+ });
+}

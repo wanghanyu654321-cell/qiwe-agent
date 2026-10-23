@@ -34,14 +34,14 @@
 | 4. 原定义、run、通知分别结清 | N `db.ts:softDeleteTaskWithRevision`、`claimNextTaskRun`、`markTaskRunExecutionStarted`、`cancelTaskRun`、通知领取；N `task-scheduler.ts` 原消费者 | paused/deleted 定义且 next_run=NULL 只停止定义；active run/旧 runner 或专用 cancelled 通知仍能工作。反例：取消 run 后 workspace 通知仍可被领取。不实现只有状态标签的 stopped 分类 | 原 CAS/取消 token 已有，旧 scheduler/runner 围栏及通知结果生产者未闭合；不是本轮新增功能 |
 | 5. D5 输出与投递各自可核实 | Q `conversation-execution-db.fragment:noteConversationProjection/finishConversationBatch/readConversationResults`；Q `manager-store.ts` 的 `bot_reply_intents` 与 attempt CAS；`wecom-bot-assembly.ts` 发送路径 | receipt/revision/query/turn/digest/source 必须和原持久输出对应；通知失败不能重跑 Agent。attempting/unknown 不自动重试；rejected 重试须原受理人和固定结果版本 | 真实 Provider 回执、旧发送者/迟到回调失权待受控核实。Native metadata 不覆盖独立 manager DB 的 body/通知状态 |
 | 6. 原全范围证明和逐记录规则成立 | O inventory/gate/HTTP/DB COMMIT；原 messages/inbox、execution/session/router、outbox/cards/memory、任务、资源/授权、billing、IPC/config 消费者；已有 [逐族清单](t7-recovery-evidence-acceptance.md) | 原四 blocker 独立存在。当前进程 24 项零计数不证明旧进程/容器/脚本/SQL 写者或远端 Provider 失权；快照/完成标记不证明输出归账。未知 opaque 值继续 blocked | 原消费者语义分类器与外部强制围栏仍缺；原 schema scanner 未枚举 sqlite_master indexes，本轮未新增 index 覆盖或宣称全 schema 证明 |
-| 7. D2–D5 和完整 O 在同一运行宿主接线 | Q `full-host-candidate.mjs` 默认保留完整 O main/queue/Web/DB；现有 `applyConversationExecution` 明确换回 N index/queue/Web 与合成末端 runner | 仅把执行选项塞进 fullhost verifier 会换掉 O 栈，不能作为恢复。下一实现须在完整 O 中保留同一 gate/queue、原迁移/消费者与权限，按现有 D1–D5 接点移接，先验证暂停不执行 | 当前没有完整 O+D5 的运行装配；该依赖先于声称同宿主产品闭环，不重做已完成的局部技能/回复实现 |
+| 7. D2–D5 和完整 O 在同一运行宿主接线 | Q `full-host-candidate.mjs` 默认保留完整 O main/queue/Web/DB；旧 `conversationExecution` 仍为 N 片段，新 `fullHostConversationExecution` 显式迁接到 O | 新选项保留原 main、同一 gate/queue 与原 runner，先验证暂停不执行、不改写旧运行状态；旧选项不能作为完整宿主恢复证据 | 后续同宿主装配及验证见 [同宿主接线验收](t7a-fullhost-conversation-acceptance.md)；恢复后成功执行、完成通知与员工查回仍待验收 |
 | 8. 原恢复事务、drain 和首条业务分别通过 | O `appointment-boot-gate.ts` review → claim → prepare → final；O `appointment-boot-http.ts`、`db-appointment-boot.ts.fragment` 原 IMMEDIATE/审计/COMMIT；O assembly 的 drain | 同一完整 inventory 的全部记录 eligible/stopped/terminal 且四证明成立；COMMIT 后才启动消费者。drain 失败的 restored:true 不代表可受理。反例：新到达/写票使 review 失效、取消任务复活、未知通知重发、重复入账 | 1–7 未齐，正向恢复尚不可运行。Linux 需原路径成功恢复与第二独立进程、同宿主业务；Windows 保留 unsupported residue 拒绝，不默认移植文件扫描 |
 
 四类全局证明仍分别缺：非 DB 残留与 ACK/输出的原协议；旧写者及 Provider 强制失权/结清；全部启用入口和异步物理回调的票据覆盖；opaque 配置/路由/session/任务/通知的消费者解释。原 assembly 的 `prepare` 只检查已准备条件和连接，不会连接渠道、清理遗留或生成这些证明。对外读取器、模型文字、管理员点击、SDK OPEN 或本地合成零计数均不能补齐。
 
 条件 6 也包含迁移来源的 schema 精确性：既有 D2 场景刻意从手写最小 schema 69 建库，原迁移保留的 router_state/workspace_agent_profiles CREATE SQL 与 O 预期 hash 不同。新表登记后仍报告这两个 SCHEMA blocker；这属于原 scanner 的真实拒绝，不能删掉检查或自动改写旧表。本轮 canonical 原初始化测试证明三张新增表可枚举，既有 D2 迁移测试另证 schema 不同仍拒绝，二者不拼接为完整恢复。
 
-下一项可开始的实现应是条件 7 的完整 O 接点核实与最小迁接，或先为条件 3/4 确认真实原 fencing/结清生产者；在契约明确前继续保留拒绝。没有充分依据实施“原 paused 定义自动 stopped”或“原 queued 输入自动 rejected”。
+条件 7 的后续实现及证据单列于[同宿主接线验收](t7a-fullhost-conversation-acceptance.md)。原恢复许可仍依赖条件 3/4 等真实 fencing/结清生产者；在契约明确前继续保留拒绝。没有充分依据实施“原 paused 定义自动 stopped”或“原 queued 输入自动 rejected”。
 
 ## 实际验证与证据
 
