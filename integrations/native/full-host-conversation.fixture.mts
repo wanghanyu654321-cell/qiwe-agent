@@ -31,7 +31,7 @@ const request=(state='queued')=>({actor:{...actor},roles:['marketing'],receiptId
 // Pre-existing synthetic records exercise preservation only. They are never
 // counted as work accepted/executed by this paused host, or as recovered output.
 export async function seed(db:any,sql:any,config:any){
- expect(db.getRouterState('schema_version')).toBe('72');
+ expect(db.getRouterState('schema_version')).toBe('73');
  const now=new Date().toISOString();
  // Historical member input; this account is an admin at the current boot.
  // Keeping one owner also honors O's all-resources maintenance ACL.

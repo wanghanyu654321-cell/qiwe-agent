@@ -1,0 +1,27 @@
+import {it,expect,afterAll} from 'vitest';
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import Database from 'better-sqlite3';
+const previous=process.cwd();process.chdir(fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-legacy-migration-')));
+const original=await import('../legacy-src/db.js'),current=await import('../src/db.js');
+const {STORE_DIR}=await import('../src/config.js');
+afterAll(()=>process.chdir(previous));
+it('backs up the actual schema72 candidate on upgrade and rejects reopening preservation with the actual old code',()=>{
+ original.initDatabase();
+ const now='2020-01-01T00:00:00.000Z',id='migration-retained';
+ original.createTask({id,group_folder:'synthetic',chat_jid:'web:synthetic',prompt:'retained unknown work',context_mode:'isolated',execution_type:'agent',execution_mode:'container',script_command:null,schedule_type:'once',schedule_value:now,next_run:now,status:'active',created_at:now,created_by:null,notify_channels:null});
+ const before=original.getTaskById(id);original.closeDatabase();
+ const database=path.join(STORE_DIR,'messages.db');
+ current.initDatabase();expect(current.CURRENT_SCHEMA_VERSION).toBe(73);
+ expect(current.getTaskById(id)).toEqual(before);
+ const backups=fs.readdirSync(path.join(STORE_DIR,'migration-backups')).filter(name=>name.startsWith('messages-v72-to-v73-')&&name.endsWith('.db'));
+ expect(backups).toHaveLength(1);
+ const backup=new Database(path.join(STORE_DIR,'migration-backups',backups[0]),{readonly:true});
+ expect(backup.prepare("SELECT value FROM router_state WHERE key='schema_version'").get()).toEqual({value:'72'});
+ expect(backup.prepare('SELECT prompt FROM scheduled_tasks WHERE id=?').get(id)).toEqual({prompt:'retained unknown work'});backup.close();
+ current.preserveLegacyTask(id,current.inspectLegacyTaskPreservation(id).version);current.closeDatabase();
+ expect(()=>original.initDatabase()).toThrow('Database schema v73 is newer than supported v72; refusing downgrade');
+ const retained=new Database(database,{readonly:true});
+ expect(retained.prepare("SELECT value FROM router_state WHERE key='schema_version'").get()).toEqual({value:'73'});retained.close();
+ current.initDatabase();expect(current.isLegacyTaskPreserved(id)).toBe(true);
+ expect(current.getDueTasks()).toEqual([]);expect(current.getTaskById(id)).toEqual(before);current.closeDatabase();
+});

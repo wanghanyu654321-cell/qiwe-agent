@@ -14,6 +14,11 @@ import {applyConversationExecution} from './conversation-execution-overlay.mjs';
 import {applyConversationRecoveryInventory} from './conversation-recovery-overlay.mjs';
 import {applySelectedCardSettlement} from './selected-card-settlement-overlay.mjs';
 import {applyConversationResultEvidence} from './conversation-result-evidence-overlay.mjs';
+import {applyFullHostExecutionFences} from './full-host-execution-fences-overlay.mjs';
+import {applyFullHostEntryFencing} from './full-host-entry-fencing-overlay.mjs';
+import {applyLegacyWorkPreservation} from './legacy-work-preservation-overlay.mjs';
+import {applyFullHostRestoration} from './full-host-restoration-overlay.mjs';
+import {applyFullHostRecoveryAuthority} from './full-host-recovery-authority-overlay.mjs';
 
 const digest=value=>createHash('sha256').update(value).digest('hex');
 export const fullHostSourceIdentity='8611519397c78b1f5d9591ae18ea2c5d1c399aab3d63b9ea5311ebd8c18b0bad';
@@ -101,6 +106,16 @@ export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversati
  if(conversationIntake)adapted=applyConversationRecoveryInventory(adapted,{conversationExecution:conversationExecution||fullHostConversationExecution});
  if(fullHostConversationExecution)adapted=applySelectedCardSettlement(adapted);
  if(fullHostConversationExecution)adapted=applyConversationResultEvidence(adapted);
- if(fullHostConversationExecution)return {files:adapted,audit:{fullHostConversationExecution:true,conversationExecution:false,conversationIntake:true,nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'original read-only maintenance diagnostics; no restore permit',scope:'complete O index/main/queue/Web/DB/gate plus D1-D5 hooks; original runner retained; paused admission/query/cancel/delivery refused; no startup replay or recovery permission'}};
+ if(fullHostConversationExecution)adapted=applyFullHostExecutionFences(adapted);
+ if(fullHostConversationExecution)adapted=applyFullHostEntryFencing(adapted);
+ if(fullHostConversationExecution){
+  adapted=applyLegacyWorkPreservation(adapted);
+  adapted=applyFullHostRestoration(adapted,{
+   supervisorSourceHash:digest(fs.readFileSync(new URL('./verify-full-host.mjs',import.meta.url))),
+   supervisorModuleHash:digest(fs.readFileSync(new URL('./full-host-restoration-supervisor.mjs',import.meta.url))),
+  });
+  adapted=applyFullHostRecoveryAuthority(adapted);
+ }
+ if(fullHostConversationExecution)return {files:adapted,audit:{fullHostConversationExecution:true,conversationExecution:false,conversationIntake:true,nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'original count-only inspection; recovery uses original current-admin review and transactional commit',scope:'complete O index/main/queue/Web/DB/gate plus D1-D5; schema73 exact manual-review preservation; restoration requires observed supported local supervisor and original inventory; no production permit or legacy automatic replay'}};
  return {files:adapted,audit:{conversationExecution,isolatedExecutionScope:conversationExecution?'N original index closure and GroupQueue; deterministic terminal runner; O complete-host not exercised':undefined,nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationIntake,conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'current-admin read-only diagnostics; no restore permit',projectConfigurationCoverage:'original descriptor scanner extended to project .env/config; all original blockers retained',scope:conversationExecution?'isolated D3 N original queue/index processGroupMessages/runAgent/fallback with synthetic terminal runner; main and O complete-host not executed':conversationIntake?'isolated D2 original-service candidate only; index/main not executed or bound; known receipt metadata remains blocked, no recovery permission':'actual original index main, complete O host/queue/Web/DB stack plus exact T7 DB/scheduler and recovery inspection; no inventory completion bypass'}};
 }

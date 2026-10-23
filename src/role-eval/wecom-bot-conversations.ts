@@ -25,7 +25,7 @@ export interface BotRoleWorkspacePort {
  readRoleWorkspace(input:BotRoleWorkspaceInput):Promise<BotRoleWorkspaceRead>;
  prepareRoleWorkspace(input:BotRoleWorkspaceInput):Promise<Exclude<BotRoleWorkspaceRead,{state:'missing'}>>;
 }
-export interface BotConversationExecution {state:'queued'|'running'|'cancelling'|'cancelled'|'completed'|'failed'|'unknown';queryId?:string;turnId?:string;sessionId?:string;batchSize?:number}
+export interface BotConversationExecution {state:'queued'|'running'|'cancelling'|'cancelled'|'completed'|'failed'|'unknown';queryId?:string;turnId?:string;sessionId?:string;batchSize?:number;manualReviewRequired?:boolean}
 export interface BotConversationReceipt {receiptId:string;messageId:string;acceptedAt:string;state:'accepted';role:WorkbenchRole;workspaceJid:string;profileId:string;selectionId:string;fingerprint:string;execution?:BotConversationExecution}
 export interface BotConversationReadInput {
  actor:BotConversationActor;roles:readonly WorkbenchRole[];receiptId:string;scope:BotContextRequest;
@@ -61,9 +61,10 @@ export function createBotConversations({store,native,intake,authority,prepareAns
  const scopeCopy=(scope:BotContextRequest):BotContextRequest=>Object.freeze({signal:scope.signal,deadline:scope.deadline,correlationId:scope.correlationId});
  const readInput=(context:WecomBotContext,scope:BotContextRequest,id:string):BotConversationReadInput=>Object.freeze({actor:Object.freeze({...actor(context)}),roles:Object.freeze([...context.roles]),receiptId:id,scope:scopeCopy(scope),assertCurrent:()=>authority.assertCurrent(context),withCurrent:<T>(work:()=>T extends PromiseLike<unknown>?never:T)=>authority.withCurrent(context,work)});
  const executionText:Record<BotConversationExecution['state'],string>={queued:'排队中，等待原会话执行。',running:'执行中。',cancelling:'取消处理中，尚未确认执行停止。',cancelled:'已取消；已经发生的业务操作不会自动撤销。',completed:'执行已结束。',failed:'执行失败，未自动重新执行。',unknown:'执行结果待核实，请稍后查询，不要重复提交。'};
- const validExecution=(value:BotConversationExecution|undefined)=>value===undefined||!!value&&Object.hasOwn(executionText,value.state)&&(['queryId','turnId','sessionId'] as const).every(key=>value[key]===undefined||typeof value[key]==='string'&&!!value[key])&&(value.batchSize===undefined||Number.isSafeInteger(value.batchSize)&&value.batchSize>0);
+ const validExecution=(value:BotConversationExecution|undefined)=>value===undefined||!!value&&Object.hasOwn(executionText,value.state)&&(['queryId','turnId','sessionId'] as const).every(key=>value[key]===undefined||typeof value[key]==='string'&&!!value[key])&&(value.batchSize===undefined||Number.isSafeInteger(value.batchSize)&&value.batchSize>0)&&(value.manualReviewRequired===undefined||typeof value.manualReviewRequired==='boolean');
  const validReceipt=(value:BotConversationReceipt|undefined,id:string)=>value&&value.state==='accepted'&&value.receiptId===id&&/^[a-f0-9]{64}$/.test(value.fingerprint)&&typeof value.messageId==='string'&&!!value.messageId&&!!value.acceptedAt&&!!value.workspaceJid&&!!value.profileId&&!!value.selectionId&&Object.values(roles).includes(value.role)&&validExecution(value.execution);
- const receiptView=(value:BotConversationReceipt)=>`已保存需求，受理编号：${value.receiptId}。原${name(value.role)}岗位；查询对话 ${value.receiptId}。${value.execution?executionText[value.execution.state]+(value.execution.state==='cancelling'&&(value.execution.batchSize??0)>1?'本次取消会停止同批共同执行。':''):'执行尚未接通，本次未生成答案。'}`;
+ const receiptView=(value:BotConversationReceipt)=>value.execution?.manualReviewRequired?preservedView(value):`已保存需求，受理编号：${value.receiptId}。原${name(value.role)}岗位；查询对话 ${value.receiptId}。${value.execution?executionText[value.execution.state]+(value.execution.state==='cancelling'&&(value.execution.batchSize??0)>1?'本次取消会停止同批共同执行。':''):'执行尚未接通，本次未生成答案。'}`;
+ const preservedView=(value:BotConversationReceipt)=>`历史需求待人工核对，已暂停自动续跑；请联系管理员核对，不要重复提交。原记录保留，受理编号：${value.receiptId}。`;
  return {beforeReply(value:BotConversationReply){return replyChecks.get(value);},async route(context:WecomBotContext,source:BotEvent,scope:BotContextRequest,replayState:'none'|'reserved'|'completed-report'|'completed-nonreport'='none'):Promise<BotConversationReply|undefined>{
   if(source.action.kind!=='text')return undefined;
   const text=source.action.text.trim(),command=parseBotConversationCommand(text),current=store.currentConversation(actor(context));
@@ -77,6 +78,7 @@ export function createBotConversations({store,native,intake,authority,prepareAns
    if(!receipt)return {reply:'未找到你有权访问的对话受理记录，请核对受理编号。'};
    if(!validReceipt(receipt,input.receiptId))throw Error('authority_unavailable');
    if(!context.roles.includes(receipt.role))throw Error('access_denied');
+   if(receipt.execution?.manualReviewRequired&&cancelling)return {reply:preservedView(receipt)};
    if(cancelling){
     const unknown=()=>({reply:`取消结果待核实。请稍后发送：查询对话 ${input.receiptId}；请勿重复提交。`});
     if(replayState!=='none')return unknown();
@@ -90,20 +92,22 @@ export function createBotConversations({store,native,intake,authority,prepareAns
    if(receipt.execution?.state==='completed'&&intake.readResults){
     if(prepareAnswer)await bounded(scope,prepareAnswer(context,scope,input.receiptId));
     const results=structuredClone(await bounded(scope,intake.readResults({...input,...(match[2]?{revision:Number(match[2])}:{latest:true})})));await authority.assertCurrent(context);
-    const result=results[0];if(result){const pages=conversationResultPages(result);const page=Number(match[3]??1);if(!Number.isSafeInteger(page)||page>pages.length)return {reply:`该答案共${pages.length}页，请核对页码。`};const answer=Object.freeze({reply:pages[page-1]!});
+    const manualReviewRequired=receipt.execution.manualReviewRequired===true;
+    const result=results[0];if(result){const pages=conversationResultPages(result,manualReviewRequired);const page=Number(match[3]??1);if(!Number.isSafeInteger(page)||page>pages.length)return {reply:`该答案共${pages.length}页，请核对页码。`};const answer=Object.freeze({reply:pages[page-1]!});
      const receiptIdentity=(value:BotConversationReceipt)=>[value.receiptId,value.messageId,value.role,value.workspaceJid,value.profileId,value.selectionId,value.fingerprint];
      const originalReceipt=receiptIdentity(receipt),frozen=structuredClone(result);
      replyChecks.set(answer,async sendScope=>{
       const freshScope=scopeCopy({correlationId:scope.correlationId,deadline:Math.min(scope.deadline,sendScope.deadline),signal:AbortSignal.any([scope.signal,sendScope.signal])});
       const freshInput=readInput(context,freshScope,input.receiptId);await authority.assertCurrent(context);
       const currentReceipt=structuredClone(await bounded(freshScope,intake.readReceipt(freshInput)));
-      if(!currentReceipt||currentReceipt.execution?.state!=='completed'||!isDeepStrictEqual(receiptIdentity(currentReceipt),originalReceipt))throw Error('access_changed');
+      if(!currentReceipt||!validReceipt(currentReceipt,input.receiptId)||currentReceipt.execution?.state!=='completed'||
+         (currentReceipt.execution.manualReviewRequired===true)!==manualReviewRequired||!isDeepStrictEqual(receiptIdentity(currentReceipt),originalReceipt))throw Error('access_changed');
       const currentResults=structuredClone(await bounded(freshScope,intake.readResults!(Object.freeze({...freshInput,revision:frozen.revision}))));
       if(currentResults.length!==1||!isDeepStrictEqual(currentResults[0],frozen))throw Error('access_changed');
       await authority.assertCurrent(context);
      });
      return answer;}
-    return {reply:`该对话执行已结束，完整答案尚待核实。受理编号：${receipt.receiptId}。`};
+    return {reply:manualReviewRequired?preservedView(receipt):`该对话执行已结束，完整答案尚待核实。受理编号：${receipt.receiptId}。`};
    }
    return {reply:receiptView(receipt)};
   }
@@ -170,9 +174,9 @@ export function createBotConversations({store,native,intake,authority,prepareAns
 }
 
 /** Bounded UTF-8 pages, preserving every code point of the frozen result. */
-export function conversationResultPages(result:BotConversationResult):string[]{
+export function conversationResultPages(result:BotConversationResult,manualReviewRequired=false):string[]{
  if(!result||!/^[a-f0-9]{64}$/.test(result.receiptId)||!/^[a-f0-9]{64}$/.test(result.digest)||!Number.isSafeInteger(result.revision)||result.revision<1||typeof result.content!=='string'||!result.content.trim()||typeof result.queryId!=='string'||!result.queryId||typeof result.turnId!=='string'||!result.turnId)throw Error('authority_unavailable');
  const chunks:string[]=[];let chunk='',bytes=0;
  for(const point of result.content){const size=Buffer.byteLength(point);if(bytes+size>14000){chunks.push(chunk);chunk='';bytes=0;}chunk+=point;bytes+=size;}chunks.push(chunk);
- return chunks.map((content,index)=>`对话答案 ${result.receiptId}\n版本${result.revision} · 第${index+1}/${chunks.length}页\n${content}\n查回：查询对话 ${result.receiptId} ${result.revision} ${index+1}${index+1<chunks.length?`\n下一页：查询对话 ${result.receiptId} ${result.revision} ${index+2}`:''}`);
+ return chunks.map((content,index)=>`对话答案 ${result.receiptId}\n版本${result.revision} · 第${index+1}/${chunks.length}页${manualReviewRequired?' · 待人工核对，已暂停自动续跑；以下为已保存答案。':''}\n${content}\n查回：查询对话 ${result.receiptId} ${result.revision} ${index+1}${index+1<chunks.length?`\n下一页：查询对话 ${result.receiptId} ${result.revision} ${index+2}`:''}`);
 }

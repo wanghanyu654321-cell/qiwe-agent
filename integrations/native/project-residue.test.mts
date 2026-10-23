@@ -31,7 +31,22 @@ function assertStillBlocked(report: ReturnType<typeof scan>) {
   expect(report.safe).toBe(false);
   expect(report.complete).toBe(false);
   expect(report.blockers).toEqual(expect.arrayContaining(originalBlockers));
-  expect(report.records.every(record => record.disposition === 'blocked' || record.kind === 'observation/sqlite_snapshot')).toBe(true);
+  // Complete-host classification may recognize only observed directories or
+  // absent roots here. Opaque files and unsafe targets still need settlement.
+  for (const record of report.records) {
+    if (record.disposition === 'blocked' || record.kind === 'observation/sqlite_snapshot') continue;
+    expect(record.kind.startsWith('residue/'), record.kind).toBe(true);
+    expect(record.disposition, record.kind).toBe('eligible');
+    expect(record.evidence.includes('root_absent') || record.evidence.includes('directory_observed'), record.kind).toBe(true);
+    expect(record.evidence, record.kind).not.toContain('file_unsettled');
+    expect(record.evidence, record.kind).not.toContain('unsafe_entry');
+  }
+}
+
+function assertBlockedTargets(report: ReturnType<typeof scan>, kind: string, count: number) {
+  const targets = report.records.filter(record => record.kind === kind);
+  expect(targets, kind).toHaveLength(count);
+  for (const record of targets) expect(record.disposition, kind).toBe('blocked');
 }
 
 afterEach(() => {
@@ -78,6 +93,8 @@ it.skipIf(process.platform !== 'linux')('observes project .env and nested config
     'residue/project/config/directory',
     'residue/project/config/file',
   ]));
+  assertBlockedTargets(report, 'residue/project/env/file', 1);
+  assertBlockedTargets(report, 'residue/project/config/file', 1);
   expect(report.records.find(record => record.kind === 'residue/project/config/directory')?.key)
     .not.toBe(report.records.find(record => record.kind === 'residue/config/directory')?.key);
   expect(JSON.stringify(report)).not.toContain(secret);
@@ -99,6 +116,7 @@ it.skipIf(process.platform !== 'linux')('records absent project entries while pr
   expect(report.records.filter(record => record.kind === 'residue/project/env/root' && record.evidence.includes('root_absent'))).toHaveLength(1);
   expect(report.records.filter(record => record.kind === 'residue/project/config/root' && record.evidence.includes('root_absent'))).toHaveLength(1);
   expect(report.records.filter(record => record.kind === 'residue/ipc/input')).toHaveLength(3);
+  assertBlockedTargets(report, 'residue/ipc/input', 3);
   const oldDataKey = report.records.find(record => record.kind === 'residue/ipc/input')?.key;
   expect(oldDataKey).toMatch(/^[a-f0-9]{64}$/);
   expect(report.records.find(record => record.kind === 'residue/project/env/root')?.key).not.toBe(oldDataKey);
@@ -124,6 +142,8 @@ it.skipIf(process.platform !== 'linux')('treats project .env directory and confi
   expect(report.blockers).toContain('RESIDUE:UNSAFE_ENTRY');
   expect(report.records.filter(record => record.kind === 'residue/project/env/unsafe')).toHaveLength(1);
   expect(report.records.filter(record => record.kind === 'residue/project/config/unsafe')).toHaveLength(1);
+  assertBlockedTargets(report, 'residue/project/env/unsafe', 1);
+  assertBlockedTargets(report, 'residue/project/config/unsafe', 1);
 });
 
 it.skipIf(process.platform !== 'linux')('blocks a project .env symlink without exposing its target or content', () => {
@@ -136,6 +156,7 @@ it.skipIf(process.platform !== 'linux')('blocks a project .env symlink without e
   assertStillBlocked(report);
   expect(report.blockers).toContain('RESIDUE:UNSAFE_ENTRY');
   expect(report.records.filter(record => record.kind === 'residue/project/env/unsafe')).toHaveLength(1);
+  assertBlockedTargets(report, 'residue/project/env/unsafe', 1);
   expect(JSON.stringify(report)).not.toContain(secret);
   expect(JSON.stringify(report)).not.toContain(target);
   expect(fs.readFileSync(target, 'utf8')).toBe(secret);
@@ -155,6 +176,9 @@ it.skipIf(process.platform !== 'linux')('blocks an injected project .env metadat
   expect(report.blockers).toContain('RESIDUE:READ_ERROR');
   expect(JSON.stringify(report)).not.toContain('synthetic project metadata denial');
   expect(report.records.some(record => record.kind === 'residue/project/env/file')).toBe(false);
+  // An unreadable target has no verified metadata record. READ_ERROR must
+  // remain blocking; no substitute eligible project-env record may appear.
+  expect(report.records.filter(record => record.kind.startsWith('residue/project/env/'))).toEqual([]);
 });
 
 it.skipIf(process.platform !== 'linux')('blocks a project config directory replaced after its first metadata observation', () => {
@@ -177,6 +201,9 @@ it.skipIf(process.platform !== 'linux')('blocks a project config directory repla
   assertStillBlocked(report);
   expect(replaced).toBe(true);
   expect(report.blockers).toEqual(expect.arrayContaining(['RESIDUE:UNSAFE_ENTRY']));
+  expect(fs.lstatSync(config).isSymbolicLink()).toBe(true);
+  // O_NOFOLLOW rejects the replacement before a directory or file is trusted.
+  expect(report.records.filter(record => record.kind.startsWith('residue/project/config/'))).toEqual([]);
 });
 
 it.skipIf(process.platform !== 'linux')('blocks project config nesting beyond the existing residue depth budget', () => {
@@ -191,4 +218,7 @@ it.skipIf(process.platform !== 'linux')('blocks project config nesting beyond th
   const report = scan(data);
   assertStillBlocked(report);
   expect(report.blockers).toContain('RESIDUE:BUDGET');
+  // The scanner may classify traversed directories as passive, but cannot
+  // describe the unvisited 65th level as a complete settled inventory.
+  expect(report.records.filter(record => record.kind === 'residue/project/config/directory')).toHaveLength(65);
 });

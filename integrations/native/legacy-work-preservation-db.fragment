@@ -1,0 +1,13 @@
+// Internal same-connection maintenance seam; public HTTP never accepts these markers.
+import {inspectLegacyWorkSelection,preserveLegacyWorkSelection,legacyWorkRecordPreserved,readLegacyWorkPreservationEvidence} from './legacy-work-preservation.js';
+export function inspectLegacyTaskPreservation(taskId:string){return inspectLegacyWorkSelection(db,{kind:'task',taskId});}
+export function preserveLegacyTask(taskId:string,expectedVersion:string){return preserveLegacyWorkSelection(db,{kind:'task',taskId},expectedVersion);}
+export function inspectLegacyMessagePreservation(chatJid:string,messageId:string){return inspectLegacyWorkSelection(db,{kind:'message',chatJid,messageId});}
+export function preserveLegacyMessage(chatJid:string,messageId:string,expectedVersion:string){return preserveLegacyWorkSelection(db,{kind:'message',chatJid,messageId},expectedVersion);}
+export function isLegacyTaskPreserved(taskId:string):boolean{return legacyWorkRecordPreserved(db,'scheduled_tasks',{id:taskId});}
+export function isLegacyTaskRunPreserved(runId:string):boolean{
+ const row=db.prepare('SELECT id,task_id FROM task_runs WHERE id=?').get(runId) as Record<string,unknown>|undefined;
+ return legacyWorkRecordPreserved(db,'task_runs',row??{id:runId});
+}
+export function isLegacyMessagePreserved(chatJid:string,messageId:string):boolean{return legacyWorkRecordPreserved(db,'messages',{chat_jid:chatJid,id:messageId});}
+export function readLegacyPreservationEvidence(table:string,row:Record<string,unknown>){return readLegacyWorkPreservationEvidence(db,table,row);}
