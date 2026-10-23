@@ -118,7 +118,9 @@ it('original owner DB accepts once; a separate process reads only first-process 
  expect(db.getRouterState('synthetic-legacy-row')).toBe('preserved');
  const inventory=db.scanAppointmentBootInventory();
  expect(inventory.safe).toBe(false);
- expect(inventory.blockers).toContain('UNKNOWN_OBJECT');
+ expect(inventory.complete).toBe(false);
+ expect(inventory.blockers).not.toContain('UNKNOWN_OBJECT');
+ expect(inventory.blockers).toEqual(expect.arrayContaining(['NON_DATABASE_RESIDUE_UNVERIFIED','EXTERNAL_WRITERS_UNVERIFIED','WRITER_COVERAGE_INCOMPLETE','OPAQUE_RUNTIME_METADATA_UNVERIFIED']));
  const schemaProbe=new Database(dbFile);
  expect(schemaProbe.prepare("SELECT name FROM sqlite_master WHERE name='wecom_conversation_receipts'").get()).toEqual({name:'wecom_conversation_receipts'});
  schemaProbe.close();
@@ -132,6 +134,15 @@ it('original owner DB accepts once; a separate process reads only first-process 
  const target={workspaceJid:prepared.workspaceJid,profileId:prepared.profileId,role:'marketing',selectionId:'synthetic-selection'};
  const receipt=await port.submitMessage(request(target));
  expect(receipt).toMatchObject({receiptId,state:'accepted',...target});
+ const acceptedInventory=db.scanAppointmentBootInventory();
+ console.log('CONVERSATION_RECOVERY_METADATA',JSON.stringify({blockers:acceptedInventory.blockers,counts:acceptedInventory.records.reduce((out:any,record:any)=>{out[record.kind]=(out[record.kind]??0)+1;return out;},{})}));
+ expect(acceptedInventory.safe).toBe(false);
+ expect(acceptedInventory.complete).toBe(false);
+ expect(acceptedInventory.blockers).not.toContain('UNKNOWN_OBJECT');
+ // This migration fixture deliberately starts with handcrafted legacy CREATE
+ // SQL. Known new tables must not weaken the original exact-schema rejection.
+ expect(acceptedInventory.blockers).toEqual(expect.arrayContaining(['SCHEMA:router_state','SCHEMA:workspace_agent_profiles']));
+ expect(acceptedInventory.records.filter(record=>record.kind==='input/wecom_conversation_receipts')).toHaveLength(0);
  const duplicate=await Promise.all([port.submitMessage(request({...target,selectionId:'later-selection'})),port.submitMessage(request(target))]);
  expect(duplicate).toEqual([receipt,receipt]);
  await expect(port.submitMessage(request(target,{text:'changed'}))).rejects.toThrow('CONVERSATION_ORIGIN_CONFLICT');

@@ -65,4 +65,6 @@ TCP 仅准本次真实 HTTP fixture 的 `127.0.0.1` 端口，拒绝 Unix socket/
 
 本轮是验证 harness 的补齐，没有声称修复原生产业务缺陷。早期 fixture 参数及 queue 接收语义断言的错误是测试修正，Linux 导入超时是环境结果，均不算业务 RED。
 
+2026-10-23 的显式 D2/D3/D5 候选通过 `conversation-recovery-overlay.mjs` 登记现有三张新表的实际生产者 SQL hash、固定列形状和元数据投影，所有记录仍 blocked，默认完整 O 组合不变。可单独运行 `node integrations/native/verify-recovery-conversation-inventory.mjs $NROOT $OROOT $PREPARED_DRIVER`，Linux 原驱动省略第三参数。该入口仅运行原合成 DB 初始化和 scanner，分别验证 schema 69/70/72 及分页/预算/拒绝；不会启动 main，也不证明完整 O 与 D5 已在同一宿主组合。有限前置契约、实际证据和剩余阻塞见 [T7-A 必要恢复条件](../../docs/t7a-necessary-conditions-acceptance.md)。
+
 另做过一次本地故障注入负控：仅在 `.local` 临时 verifier 生成的候选 DB 副本中，把 O 的 boot 保护条件替换为 `if (true)`，恢复旧 N 的无条件 promoting 重置；同一完整宿主测试真实失败（exit 1），记录从 `promoting` 变成 `queued`，`delivery_updated_at` 也被改写。移除该临时故障注入后的正式工具通过。这证明当前场景会抓到缺失 DB boot 栈；不是新修复生产 bug 的 TDD 声明。精确临时差异、前后 hash 与失败日志保存在本地 `.local/t7d/legacy-db-boot-negative-control-*`，不提交原源码副本。
