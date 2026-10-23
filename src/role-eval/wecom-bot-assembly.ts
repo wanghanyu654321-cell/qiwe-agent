@@ -1,6 +1,6 @@
 import type {WSClient, WSClientEventMap} from '@wecom/aibot-node-sdk';
 import {createWecomBotContext, type WecomBotContextOptions} from './wecom-bot-context.js';
-import {createBotDelivery, type BotDeliveryResult} from './wecom-bot-delivery.js';
+import {createBotDelivery,createBotConversationDelivery, type BotDeliveryResult} from './wecom-bot-delivery.js';
 import {createBotSender} from './wecom-bot-sender.js';
 import {createBotTasks, type BotTasksOptions} from './wecom-bot-tasks.js';
 import type {BotReportOptions} from './wecom-bot-handler.js';
@@ -22,7 +22,7 @@ export interface WecomBotAssemblyBusiness {
   scope: BotReportOptions['scope']; employees: BotReportOptions['employees'];
   ledger: BotReportOptions['ledger']; artifacts?: BotReportOptions['artifacts'];
   tasks?: Omit<BotTasksOptions, 'mode' | 'authority'>;
-  conversations?: {store:BotTaskStore;native:BotRoleWorkspacePort;intake?:BotConversationIntakePort};
+  conversations?: {store:BotTaskStore;native:BotRoleWorkspacePort;intake?:BotConversationIntakePort;deliveryGate?:Parameters<typeof createBotConversationDelivery>[0]['gate']};
 }
 export interface WecomBotAssemblyOutcome {
   state: 'handled' | 'rejected'; detail: string;
@@ -70,7 +70,7 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
       // Capture admitted capabilities once; shared service state and live authority readers stay shared.
       ...(training ? {training: {enabled: training.enabled, resolve: training.resolve.bind(training)}} : {}),
       ...(native ? {native: {start: native.start.bind(native), query: native.query.bind(native), cancel: native.cancel.bind(native), close: native.close.bind(native)}} : {}),
-    }} : {}),...(conversations?{conversations:{store:conversations.store,native:{readRoleWorkspace:conversations.native.readRoleWorkspace.bind(conversations.native),prepareRoleWorkspace:conversations.native.prepareRoleWorkspace.bind(conversations.native)},...(conversations.intake?{intake:{readReceipt:conversations.intake.readReceipt.bind(conversations.intake),submitMessage:conversations.intake.submitMessage.bind(conversations.intake),...(conversations.intake.cancelReceipt?{cancelReceipt:conversations.intake.cancelReceipt.bind(conversations.intake)}:{})}}:{})}}:{})};
+    }} : {}),...(conversations?{conversations:{store:conversations.store,...(conversations.deliveryGate?{deliveryGate:{isPaused:conversations.deliveryGate.isPaused.bind(conversations.deliveryGate),beginWrite:conversations.deliveryGate.beginWrite.bind(conversations.deliveryGate),finishWrite:conversations.deliveryGate.finishWrite.bind(conversations.deliveryGate)}}:{}),native:{readRoleWorkspace:conversations.native.readRoleWorkspace.bind(conversations.native),prepareRoleWorkspace:conversations.native.prepareRoleWorkspace.bind(conversations.native)},...(conversations.intake?{intake:{readReceipt:conversations.intake.readReceipt.bind(conversations.intake),...(conversations.intake.readResults?{readResults:conversations.intake.readResults.bind(conversations.intake)}:{}),submitMessage:conversations.intake.submitMessage.bind(conversations.intake),...(conversations.intake.cancelReceipt?{cancelReceipt:conversations.intake.cancelReceipt.bind(conversations.intake)}:{})}}:{})}}:{})};
   });
   if (businesses.some(b => !b.scope || !Object.values(b.scope).every(valid) || !b.employees.length || b.employees.some(e => ![e.accountId, e.employeeId, e.employeeName].every(valid))) || new Set(businesses.map(b => JSON.stringify([b.scope.tenant, b.scope.store]))).size !== businesses.length) throw Error('invalid_bot_assembly');
   let closed = false, authenticated = false, epoch = 0;
@@ -158,10 +158,11 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
         resources.push(() => sender.close());
         const tasks = business.tasks ? createBotTasks({...business.tasks, mode: 'isolated-synthetic', authority}) : undefined;
         if (tasks) resources.push(() => tasks.close());
-        const conversations=business.conversations?createBotConversations({store:business.conversations.store,authority,native:{
+        const answerDelivery=business.conversations?.intake&&business.conversations.deliveryGate?createBotConversationDelivery({authority,ledger:business.ledger,sender,intake:business.conversations.intake,scope:business.scope,employees:business.employees,gate:business.conversations.deliveryGate}):undefined;
+        const conversations=business.conversations?createBotConversations({store:business.conversations.store,authority,...(answerDelivery?{prepareAnswer:answerDelivery.prepare}:{}),native:{
           readRoleWorkspace:input=>trackPhysical(business.conversations!.native.readRoleWorkspace(input)),
           prepareRoleWorkspace:input=>trackPhysical(business.conversations!.native.prepareRoleWorkspace(input)),
-        },...(business.conversations.intake?{intake:{readReceipt:input=>trackPhysical(business.conversations!.intake!.readReceipt(input)),submitMessage:input=>trackPhysical(business.conversations!.intake!.submitMessage(input)),...(business.conversations.intake.cancelReceipt?{cancelReceipt:(input:Parameters<BotConversationIntakePort['readReceipt']>[0])=>trackPhysical(business.conversations!.intake!.cancelReceipt!(input))}:{})}}:{})}):undefined;
+        },...(business.conversations.intake?{intake:{...(business.conversations.intake.readResults?{readResults:(input:Parameters<NonNullable<BotConversationIntakePort['readResults']>>[0])=>trackPhysical(business.conversations!.intake!.readResults!(input))}:{}),readReceipt:input=>trackPhysical(business.conversations!.intake!.readReceipt(input)),submitMessage:input=>trackPhysical(business.conversations!.intake!.submitMessage(input)),...(business.conversations.intake.cancelReceipt?{cancelReceipt:(input:Parameters<BotConversationIntakePort['readReceipt']>[0])=>trackPhysical(business.conversations!.intake!.cancelReceipt!(input))}:{})}}:{})}):undefined;
         // Original services fence business writes with this request's authority/budget. Their
         // finalizers must still persist unknown outcomes for actions already attempted at abort.
         const delivery = createBotDelivery({mode: 'isolated-synthetic', authority, ledger: business.ledger, scope: business.scope, employees: business.employees,

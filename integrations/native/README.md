@@ -70,4 +70,14 @@ N/O路径还须保持已核实原转换器的相对目录布局；来源或布�
 
 `verify-role-capabilities.mjs N_SRC O_SRC [WINDOWS_DRIVER] --skill-root ABSOLUTE_SKILLS_ROOT` 在临时副本中复用 D1–D3 服务、原 `resolveAgentProfileUserSkillsPolicy`、`pi-index.ts:runTurn` 和 Pi SDK 0.84.2。提供现有 package 的三个技能目录，工具按原文件 hash 核验，不下载或重新编写技能。Windows 参数须使用已准备的原版本驱动；当前原技能目录链接在 Windows 仍受 EPERM 限制，组合验收使用既有受控 Linux 环境。
 
-新增转换只修补原 MCP `isError:true` 被 Pi 记录为成功的问题。测试保留真实技能文件、SDK 参数校验与工具处理函数，只替换模型 I/O；故障验证使用临时合成数据。宿主启动和挂载由夹具代接，原 main 及完整有效来源合并未在本入口执行。外部 MCP 消费、执行中工具撤权、完整宿主恢复、D5 答案投递和真实模型效果不因本入口通过而完成。当前命令、证据及限制统一见 [D4 验收记录](../../docs/d4-acceptance.md)。
+新增转换只修补原 MCP `isError:true` 被 Pi 记录为成功的问题。测试保留真实技能文件、SDK 参数校验与工具处理函数，只替换模型 I/O；故障验证使用临时合成数据。宿主启动和挂载由夹具代接，原 main 及完整有效来源合并未在本入口执行。外部 MCP 消费、执行中工具撤权、完整宿主恢复和真实模型效果不因本入口通过而完成。D4 命令、证据及限制见 [D4 验收记录](../../docs/d4-acceptance.md)；D5 扩展同请求的持久答案和原 notify 载荷验证，见下节。
+
+## D5 完整答案和恢复通知
+
+`verify-conversation-execution.mjs N_SRC O_SRC [WINDOWS_DRIVER]` 复用现有双进程原服务夹具，校验持久输出见证、不可变终态结果、checkpoint/续写、原消息 ID 覆盖、通知间隙和新查询。`QIWE_CONVERSATION_MIGRATION=1` 验证 v70→72，`QIWE_D5_MIGRATION71=1` 验证 v71→72；这些环境开关只用于验证器，不是生产升级开关。Windows 使用此前准备的原版本驱动，Linux 使用原 Linux 驱动；没有新增依赖或模型调用。
+
+候选 `initializeIsolatedConversationExecution` 的可选 `onCompleted(receiptIds)` 在 Native 终态事务之后调用，通知异常不能回滚已保存答案。调用者须新建可信上下文和发送请求，复用 `createBotConversationDelivery.recover`，不能保留旧入站 `req_id`。D4 Pi 夹具在同一请求接上这一边界；原 main 尚未注册该回调。
+
+结果仍在原 Native SQLite；schema72 增加 `wecom_conversation_results`，沿用原备份与降级拒绝。Q 复用 `bot_reply_intents`，版本、页码、目标和正文固定后不可变。恢复按一个受理号调用，最多 32 个版本/32 页，调用者根据 `next.afterRevision/afterPage` 继续；明确拒绝才显式传 `retryRejected:true`，未知/正在尝试/已受理的通知均不重发。查询只在显式 `conversations.deliveryGate` 下补建缺失意图，不自动补发。
+
+完整验收与未覆盖边界见 [D5 验收记录](../../docs/d5-acceptance.md)。默认完整宿主仍不启用对话候选转换；新表、通知和写者保留 T7 扫描及恢复义务，不能将局部通过作为放行依据。

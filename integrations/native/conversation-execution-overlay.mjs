@@ -4,10 +4,15 @@ export function applyConversationExecution(files,native){
  for(const name of ['index.ts','group-queue.ts','conversation-history.ts'])if(!native.has(name))throw Error('D3_SOURCE_MISSING: '+name);
  const result=new Map(files);
  let db=result.get('db.ts');if(!db?.includes('wecom_conversation_receipts'))throw Error('D3_INTAKE_REQUIRED');
- db=once(db,'export const CURRENT_SCHEMA_VERSION = 70;','export const CURRENT_SCHEMA_VERSION = 71;');
+ db=once(db,'export const CURRENT_SCHEMA_VERSION = 70;','export const CURRENT_SCHEMA_VERSION = 72;');
  db=once(db,'    CREATE TABLE IF NOT EXISTS wecom_conversation_receipts (',`    CREATE TABLE IF NOT EXISTS wecom_conversation_execution (
  receipt_id TEXT PRIMARY KEY,workspace_jid TEXT NOT NULL,message_id TEXT NOT NULL,
  state TEXT NOT NULL,query_id TEXT,turn_id TEXT,session_id TEXT,input_json TEXT,batch_size INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS wecom_conversation_results (
+ receipt_id TEXT NOT NULL,revision INTEGER NOT NULL,query_id TEXT NOT NULL,turn_id TEXT NOT NULL,
+ session_id TEXT,source_ids_json TEXT NOT NULL,digest TEXT NOT NULL,content TEXT NOT NULL,
+ PRIMARY KEY(receipt_id,revision),UNIQUE(receipt_id,query_id,digest)
     );
     CREATE TABLE IF NOT EXISTS wecom_conversation_receipts (`);
  db=once(db,'input.target.profileId,input.target.selectionId);','input.target.profileId,input.target.selectionId);\n    queueConversationReceipt(input.receiptId);');
@@ -35,7 +40,7 @@ export function applyConversationExecution(files,native){
  let history=original('conversation-history.ts').replace("import { getMessagesPage }", "import { getMessagesPage, conversationMessageAllowed }");
  history=once(history,'.filter((m) => !pendingMessageIds.has(m.id))','.filter((m) => !pendingMessageIds.has(m.id))\n    .filter(m=>conversationMessageAllowed(m.id,chatJid,true))');result.set('conversation-history.ts',history);
  let index=original('index.ts');
- index="import {bindConversationAuthority,listQueuedConversationReceipts,conversationSessionStale,startConversationBatch,finishConversationBatch,noteConversationSession,assertConversationBatchCurrent,cancelConversationReceipt,queueConversationReceipt,readBotConversationReceipt} from './db.js';\n"+index;
+ index="import {bindConversationAuthority,listQueuedConversationReceipts,conversationSessionStale,startConversationBatch,finishConversationBatch,noteConversationSession,assertConversationBatchCurrent,cancelConversationReceipt,queueConversationReceipt,readBotConversationReceipt,noteConversationProjection,invalidateConversationProjection} from './db.js';\n"+index;
  index=once(index,'  // Get all messages since last agent interaction',`  if(conversationSessionStale(chatJid)) {
     deleteSession(effectiveGroup.folder); delete sessions[effectiveGroup.folder]; recoveryGroups.add(chatJid);
   }
@@ -44,6 +49,13 @@ export function applyConversationExecution(files,native){
     output = await runConversationAgent(
       effectiveGroup,`);
  index=index.replaceAll('queryRunId: queue.getActiveQueryId(chatJid) ?? undefined,','queryRunId: queue.getConversationQueryId(chatJid) ?? undefined,');
+ index=once(index,'              lastReplyMsgId = replySendOutcome.messageId;',`              if (!holdReason && result.status === 'success' && !result.providerFailure &&
+                  result.sourceKind !== 'compact_partial' && result.sourceKind !== 'overflow_partial' &&
+                  (!result.finalizationReason || result.finalizationReason === 'completed') && replySendOutcome.messageId) {
+                noteConversationProjection(chatJid,queue.getConversationQueryId(chatJid)??undefined,
+                  outputChannelScope.inputId,turnIdForDb,replySendOutcome.messageId,dbText);
+              }
+              lastReplyMsgId = replySendOutcome.messageId;`);
  index=once(index,'        runContainerAgent,\n        group,','        d3Runner,\n        group,');
  index=once(index,`main().catch((err) => {
   logger.error({ err }, 'Failed to start miniclaw');

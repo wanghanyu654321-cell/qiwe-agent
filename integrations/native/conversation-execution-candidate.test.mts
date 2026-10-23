@@ -14,6 +14,9 @@ import {setWebDeps} from '../src/web-context.js';
 import {prepareOwnProfiles} from '../test-support/workbench-opening.mjs';
 import {createRoleWorkspaceNativePort} from '../test-support/role-workspace-overlay.mjs';
 import {createBotConversationNativePort} from '../test-support/conversation-overlay.mjs';
+import {createBotConversationDelivery} from '../test-support/wecom-bot-delivery.mjs';
+import {createWecomBotContext} from '../test-support/wecom-bot-context.mjs';
+import {createBotSender} from '../test-support/wecom-bot-sender.mjs';
 import {createWecomBotAssembly} from '../test-support/wecom-bot-assembly.mjs';
 import {createBotSdkAdapter} from '../test-support/wecom-bot-sdk.mjs';
 import {WorkbenchAccessStore} from '../test-support/workbench-access.mjs';
@@ -67,14 +70,27 @@ it('same SDK request executes original queue/index/session and exact cancel surv
   expect(probe.prepare("SELECT value FROM router_state WHERE key='schema_version'").get()).toEqual({value:'70'});
   expect(probe.prepare("SELECT name FROM sqlite_master WHERE name='wecom_conversation_execution'").get()).toBeUndefined();probe.close();delete process.env.MINICLAW_MIGRATION_BACKUP_DIR;
  }
+ if(process.env.QIWE_CONVERSATION_PHASE==='restart'&&process.env.QIWE_D5_MIGRATION71==='1'){
+  const before=new Database(path.join(STORE_DIR,'messages.db'));
+  expect(before.prepare("SELECT value FROM router_state WHERE key='schema_version'").get()).toEqual({value:'71'});
+  expect(before.prepare("SELECT name FROM sqlite_master WHERE name='wecom_conversation_results'").get()).toBeUndefined();
+  const oldRows=JSON.stringify(['wecom_conversation_receipts','wecom_conversation_execution','messages'].map(table=>before.prepare('SELECT * FROM '+table+' ORDER BY rowid').all()));before.close();
+  const bad=path.join(DATA_DIR,'d5-migration-blocker');fs.writeFileSync(bad,'synthetic');process.env.MINICLAW_MIGRATION_BACKUP_DIR=bad;
+  expect(()=>db.initDatabase()).toThrow('pre-migration backup failed');
+  const unchanged=new Database(path.join(STORE_DIR,'messages.db'));expect(JSON.stringify(['wecom_conversation_receipts','wecom_conversation_execution','messages'].map(table=>unchanged.prepare('SELECT * FROM '+table+' ORDER BY rowid').all()))).toBe(oldRows);expect(unchanged.prepare("SELECT value FROM router_state WHERE key='schema_version'").get()).toEqual({value:'71'});unchanged.close();delete process.env.MINICLAW_MIGRATION_BACKUP_DIR;
+ }
  db.initDatabase();initialized=true;
- expect(db.getRouterState('schema_version')).toBe('71');
+ if(process.env.QIWE_CONVERSATION_PHASE==='restart'&&process.env.QIWE_D5_MIGRATION71==='1'){
+  expect(fs.readdirSync(path.join(STORE_DIR,'migration-backups')).some(name=>name.startsWith('messages-v71-to-v72-'))).toBe(true);
+  const first=JSON.parse(fs.readFileSync(path.join(DATA_DIR,'d3-first.json'),'utf8'));for(const item of first.receipts)expect(db.readConversationResults(item.receiptId)).toEqual([]);
+ }
+ expect(db.getRouterState('schema_version')).toBe('72');
  expect(db.getRouterState('d3-migration-marker')).toBe('preserved');
  const marker=path.join(DATA_DIR,'d3-first.json');
  if(process.env.QIWE_CONVERSATION_PHASE==='restart'){
   const first=JSON.parse(fs.readFileSync(marker,'utf8'));expect(first.processId).not.toBe(process.pid);
   db.bindConversationAuthority(()=>true);
-  for(const item of first.receipts)expect(db.readConversationExecution(item.receiptId)).toEqual(item.execution);
+  for(const item of first.receipts)expect(db.readConversationExecution(item.receiptId)).toEqual(item.execution.state==='cancelling'?{...item.execution,state:'unknown'}:item.execution);
   expect(db.getMessagesSince(first.jid,{timestamp:'',id:''}).filter(message=>first.receipts.some((item:any)=>item.messageId===message.id))).toEqual([]);
   const grants=new WorkbenchAccessStore(path.join(DATA_DIR,'conversation-grants.sqlite'));
   const ledger=new ManagerStore(path.join(DATA_DIR,'conversation-facts.sqlite'));const tasks=new BotTaskStore(path.join(DATA_DIR,'conversation-facts.sqlite'));
@@ -82,15 +98,25 @@ it('same SDK request executes original queue/index/session and exact cancel surv
   const port=createBotConversationNativePort({mode:'isolated-synthetic',gate,native:db,readActor,execution:{enqueue:()=>{throw Error('RESTART_NO_EXECUTION')},cancel:()=>{throw Error('RESTART_NO_CANCEL')}}});
   const assembly=createWecomBotAssembly({mode:'isolated-synthetic',client:offline.client,botId:actor.botId,corpId:actor.corpId,
    identity:{tenantId:actor.tenantId,stores:[{id:actor.storeId}],roles:['marketing'],store:grants,readBinding:async()=>({botId:actor.botId,corpId:actor.corpId,memberId:actor.memberId,accountId:actor.accountId,active:true,version:1}),readNative:async()=>({user:{id:actor.accountId,role:'member',status:'active',must_change_password:false},workspaceJid:'web:home-'+actor.accountId})},
-   businesses:[{scope:{tenant:actor.tenantId,store:actor.storeId,workspace:'web:original'},employees:[{accountId:actor.accountId,employeeId:'synthetic-employee',employeeName:'合成员工'}],ledger,conversations:{store:tasks,native:{readRoleWorkspace:async()=>{throw Error('RESTART_NO_PREPARE')},prepareRoleWorkspace:async()=>{throw Error('RESTART_NO_PREPARE')}},intake:port}}],sender:{sdk:adapter}});
+   businesses:[{scope:{tenant:actor.tenantId,store:actor.storeId,workspace:'web:original'},employees:[{accountId:actor.accountId,employeeId:'synthetic-employee',employeeName:'合成员工'}],ledger,conversations:{store:tasks,deliveryGate:gate,native:{readRoleWorkspace:async()=>{throw Error('RESTART_NO_PREPARE')},prepareRoleWorkspace:async()=>{throw Error('RESTART_NO_PREPARE')}},intake:port}}],sender:{sdk:adapter}});
   try{
    offline.authenticate();
+   const authority=createWecomBotContext({mode:'isolated-synthetic',botId:actor.botId,corpId:actor.corpId,tenantId:actor.tenantId,stores:[{id:actor.storeId}],roles:['marketing'],store:grants,readSubject:async()=>({botId:actor.botId,memberId:actor.memberId}),readBinding:async()=>({botId:actor.botId,corpId:actor.corpId,memberId:actor.memberId,accountId:actor.accountId,active:true,version:1}),readNative:async()=>({user:{id:actor.accountId,role:'member',status:'active',must_change_password:false},workspaceJid:'web:home-'+actor.accountId})});
+   const sender=createBotSender({sdk:adapter});
+   const recovery=createBotConversationDelivery({authority,ledger,sender,intake:port,gate,scope:{tenant:actor.tenantId,store:actor.storeId,workspace:'web:original'},employees:[{accountId:actor.accountId,employeeId:'synthetic-employee',employeeName:'合成员工'}]});
    for(const item of first.receipts){
     const id='restart-'+item.receiptId;
     offline.frame({cmd:'aibot_msg_callback',headers:{req_id:id},body:{msgid:id,aibotid:actor.botId,msgtype:'text',chattype:'single',from:{userid:actor.memberId,corpid:actor.corpId},text:{content:'查询对话 '+item.receiptId}}});await assembly.idle();
     expect(JSON.stringify(offline.sent.at(-1))).toContain(item.receiptId);
-    expect(JSON.stringify(offline.sent.at(-1))).toContain(item.execution.state==='completed'?'执行已结束':item.execution.state==='cancelled'?'已取消':item.execution.state==='failed'?'执行失败':item.execution.state==='cancelling'?'取消处理中':'执行结果待核实');
+    expect(JSON.stringify(offline.sent.at(-1))).toContain(item.execution.state==='completed'?(process.env.QIWE_D5_MIGRATION71==='1'?'执行已结束':'对话答案'):item.execution.state==='cancelled'?'已取消':item.execution.state==='failed'?'执行失败':item.execution.state==='cancelling'?'执行结果待核实':'执行结果待核实');
+    if(item.execution.state==='completed'&&process.env.QIWE_D5_MIGRATION71!=='1'){
+     const before=offline.sent.length;
+     const recovered=await recovery.recover({...scope(),deadline:performance.now()+3000},item.receiptId);expect(recovered.deliveries[0]?.state).toBe('accepted');
+     expect(offline.sent.length).toBeGreaterThan(before);expect(JSON.stringify(offline.sent.at(-1))).toContain(actor.memberId);
+     const after=offline.sent.length;await recovery.recover({...scope(),deadline:performance.now()+3000},item.receiptId);expect(offline.sent).toHaveLength(after);
+    }
    }
+   sender.close();authority.close();
   }finally{assembly.close();grants.close();ledger.close();tasks.close();}
   fs.writeFileSync(process.env.QIWE_CONVERSATION_EVIDENCE!,JSON.stringify({phase:'restart',processId:process.pid,receipts:first.receipts,sdkQueries:offline.sent.length}));return;
  }
@@ -104,19 +130,20 @@ it('same SDK request executes original queue/index/session and exact cancel surv
  const rolePort=createRoleWorkspaceNativePort({mode:'isolated-synthetic',gate,native,templates:[{key:'marketing',name:'合成内容岗位',skills:[],payload:{name:'合成内容岗位',prompt_schema_version:2}}],prepareOwnProfiles,journalDirectory:path.join(DATA_DIR,'role-journal'),readActor:async()=>({...actor,role:'marketing'})});
  const prepared=await rolePort.prepareRoleWorkspace({actor:{...actor,role:'marketing'},scope:scope(),idempotencyKey:roleKey,assertCurrent:async()=>{},withCurrent:async<T>(work:()=>T)=>work()});
  expect(prepared.state).toBe('ready');if(prepared.state!=='ready')throw Error('not_ready');
- let nextOutcome:'success'|'error'|'wrong'|'wrong-interrupt'='success',leaveRunning=false;const captures:any[]=[];const denied=new Set<string>();let release:(interrupted?:boolean)=>void=()=>{};
+ let nextOutcome:'success'|'error'|'wrong'|'wrong-interrupt'|'late-held'='success',leaveRunning=false;const captures:any[]=[];const denied=new Set<string>();let release:(interrupted?:boolean)=>void=()=>{};
  const grants=new WorkbenchAccessStore(path.join(DATA_DIR,'conversation-grants.sqlite'));
  const actors=new Map([[actor.accountId,actor]]);
  const host=await import('../src/index.js');
- const execution=host.initializeIsolatedConversationExecution({mode:'isolated-synthetic',authorize:receipt=>{if(!receipt)return false;try{receipt.actor.accountId='mutation-attempt';}catch{} const grant=grants.get(receipt.actor.accountId);return !!grant?.active&&grant.version===receipt.actor.grantVersion&&grant.storeId===receipt.actor.storeId&&grant.roles.includes(receipt.role)&&!denied.has(receipt.receiptId)&&Object.entries(actors.get(receipt.actor.accountId)??{}).length>0&&Object.entries(actors.get(receipt.actor.accountId)!).every(([key,value])=>(receipt.actor as any)[key]===value);},runner:async(group,input,onProcess,onOutput)=>{
+ const execution=host.initializeIsolatedConversationExecution({mode:'isolated-synthetic',onCompleted:()=>{throw Error('SYNTHETIC_NOTIFICATION_FAILURE');},authorize:receipt=>{if(!receipt)return false;try{receipt.actor.accountId='mutation-attempt';}catch{} const grant=grants.get(receipt.actor.accountId);return !!grant?.active&&grant.version===receipt.actor.grantVersion&&grant.storeId===receipt.actor.storeId&&grant.roles.includes(receipt.role)&&!denied.has(receipt.receiptId)&&Object.entries(actors.get(receipt.actor.accountId)??{}).length>0&&Object.entries(actors.get(receipt.actor.accountId)!).every(([key,value])=>(receipt.actor as any)[key]===value);},runner:async(group,input,onProcess,onOutput)=>{
   const outcome=nextOutcome;nextOutcome='success';captures.push(structuredClone(input));onProcess({pid:0} as any,'synthetic-runner',null);
   const interrupted=await new Promise<boolean>(resolve=>{release=(value=false)=>resolve(value);});
   if(interrupted){fs.rmSync(path.join(DATA_DIR,'ipc',group.folder,'input','_interrupt'),{force:true});}
   if(interrupted)await onOutput?.({status:'stream',result:null,streamEvent:{eventType:'status',statusText:'interrupted',turnId:input.turnId}} as any);
   if(outcome==='wrong-interrupt')await onOutput?.({status:'stream',result:null,streamEvent:{eventType:'status',statusText:'interrupted',turnId:'foreign-turn'}} as any);
   if(outcome==='error')return {status:'error',result:null,error:'synthetic-runner-failure'};
-  const output={status:'success' as const,result:'合成执行结果',inputTurnCompleted:true,inputTurnId:outcome==='wrong'?'wrong-turn':input.turnId,turnId:input.turnId,newSessionId:input.sessionId??'synthetic-session-'+captures.length};
-  await onOutput?.(output);return output;
+  if(captures.length===1){await onOutput?.({status:'success',result:'前段合成内容',sourceKind:'sdk_final',finalizationReason:'truncated',turnId:input.turnId,inputTurnId:input.turnId} as any);expect(db.readConversationResults(hash([actor.corpId,actor.botId,actor.memberId,'first']))).toEqual([]);}
+  const output={sourceKind:captures.length===1?'truncation_continue':'sdk_final',finalizationReason:'completed',status:'success' as const,result:'合成执行结果',inputTurnCompleted:true,inputTurnId:outcome==='wrong'?'wrong-turn':input.turnId,turnId:input.turnId,newSessionId:input.sessionId??'synthetic-session-'+captures.length};
+  await onOutput?.(output);if(outcome==='late-held'){const held={...output,inputTurnCompleted:false,result:'未完成的后续片段',finalizationReason:'truncated'};await onOutput?.(held);return held;}return output;
  }});
  const port=createBotConversationNativePort({mode:'isolated-synthetic',gate,native,readActor,execution});
  const ledger=new ManagerStore(path.join(DATA_DIR,'conversation-facts.sqlite'));const tasks=new BotTaskStore(path.join(DATA_DIR,'conversation-facts.sqlite'));
@@ -138,6 +165,15 @@ it('same SDK request executes original queue/index/session and exact cancel surv
   await send('third','保留的连续需求');release();await until(()=>captures.length===2);
   expect(captures[1].sessionId).toBe('synthetic-session-1');expect(captures[1].prompt).toContain('保留的连续需求');expect(captures[1].prompt).not.toContain('后续合成需求');
   expect((await get('first')).execution.state).toBe('completed');
+  expect(db.readConversationResults(first.receiptId)).toMatchObject([{receiptId:first.receiptId,revision:1,queryId:captures[0].queryRunId,turnId:captures[0].turnId,content:expect.stringContaining('合成执行结果')}]);
+  db.finishConversationBatch(first.workspaceJid,captures[0].queryRunId,'completed','synthetic-session-1');expect(db.readConversationResults(first.receiptId)).toHaveLength(1);
+  const frozenFirst=db.readConversationResults(first.receiptId)[0];
+  db.storeMessageDirect(frozenFirst.sourceOutputIds[0],first.workspaceJid,'assistant','Assistant','later mutable overwrite',new Date().toISOString(),true,{meta:{turnId:frozenFirst.turnId,sourceKind:'sdk_final',finalizationReason:'truncated'}});
+  expect(db.readConversationResults(first.receiptId)[0]).toEqual(frozenFirst);
+  db.storeMessageDirect(frozenFirst.sourceOutputIds[0],first.workspaceJid,'assistant','Assistant','later terminal revision',new Date().toISOString(),true,{meta:{turnId:frozenFirst.turnId,sourceKind:'sdk_final',finalizationReason:'completed'}});
+  db.noteConversationProjection(first.workspaceJid,captures[0].queryRunId,captures[0].turnId,captures[0].turnId,frozenFirst.sourceOutputIds[0],'later terminal revision');
+  db.finishConversationBatch(first.workspaceJid,captures[0].queryRunId,'completed','synthetic-session-1');
+  expect(db.readConversationResults(first.receiptId)).toHaveLength(2);expect(db.readConversationResults(first.receiptId)[0]).toEqual(frozenFirst);expect(db.readLatestConversationResult(first.receiptId)).toMatchObject({revision:2,content:'later terminal revision'});
   const third=await get('third');await send('cancel-active','取消对话 '+third.receiptId);
   expect((await get('third')).execution.state).toBe('cancelling');
   await send('query-active','查询对话 '+third.receiptId);expect(JSON.stringify(offline.sent.at(-1))).toContain('取消处理中');
@@ -175,7 +211,9 @@ it('same SDK request executes original queue/index/session and exact cancel surv
   nextOutcome='wrong-interrupt';await send('wrong-interrupt','合成错误中断turn需求');await until(()=>captures.length===7);release();
   await until(()=>!execution.queue.hasDirectActiveRunner(prepared.workspaceJid));
   expect(db.readConversationExecution(hash([actor.corpId,actor.botId,actor.memberId,'wrong-interrupt']))?.state).toBe('unknown');
-  await send('unfinished','退出进程前仍待终态');await until(()=>captures.length===8);
+  nextOutcome='late-held';await send('late-held','先完成后挂起不能冻结');await until(()=>captures.length===8);release();await until(()=>!execution.queue.hasDirectActiveRunner(prepared.workspaceJid));
+  expect(db.readConversationExecution(hash([actor.corpId,actor.botId,actor.memberId,'late-held']))?.state).toBe('unknown');expect(db.readConversationResults(hash([actor.corpId,actor.botId,actor.memberId,'late-held']))).toEqual([]);
+  await send('unfinished','退出进程前仍待终态');await until(()=>captures.length===9);
   await send('cancel-unfinished','取消对话 '+(await get('unfinished')).receiptId);leaveRunning=true;
   expect((await get('unfinished')).execution.state).toBe('cancelling');
   const actor2={...actor,accountId:'synthetic-revoked-owner',memberId:'synthetic-revoked-member'};actors.set(actor2.accountId,actor2);
@@ -191,10 +229,15 @@ it('same SDK request executes original queue/index/session and exact cancel surv
   expect(db.readConversationExecution(revokedId)?.state).toBe('queued');
   grants.change('admin',{accountId:actor2.accountId,storeId:actor2.storeId,roles:['marketing'],active:false,expectedVersion:1,requestKey:'second-revoke'});
   execution.queue.resumeGroupsAfterMutation(paused);await new Promise(resolve=>setTimeout(resolve,30));
-  expect(captures).toHaveLength(8);expect(db.getMessagesSince(prepared2.workspaceJid,{timestamp:'',id:''})).toEqual([]);
-  const receipts=await Promise.all(['first','second','third','fourth','fifth','snapshot-failed','failed','wrong','wrong-interrupt','unfinished'].map(get));
+  expect(captures).toHaveLength(9);expect(db.getMessagesSince(prepared2.workspaceJid,{timestamp:'',id:''})).toEqual([]);
+  const receipts=await Promise.all(['first','second','third','fourth','fifth','snapshot-failed','failed','wrong','wrong-interrupt','late-held','unfinished'].map(get));
   expect(blocked).toEqual([]);
   fs.writeFileSync(marker,JSON.stringify({processId:process.pid,jid:prepared.workspaceJid,receipts}));
+  if(process.env.QIWE_D5_MIGRATION71==='1'){
+   // Faithful v71 additive schema: retain every original message/receipt/execution
+   // from actual phase1 runs, remove only v72's result table and version marker.
+   const prior=new Database(path.join(STORE_DIR,'messages.db'));prior.exec("DROP TABLE wecom_conversation_results; UPDATE router_state SET value='71' WHERE key='schema_version'");prior.close();
+  }
   fs.writeFileSync(process.env.QIWE_CONVERSATION_EVIDENCE!,JSON.stringify({phase:'boot',processId:process.pid,captures,receipts}));
  }finally{if(!leaveRunning)release();assembly.close();grants.close();ledger.close();tasks.close();}
 });

@@ -106,7 +106,7 @@ export function createBotConversationNativePort({mode,gate,native,readActor,exec
   return {actor,roles,receiptId:input.receiptId,scope,
    originMessageId:input.originMessageId,fingerprint:input.fingerprint,text:input.text,
    target:input.target?Object.freeze({...input.target}):undefined,
-   assertCurrent:input.assertCurrent,withCurrent:input.withCurrent};
+   afterRevision:input.afterRevision,revision:input.revision,latest:input.latest,assertCurrent:input.assertCurrent,withCurrent:input.withCurrent};
  }
  async function current(input){
   await input.assertCurrent();
@@ -122,6 +122,7 @@ export function createBotConversationNativePort({mode,gate,native,readActor,exec
   if(!stored)return undefined;
   if(actorFields.some(field=>stored.actor?.[field]!==input.actor[field])||
     !input.roles.includes(stored.role)||stored.receiptId!==input.receiptId)throw Error('CONVERSATION_RECEIPT_DENIED');
+  checkWorkspace(input,{workspaceJid:stored.workspaceJid,profileId:stored.profileId,role:stored.role});
   const {actor:_actor,originMessageId:_origin,textHash:_hash,...receipt}=stored;
   return {...receipt,...(dispatch?{execution:source.readConversationExecution(stored.receiptId)}:{})};
  }
@@ -131,6 +132,10 @@ export function createBotConversationNativePort({mode,gate,native,readActor,exec
     typeof input.originMessageId!=='string'||!input.originMessageId||
     typeof input.text!=='string'||!input.text.trim()||typeof input.fingerprint!=='string'||!input.fingerprint||
     input.receiptId!==digest([a.corpId,a.botId,a.memberId,input.originMessageId]))throw Error('CONVERSATION_INPUT_INVALID');
+  checkWorkspace(input,t);
+ }
+ function checkWorkspace(input,t){
+  const a=input.actor;
   const key=digest([a.tenantId,a.accountId,a.storeId,t.role]);
   const claim=source.getOwnedRoleWorkspaceClaim(key);
   if(!claim||claim.state!=='ready'||claim.tenantId!==a.tenantId||claim.ownerId!==a.accountId||claim.storeId!==a.storeId||
@@ -149,6 +154,17 @@ export function createBotConversationNativePort({mode,gate,native,readActor,exec
   finally{policy.finishWrite(ticket);}
  }
  return Object.freeze({
+  ...(typeof source.readConversationResults==='function'?{readResults(raw){const input=snapshot(raw);return guarded(input,async()=>{
+    await current(input);owner(input.actor);
+    return input.withCurrent(()=>{
+      if(!budget(input.scope)||policy.isPaused())throw Error('CONVERSATION_BUDGET_EXPIRED');
+      owner(input.actor);const stored=source.readBotConversationReceipt(input.receiptId);checkReceipt(input,stored);
+      if(!stored||source.readConversationExecution(stored.receiptId)?.state!=='completed')return [];
+      if(input.latest===true){const result=source.readLatestConversationResult(stored.receiptId);return result?[result]:[];}
+      if(input.revision!==undefined){if(!Number.isSafeInteger(input.revision)||input.revision<1)throw Error('CONVERSATION_INPUT_INVALID');return source.readConversationResults(stored.receiptId,input.revision-1,1).filter(row=>row.revision===input.revision);}
+      return source.readConversationResults(stored.receiptId,input.afterRevision??0,32);
+    });
+  });}}:{}),
   readReceipt(raw){const input=snapshot(raw);return guarded(input,async()=>{
     await current(input);owner(input.actor);
     const result=await input.withCurrent(()=>{

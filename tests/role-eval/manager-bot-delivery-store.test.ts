@@ -253,3 +253,12 @@ it.each(['prepare','claim','legacy-claim','reserve'] as const)('checks authority
   expect(s.getReport(actor,report.id)?.delivery).toMatchObject({state:'prepared',attempt:0});expect(s.getBotReply(actor,input.id)?.delivery.state).toBe(kind==='prepare'?undefined:'prepared');
  }finally{await worker.terminate();}
 });
+it('freezes conversation version payload even before attempt, and retries rejected only by explicit claim',()=>{
+ const {s}=open(),input={...seed(),conversation:{receiptId:'b'.repeat(64),revision:1,digest:'c'.repeat(64),page:1,pages:1}};
+ expect(()=>s.prepareBotReply(actor,input)).not.toThrow();
+ const changed=structuredClone(input);changed.reply.body.stream.content='newer source';
+ expect(()=>s.prepareBotReply(actor,changed)).toThrow('bot_reply_conflict');
+ const claim=s.claimBotReply(actor,input.id)!;s.finishBotReply(actor,claim.id,claim.delivery.id,claim.delivery.attempt,outcome('rejected'));
+ expect(s.claimBotReply(actor,input.id)).toBeUndefined();
+ expect(s.claimBotReply(actor,input.id,undefined,true)?.delivery).toMatchObject({state:'attempting',attempt:2});
+});

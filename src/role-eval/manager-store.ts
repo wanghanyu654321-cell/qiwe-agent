@@ -12,7 +12,8 @@ export type DeliveryOutcome=Pick<ReportDelivery,'state'|'apiErrorCode'|'msgid'|'
 export interface BotReplyTarget {corpId:string;botId:string;memberId:string;accountId:string;workspaceJid:string;storeId:string;bindingVersion:number;}
 export interface BotReplyReservation {id:string;fingerprint:string;target:BotReplyTarget;reqId:string;}
 export interface BotReplyAttachment {snapshotHash:string;sha256:string;filename:string;byteLength:number;}
-export interface BotReplySeed {id:string;fingerprint:string;target:BotReplyTarget;reply:BotReplyPlan;reportId?:string;confirmation?:{reportId:string;deliveryId:string};attachment?:BotReplyAttachment;}
+export interface BotConversationReplyVersion {receiptId:string;revision:number;digest:string;page:number;pages:number;}
+export interface BotReplySeed {conversation?:BotConversationReplyVersion;id:string;fingerprint:string;target:BotReplyTarget;reply:BotReplyPlan;reportId?:string;confirmation?:{reportId:string;deliveryId:string};attachment?:BotReplyAttachment;}
 export interface BotReplyIntent extends BotReplySeed {actor:StaffContext;delivery:ReportDelivery;reportAttempt?:number;}
 interface ReservedBotReply {phase:'reserved';id:string;fingerprint:string;target:BotReplyTarget;actor:StaffContext;reply:{reqId:string};}
 type StoredBotReply=BotReplyIntent|ReservedBotReply;
@@ -33,7 +34,9 @@ function replyReservation(raw:BotReplyReservation):BotReplyReservation {
 }
 function replySeed(raw:BotReplySeed):BotReplySeed {
  let input:BotReplySeed;try{input=structuredClone(raw);}catch{throw Error('invalid_bot_reply');}
- if(!onlyKeys(input,['id','fingerprint','target','reply','reportId','confirmation','attachment'])||!digest(input.id)||!digest(input.fingerprint)||input.reportId!==undefined&&!digest(input.reportId))throw Error('invalid_bot_reply');
+ if(!onlyKeys(input,['id','fingerprint','target','reply','reportId','confirmation','attachment','conversation'])||!digest(input.id)||!digest(input.fingerprint)||input.reportId!==undefined&&!digest(input.reportId))throw Error('invalid_bot_reply');
+ const version=input.conversation;
+ if(version!==undefined&&(!onlyKeys(version,['receiptId','revision','digest','page','pages'])||!digest(version.receiptId)||!digest(version.digest)||![version.revision,version.page,version.pages].every(n=>Number.isSafeInteger(n)&&n>0)||version.page>version.pages||input.reportId!==undefined||input.attachment!==undefined))throw Error('invalid_bot_reply');
  const target=input.target,reply=input.reply;
  validReplyTarget(target);
  if(!onlyKeys(reply,['reqId','body','update'])||!bounded(reply.reqId,200)||!onlyKeys(reply.body,['msgtype','stream','template_card']))throw Error('invalid_bot_reply');
@@ -212,19 +215,19 @@ export class ManagerStore {
    const record=row?JSON.parse(row.body) as StoredBotReply:undefined;
    if(record&&(scope(record.actor)!==s||record.actor.employeeId!==owner.employeeId||record.fingerprint!==seed.fingerprint||!isDeepStrictEqual(record.target,seed.target)))throw Error('bot_reply_conflict');
    const existing=record&&!reserved(record)?record:undefined;
-   if(existing&&(existing.reportId!==seed.reportId||!isDeepStrictEqual(existing.confirmation,seed.confirmation)||!isDeepStrictEqual(existing.attachment,seed.attachment)))throw Error('bot_reply_conflict');
+   if(existing&&(existing.reportId!==seed.reportId||!isDeepStrictEqual(existing.confirmation,seed.confirmation)||!isDeepStrictEqual(existing.attachment,seed.attachment)||!isDeepStrictEqual(existing.conversation,seed.conversation)||seed.conversation!==undefined&&!isDeepStrictEqual(existing.reply,seed.reply)))throw Error('bot_reply_conflict');
    if(seed.confirmation)this.linkedReport(owner,seed);
-   const refresh=!existing||['prepared','blocked'].includes(existing.delivery.state);
+   const refresh=!existing||!seed.conversation&&['prepared','blocked'].includes(existing.delivery.state);
    if(refresh&&this.db.prepare("SELECT id FROM bot_reply_intents WHERE id<>? AND json_extract(body,'$.reply.reqId')=? LIMIT 1").get(seed.id,seed.reply.reqId))throw Error('bot_reply_conflict');
    const next:BotReplyIntent=existing?(refresh?{...existing,reply:seed.reply}:existing):{...seed,actor:record?.actor??owner,delivery:{id:hash('bot-reply|'+seed.id),confirmationHash:seed.fingerprint,state:'prepared',attempt:0,apiErrorCode:null,msgid:null,detail:'awaiting_dispatch'}};
    if(record){if(refresh)this.saveBotReply(next);}else this.db.prepare('INSERT INTO bot_reply_intents VALUES (?,?,?,?)').run(seed.id,s,owner.employeeId,JSON.stringify(next));
    checkActive?.();this.db.exec('COMMIT');return next;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
- claimBotReply(actor:StaffContext,id:string,checkActive?:()=>void):BotReplyIntent|undefined {
+ claimBotReply(actor:StaffContext,id:string,checkActive?:()=>void,retryRejected=false):BotReplyIntent|undefined {
   this.db.exec('BEGIN IMMEDIATE');try{
    checkActive?.();const current=this.getBotReply(actor,id);let next:BotReplyIntent|undefined;
-   if(current&&['prepared','blocked'].includes(current.delivery.state)){
+   if(current&&(['prepared','blocked'].includes(current.delivery.state)||retryRejected&&current.conversation!==undefined&&current.delivery.state==='rejected')){
     const report=current.confirmation?this.linkedReport(actor,current):undefined;
     if(!report||['prepared','blocked'].includes(report.delivery!.state)){
      let reportAttempt:number|undefined;

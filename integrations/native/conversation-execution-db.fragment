@@ -5,7 +5,7 @@ let conversationAuthority: ((receipt: ReturnType<typeof readBotConversationRecei
 export function bindConversationAuthority(check: NonNullable<typeof conversationAuthority>):void {
  if(conversationAuthority)throw Error('D3_ALREADY_BOUND');
  conversationAuthority=check;
- db.exec("UPDATE wecom_conversation_execution SET state='unknown' WHERE state='running'");
+ db.exec("UPDATE wecom_conversation_execution SET state='unknown' WHERE state IN ('running','cancelling')");
 }
 export function readConversationExecution(receiptId:string):ConversationExecution|undefined {
  const row=db.prepare('SELECT * FROM wecom_conversation_execution WHERE receipt_id=?').get(receiptId) as any;
@@ -51,8 +51,55 @@ export function startConversationBatch(chatJid:string,messageIds:string[],queryI
   }
  })();
 }
-export function finishConversationBatch(chatJid:string,queryId:string,state:'completed'|'failed'|'cancelled'|'unknown',sessionId?:string):void {
- db.prepare("UPDATE wecom_conversation_execution SET state=?,session_id=COALESCE(?,session_id) WHERE workspace_jid=? AND query_id=? AND state IN ('running','cancelling')").run(state,sessionId??null,chatJid,queryId);
+// A witness is recorded only at the original canonical persistence seam. Runner
+// success and a swallowed onOutput error never manufacture a witness.
+type ConversationProjection={inputId:string;turnId:string;sourceId:string;content:string};
+const conversationProjections=new Map<string,ConversationProjection>();
+const projectionKey=(jid:string,query:string)=>JSON.stringify([jid,query]);
+export function invalidateConversationProjection(jid:string,query:string):void {conversationProjections.delete(projectionKey(jid,query));}
+export function noteConversationProjection(jid:string,query:string|undefined,inputId:string,turnId:string|undefined,sourceId:string,content:string):void {
+ if(!query||!turnId)return;
+ const rows=db.prepare("SELECT turn_id FROM wecom_conversation_execution WHERE workspace_jid=? AND query_id=? AND state IN ('running','cancelling','completed')").all(jid,query) as any[];
+ if(!rows.length||rows.some(row=>row.turn_id!==turnId||row.turn_id!==inputId))return;
+ const row=db.prepare('SELECT content,turn_id,is_from_me FROM messages WHERE chat_jid=? AND id=?').get(jid,sourceId) as any;
+ if(!row||row.content!==content||row.turn_id!==turnId||row.is_from_me!==1)throw Error('D5_PROJECTION_NOT_DURABLE');
+ conversationProjections.set(projectionKey(jid,query),{inputId,turnId,sourceId,content});
+}
+export interface BotConversationFrozenResult {receiptId:string;revision:number;queryId:string;turnId:string;sessionId?:string;sourceOutputIds:string[];digest:string;content:string;}
+export function readConversationResults(receiptId:string,afterRevision=0,limit=32):BotConversationFrozenResult[] {
+ if(!Number.isSafeInteger(afterRevision)||afterRevision<0||!Number.isSafeInteger(limit)||limit<1||limit>32)throw Error('D5_RESULT_RANGE_INVALID');
+ const rows=db.prepare('SELECT * FROM wecom_conversation_results WHERE receipt_id=? AND revision>? ORDER BY revision LIMIT ?').all(receiptId,afterRevision,limit) as any[];
+ return rows.map(row=>({receiptId:row.receipt_id,revision:row.revision,queryId:row.query_id,turnId:row.turn_id,...(row.session_id?{sessionId:row.session_id}:{}),sourceOutputIds:JSON.parse(row.source_ids_json),digest:row.digest,content:row.content}));
+}
+export function readLatestConversationResult(receiptId:string):BotConversationFrozenResult|undefined {
+ const row=db.prepare('SELECT max(revision) AS revision FROM wecom_conversation_results WHERE receipt_id=?').get(receiptId) as any;
+ return row?.revision?readConversationResults(receiptId,row.revision-1,1)[0]:undefined;
+}
+export function finishConversationBatch(chatJid:string,queryId:string,state:'completed'|'failed'|'cancelled'|'unknown',sessionId?:string):string[] {
+ return db.transaction(()=>{
+  const projection=conversationProjections.get(projectionKey(chatJid,queryId));
+  const rows=db.prepare("SELECT receipt_id,state,turn_id,session_id FROM wecom_conversation_execution WHERE workspace_jid=? AND query_id=? AND state IN ('running','cancelling','completed')").all(chatJid,queryId) as any[];
+  const completed:string[]=[];
+  if(state==='completed'&&projection){
+   const canonical=db.prepare('SELECT content,turn_id,is_from_me,session_id FROM messages WHERE chat_jid=? AND id=?').get(chatJid,projection.sourceId) as any;
+   if(!canonical||canonical.is_from_me!==1||canonical.turn_id!==projection.turnId||canonical.content!==projection.content)throw Error('D5_PROJECTION_CHANGED');
+   for(const row of rows){
+    if(row.turn_id!==projection.inputId)throw Error('D5_RESULT_TURN_MISMATCH');
+    const actualSession=sessionId??canonical.session_id??row.session_id??null;
+    const digest=crypto.createHash('sha256').update(projection.content).digest('hex');
+    const existing=db.prepare('SELECT revision FROM wecom_conversation_results WHERE receipt_id=? AND query_id=? AND digest=?').get(row.receipt_id,queryId,digest);
+    if(!existing){
+     const revision=(db.prepare('SELECT COALESCE(max(revision),0)+1 AS n FROM wecom_conversation_results WHERE receipt_id=?').get(row.receipt_id) as any).n;
+     db.prepare('INSERT INTO wecom_conversation_results VALUES (?,?,?,?,?,?,?,?)').run(row.receipt_id,revision,queryId,projection.turnId,actualSession,JSON.stringify([projection.sourceId]),digest,projection.content);
+    }
+    completed.push(row.receipt_id);
+   }
+  }
+  const terminal=state==='completed'&&!completed.length?'unknown':state;
+  db.prepare("UPDATE wecom_conversation_execution SET state=?,session_id=COALESCE(?,session_id) WHERE workspace_jid=? AND query_id=? AND state IN ('running','cancelling')").run(terminal,sessionId??null,chatJid,queryId);
+  conversationProjections.delete(projectionKey(chatJid,queryId));
+  return completed;
+ })();
 }
 export function noteConversationSession(chatJid:string,queryId:string,sessionId:string):void {
  db.prepare('UPDATE wecom_conversation_execution SET session_id=? WHERE workspace_jid=? AND query_id=?').run(sessionId,chatJid,queryId);
