@@ -9,8 +9,9 @@ import {syncBuiltinESMExports} from 'node:module';
 // No main, queue, database, Web server, route, gate or scanner is mocked.
 it('boots the actual original main and real loopback Web stack while preserving paused durable work',async()=>{
  const events:string[]=[],intervals:any[]=[],timeouts:any[]=[],blocked:string[]=[];
+ const intervalCallbacks:Function[]=[];
  const originalInterval=globalThis.setInterval,originalTimeout=globalThis.setTimeout;
- vi.spyOn(globalThis,'setInterval').mockImplementation(((...args:any[])=>{const timer=(originalInterval as any)(...args);intervals.push(timer);return timer;}) as any);
+ vi.spyOn(globalThis,'setInterval').mockImplementation(((...args:any[])=>{const timer=(originalInterval as any)(...args);intervals.push(timer);intervalCallbacks.push(args[0]);return timer;}) as any);
  vi.spyOn(globalThis,'setTimeout').mockImplementation(((...args:any[])=>{const timer=(originalTimeout as any)(...args);timeouts.push(timer);return timer;}) as any);
  const servers:net.Server[]=[];
  const originalConnect=net.Socket.prototype.connect,originalListen=net.Server.prototype.listen;
@@ -107,6 +108,19 @@ it('boots the actual original main and real loopback Web stack while preserving 
   const headers={cookie:'miniclaw_session='+signSessionToken(sessionId),Origin:'http://127.0.0.1:19777','content-type':'application/json'};
   const status=await fetch(base+'/api/appointment/maintenance',{headers});expect(status.status).toBe(200);expect(await status.json()).toMatchObject({maintenance:true,phase:'paused',executionStart:'not_started'});
   events.push('actual-main-loopback-http-paused');
+  if(conversationFixture){
+   const markers=['deleteExpiredSessions','checkAndExpireSubscriptions','reconcileMonthlyUsage','cleanupOldDailyUsage'];
+   const beforeTimers=sql.prepare('SELECT * FROM user_sessions ORDER BY id').all();
+   for(const marker of markers){
+    const callbacks=intervalCallbacks.filter(fn=>fn.toString().includes(marker));
+    expect(callbacks,marker+' actual main callback').toHaveLength(1);
+    const writes=vi.spyOn(host.fullHostBootGate,'beginWrite');
+    try{callbacks[0]();expect(writes,marker+' paused callback').not.toHaveBeenCalled();
+     expect(sql.prepare('SELECT * FROM user_sessions ORDER BY id').all(),marker+' preserves expired session').toEqual(beforeTimers);
+    }finally{writes.mockRestore();}
+   }
+   events.push('actual-paused-main-four-maintenance-timers-preserve-sqlite');
+  }
   if(resultEvidenceFixture)resultEvidenceFixture.exercise({db,sql,restarting,events});
   if(conversationFixture)await conversationFixture.exercise({db,host,context,config,sql,snapshot,before,events});
   const unauth=await fetch(base+'/api/appointment/maintenance');expect(unauth.status).toBe(401);
@@ -128,8 +142,17 @@ it('boots the actual original main and real loopback Web stack while preserving 
    expect(expectedCounts[family],family).toBeGreaterThan(0);
   const fixedBlockers=new Set(['NON_DATABASE_RESIDUE_UNVERIFIED','EXTERNAL_WRITERS_UNVERIFIED','WRITER_COVERAGE_INCOMPLETE','OPAQUE_RUNTIME_METADATA_UNVERIFIED']);
   const otherBlockers=inspectionInventory.blockers.filter(blocker=>!fixedBlockers.has(blocker)).length;
+  const expectedProofs=Object.fromEntries([
+   ['nonDatabaseResidue','NON_DATABASE_RESIDUE_UNVERIFIED'],['externalWriters','EXTERNAL_WRITERS_UNVERIFIED'],
+   ['writerCoverage','WRITER_COVERAGE_INCOMPLETE'],['opaqueRuntimeMetadata','OPAQUE_RUNTIME_METADATA_UNVERIFIED'],
+  ].map(([name,code])=>[name,{status:'unverified',report:inspectionInventory.blockers.includes(code)?'reported':'not_reported'}]));
+  expect(inspectionInventory.complete).toBe(false);expect(inspectionInventory.safe).toBe(false);
+  expect(inspectionInventory.blockers.length).toBeGreaterThan(0);
+  expect(inspectionInventory.blockers).toEqual(expect.arrayContaining([
+   'EXTERNAL_WRITERS_UNVERIFIED','WRITER_COVERAGE_INCOMPLETE','OPAQUE_RUNTIME_METADATA_UNVERIFIED',
+  ]));
   expect(inspectionBody).toMatchObject({maintenance:true,phase:'paused',restorePermission:'not_issued',
-   proofs:{nonDatabaseResidue:{status:'unverified',report:'reported'},externalWriters:{status:'unverified',report:'reported'},writerCoverage:{status:'unverified',report:'reported'},opaqueRuntimeMetadata:{status:'unverified',report:'reported'}},
+   proofs:expectedProofs,
    recordCounts:expectedCounts,blockerCount:inspectionInventory.blockers.length,otherBlockerCount:otherBlockers,
    observation:{scope:'current_process_partial',retry:'unknown',warm:'unknown',oldRunner:'unknown',externalWriter:'unknown'}});
   for(const name of ['activeCount','activeContainerCount','activeHostProcessCount','waitingCount','enabledAccounts','connectedAccounts'])
@@ -154,7 +177,7 @@ it('boots the actual original main and real loopback Web stack while preserving 
    {name:'inspect-wrong-origin',operation:'inspect',headers:{...headers,Origin:'https://synthetic.invalid'},body:'{}',status:403},
    {name:'inspect-missing-origin',operation:'inspect',headers:noOrigin,body:'{}',status:403},
    {name:'inspect-member',operation:'inspect',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('b'.repeat(64))},body:'{}',status:403},
-   {name:'inspect-other-owner',operation:'inspect',headers,body:'{}',status:403},
+   {name:'inspect-other-owner',operation:'inspect',headers,body:'{}',status:conversationFixture?200:403},
    {name:'inspect-forced-password-change',operation:'inspect',headers,body:'{}',status:403},
    {name:'inspect-disabled-account',operation:'inspect',headers,body:'{}',status:403},
    {name:'inspect-expired',operation:'inspect',headers:{...headers,cookie:'miniclaw_session='+signSessionToken('c'.repeat(64))},body:'{}',status:401},
@@ -173,7 +196,7 @@ it('boots the actual original main and real loopback Web stack while preserving 
   ];
   for(const refusal of refusals){
    // Exercise live member role revalidation using the same synthetic account;
-   // a second owner at startup would correctly add its inaccessible home group.
+   // The separate restoration scenario uses genuine admin/member accounts.
    if(refusal.name==='member'||refusal.name==='inspect-member')sql.prepare("UPDATE users SET role='member' WHERE id=?").run(adminId);
    if(refusal.name==='inspect-other-owner')sql.prepare("UPDATE registered_groups SET created_by='synthetic-foreign-owner' WHERE jid='web:full-role'").run();
    if(refusal.name==='inspect-forced-password-change')sql.prepare('UPDATE users SET must_change_password=1 WHERE id=?').run(adminId);
@@ -186,7 +209,12 @@ it('boots the actual original main and real loopback Web stack while preserving 
     if(refusal.name==='inspect-forced-password-change')sql.prepare('UPDATE users SET must_change_password=0 WHERE id=?').run(adminId);
     if(refusal.name==='inspect-disabled-account')sql.prepare("UPDATE users SET status='active' WHERE id=?").run(adminId);
    }
-   expect(response.status,refusal.name).toBe(refusal.status);await response.text();
+   expect(response.status,refusal.name).toBe(refusal.status);
+   const refusalBody=await response.text();
+   if(refusal.name==='inspect-other-owner'&&conversationFixture){
+    expect(refusalBody).not.toContain('synthetic queued content');
+    expect(refusalBody).not.toContain('synthetic-foreign-owner');
+   }
    expect(host.fullHostBootGate.phase(),refusal.name).toBe('paused');expect(snapshot(),refusal.name).toEqual(before);
    expect(sql.prepare("SELECT COUNT(*) AS n FROM auth_audit_log WHERE event_type='appointment_restore_committed'").get()).toMatchObject({n:0});
   }
@@ -238,7 +266,7 @@ it('boots the actual original main and real loopback Web stack while preserving 
   expect(exits).toEqual([0]);expect(servers[0].listening).toBe(false);expect(queue.isShuttingDown()).toBe(true);expect(db.isDatabaseInitialized()).toBe(false);events.push('actual-main-signal-shutdown');
   db.initDatabase();expect(snapshot()).toEqual(before);db.closeDatabase();events.push('actual-db-reopen-preserved');
   expect(blocked).toEqual([]);
-  fs.writeFileSync(process.env.QIWE_FULL_HOST_EVIDENCE!,JSON.stringify({events,phase:restarting?'restart':'boot',processId:process.pid,loopback:address,source:'actual original main and complete O stack',limitations:['original metadata collector is permanently incomplete; successful restore and post-restore execution not established','Static frontend assets are absent; HTTP API and WebSocket server startup are exercised'],guards:['TCP only to actual fixture IPv4 loopback HTTP ports; Unix sockets and named pipes refused','DNS only numeric loopback lookup; resolve/reverse and all UDP bind/connect/send refused','child_process exec/execFile/spawn/fork families refused','pure allowlisted environment, synthetic HOME/cwd/data and fixed session secret','process.exit is observed and original shutdown body runs; native worker/addon filesystem calls are not a general filesystem sandbox'],observedNoBlockedAttempts:blocked.length===0},null,2));
+  fs.writeFileSync(process.env.QIWE_FULL_HOST_EVIDENCE!,JSON.stringify({events,phase:restarting?'restart':'boot',processId:process.pid,loopback:address,source:'actual original main and complete O stack',limitations:['this paused regression supplies no supervisor boundary; successful restoration is exercised separately','Static frontend assets are absent; HTTP API and WebSocket server startup are exercised'],guards:['TCP only to actual fixture IPv4 loopback HTTP ports; Unix sockets and named pipes refused','DNS only numeric loopback lookup; resolve/reverse and all UDP bind/connect/send refused','child_process exec/execFile/spawn/fork families refused','pure allowlisted environment, synthetic HOME/cwd/data and fixed session secret','process.exit is observed and original shutdown body runs; native worker/addon filesystem calls are not a general filesystem sandbox'],observedNoBlockedAttempts:blocked.length===0},null,2));
  }finally{
   await web.shutdownWebServer();if(db.isDatabaseInitialized())db.closeDatabase();sql.close();
   for(const timer of intervals)clearInterval(timer);for(const timer of timeouts)clearTimeout(timer);

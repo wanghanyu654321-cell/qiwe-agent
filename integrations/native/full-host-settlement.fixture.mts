@@ -90,7 +90,15 @@ export async function exercise({db,host,context,sql,restarting,events}:any){
  expect(provider).not.toHaveBeenCalled();
  const inventory=db.scanAppointmentBootInventory();
  expect(inventory).toMatchObject({complete:false,safe:false});
- for(const blocker of ['NON_DATABASE_RESIDUE_UNVERIFIED','EXTERNAL_WRITERS_UNVERIFIED','WRITER_COVERAGE_INCOMPLETE','OPAQUE_RUNTIME_METADATA_UNVERIFIED'])expect(inventory.blockers).toContain(blocker);
+ for(const blocker of ['EXTERNAL_WRITERS_UNVERIFIED','WRITER_COVERAGE_INCOMPLETE','OPAQUE_RUNTIME_METADATA_UNVERIFIED'])expect(inventory.blockers).toContain(blocker);
+ if(process.platform==='linux'){
+  // This fixture creates only original passive runner snapshots, not executable
+  // residue. Missing external/current-writer facts still prevent restoration.
+  expect(inventory.blockers).not.toContain('NON_DATABASE_RESIDUE_UNVERIFIED');
+  const residue=inventory.records.filter((r:any)=>r.kind.startsWith('residue/'));
+  expect(residue.length).toBeGreaterThan(0);
+  expect(residue.every((r:any)=>r.disposition==='eligible')).toBe(true);
+ }else expect(inventory.blockers).toContain('NON_DATABASE_RESIDUE_UNVERIFIED');
  const selectedRecords=inventory.records.filter((r:any)=>r.kind.endsWith('/streaming_cards')||r.kind.endsWith('/turn_runs'));
  expect(selectedRecords).toHaveLength(6);
  expect(selectedRecords.every((r:any)=>r.disposition==='blocked')).toBe(true);

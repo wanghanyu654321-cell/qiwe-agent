@@ -118,6 +118,17 @@ function conversationExecutionSetup(execution: any, cancel?: (input:any)=>Promis
  const dispatch=async(id:string,command:string)=>{s.offline.frame(text('member-a',id,command));await app.idle();return JSON.stringify(s.offline.sent.at(-1)?.body);};
  return {...s,app,intake,receipt,dispatch};
 }
+it('shows preserved legacy work as manual review without cancelling or resubmitting it',async()=>{
+ const cancel=vi.fn(async()=>{throw Error('preserved_work_must_not_cancel');});
+ const s=conversationExecutionSetup({state:'running',queryId:'old-query',manualReviewRequired:true},cancel);
+ for(const command of ['查询对话','取消对话']){
+  const reply=await s.dispatch('preserved-'+command,command+' '+s.receipt.receiptId);
+  expect(reply).toContain('待人工核对');expect(reply).toContain('暂停自动续跑');
+  expect(reply).not.toContain('执行中');expect(reply).not.toContain('已取消');
+ }
+ expect(cancel).not.toHaveBeenCalled();expect(s.intake.submitMessage).not.toHaveBeenCalled();
+ expect(s.receipt.execution.state).toBe('running');
+});
 it.each([
  ['queued','排队中'],['running','执行中'],['cancelling','取消处理中'],['cancelled','已取消'],['completed','执行已结束'],['failed','执行失败'],['unknown','执行结果待核实'],
 ])('D3 query shows persisted %s without inventing an answer',async(state,label)=>{

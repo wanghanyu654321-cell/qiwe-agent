@@ -33,7 +33,10 @@ export function snapshot(sql:any){return {
 export function exercise({db,sql,restarting,events}:any){
  const stored=snapshot(sql),record=resultRecord(db);
  expect(record?.evidence,'original canonical producer must reach the original recovery scanner').toContain('d5_frozen_result_verified');
- expect(record).toMatchObject({disposition:'blocked'});
+ // A verified frozen result is a passive record. This fixture supplies no
+ // supervisor boundary, so record eligibility cannot authorize host recovery.
+ expect(record).toMatchObject({disposition:'eligible'});
+ expect(db.scanAppointmentBootInventory()).toMatchObject({complete:false,safe:false});
  expect(record.evidence).toEqual(expect.arrayContaining(['result_delivery_unverified','old_writer_ownership_unverified','current_snapshot_only']));
  expect(db.readConversationResults(receiptId)).toMatchObject([{revision:1,content}]);
  if(!restarting){

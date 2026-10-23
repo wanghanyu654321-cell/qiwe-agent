@@ -1,5 +1,44 @@
 # T7-A：完整 O 宿主与 D1–D5 对话接线
 
+## 当前恢复改造（本地正向闭环已验证）
+
+2026-10-23，基线 `f3ff566`，分支 `feat/wecom-host-resume`。本节覆盖本轮；下文原接线结果为历史，不能替代本节的当前版本证据。
+
+- 用户确认：未知旧任务/回复保留待人工核对，不自动续跑/重发；管理员可恢复整个宿主，不能因此读取员工内容。
+- fullhost schema 73 在原 `router_state` 保存精确版本的保留记录，原 task/message/execution/result 行不改写。原到期扫描、claim、回收、通知及会话消费者检查保留状态。不同的新请求仍沿原路径。
+- 管理接口继续使用原当前管理员、Origin、review ticket、重查、SQLite COMMIT 与 drain；只拆分全局恢复快照与私有内容读取权限。选定内容处置保留原 ACL。内部维护函数复用原 write ticket，不新增公网 API。
+- 暂停时阻止原 HTTP/WS 写入及维护定时器；管理员登录仍可通过原登录流程取得恢复身份，并被原写票据跟踪。未知外发结果不推断成功或自动重发。
+- 原 inventory 只在实际观察满足时放行支持的记录；未知结构、执行性 IPC、未知旧状态继续阻塞。本地外部写者证明只适用于固定离线 Linux 容器：只读源码、隔离网络/进程空间、实际子进程持有同库与 IPC 写能力后退出、PID1 保持只读已解除链接的证据描述符。它不是生产恢复开关。
+- 原72→73备份及旧72拒绝打开新73已做真实 SQLite 验证。回退须使用理解73保留语义的兼容版本，不能降版本号或覆盖新数据。
+
+当前验证命令：原 `verify-full-host.mjs N --host-overlay O --full-host-conversations --typecheck` 做暂停回归；离线 Linux 加 `--restoration-scenario`，先独立进程准备合成旧记录，再两次实际 main 启动并经原恢复 API，核对不同 worker PID、离线 SDK 收发和已存结果。该选项只选择测试，不改变门禁状态。外部 runner/model I/O 使用确定性替身；原宿主、队列、账本、scanner、恢复事务、D1–D5接线保持真实。
+
+证据保存在 `.local/t7a-resume-20261023/`。Linux 正向场景 `restoration-integrated-3.log`，runId `2026-10-23T11-13-03-118Z-32fefa85-f7f7-403e-9098-c03d4917f5f2`：独立 seed 进程 44 准备真实 SQLite 合成历史；原 main 进程 83 恢复后，经过离线官方 SDK、可信身份、D1 岗位选择、D2 受理、同一原队列及 D3/D5 持久结果，runner 执行 1 次、通知 1 次，主动查询可读到相同答案。进程 127 恢复同一数据库后再次查回，runner 0 次、通知 0 次；没有重新 seed。旧 task/run、D2/execution、Q unknown 回复保持原内容。两次均经过原 review/restore/COMMIT/drain，未注入 safe/ready。
+
+同场景验证管理员全局恢复权限、普通员工恢复 403、选定他人内容处置 403、管理员读取员工消息 404、本人读取 200。保留操作验证旧版本拒绝及当前管理员身份，已完成且有合法冻结答案的旧对话仍允许本人通过新查询取回，并明确“待人工核对”；排队/运行状态不会伪装完成或直接取消。
+
+实际运行修复的必要缺口包括：原 SQLite `_rowid_` 返回列名导致会话元数据读取失败；原管理员 Home 固定为 host，须在原 host-inline 执行点先执行已有业务边界检查；原自动生成的、从未 claim 的初始 onboarding 和 memory store 索引按真实消费者合同识别；原 IM 迁移存在性标记与信息性 IPC 快照按精确路径识别。未知状态、已 claim onboarding、任意 host 配置及执行性 IPC 不因此放行。
+
+| 当前验证 | 命令与结果 |
+| --- | --- |
+| 公共回归 | `E:/npm.cmd test -- --maxWorkers=1`：43 文件、598 测试通过；`public-after-review.log` |
+| 公共检查 | `E:/npm.cmd run typecheck`、`E:/npm.cmd run build` exit 0；无 lint 脚本 |
+| Windows 原完整宿主暂停回归 | 原 full-host 验证命令加本地 SQLite adapter：typecheck 0、环境 1、岗位 3；boot/restart 各25 pass、8个 Linux 场景 skip。`windows-regression-4.log`，runId `2026-10-23T11-31-34-674Z-f072c271-6aed-420d-9ed8-acbcfae0c14d`，PID 7436/13392 |
+| Linux 原完整宿主暂停回归 | 固定离线容器运行原 full-host 验证命令：typecheck 0、环境 1、岗位 3；boot/restart 各32 pass、1个 Windows 场景 skip。`linux-regression-3.log`，runId `2026-10-23T11-31-32-765Z-e945bfc4-ecd8-438e-b0ce-504a21e94276`，PID 110/252 |
+| Linux 原完整宿主正向恢复 | `verify-full-host.mjs N --host-overlay O --full-host-conversations --restoration-scenario --typecheck`，由固定镜像 `--network=none` 容器执行；typecheck、seed、boot、restart 均通过，PID与runId见上文 |
+| 判定与监督器专项 | `node --test integrations/native/full-host-restoration-classifier.test.mts`：13 pass；监督器专项5 pass，Windows不支持的PID1正例1 skip，该正例由Linux整链实际执行 |
+| 原模式兼容 | 与 `f3ff566` 比较 default / D2 / 旧 D3–D5 全部组合模块内容一致；不把历史平台回归写成本轮重跑 |
+
+原权限403、缺少消费者阻断、通知租约丢失、host-inline实际spawn及保留查询丢答案均有对应失败证据；已修复后重跑相关行为。`restoration-integrated-1.log`（会话列名/迁移标记）与 `restoration-integrated-2.log`（原初始引导/记忆索引）是保留的失败记录，不计成功。`linux-regression-final.log` 的9项失败来自旧测试要求全部条目阻塞及 inspect 固定报告缺证；已改为核对实际报告，并具体断言危险文件/IPC/不安全目录仍阻塞，原全局拒恢复断言保留。`windows-regression-2.log` 因误用相对源码路径被参数解析器拒绝，未执行测试，不计行为失败或成功。
+
+本轮只证明本地合成环境下“恢复→操作→回复→新进程查回”。没有真实连接、手机实收、模型质量或生产验收；静态Web资产未复制，浏览器页面未验收。完整宿主上的连续追问、精确取消和原 Pi 多技能组合仍需沿用现有D3/D4能力补验，不能用本次确定性runner替身替代。生产必须提供与其真实运行环境相符的旧执行者失权与恢复事实；此处固定Linux验证进程的证据不能移用。
+
+最终三个成功运行的组合摘要均为 `ba7b65faad50cbeeeed14bf30c1f9c94f0e1425214b8e6539de849a290ef9b4c`，已逐文件核对实际运行来源。独立规格、权限、保留语义、异常及兼容审查未留下阻塞问题；曾发现的旧已完成对话不能取回保存答案已修复并复审。第二次普通 Linux 运行 `linux-regression-2.log`（31 pass、1 fail、1 skip）发现旧卡片 fixture 仍要求固定非数据库 blocker；最终改为核对实际被动残留，同时显式保留其余三项缺证、六条 card/turn 阻塞及宿主暂停断言，第三次通过。运行代码未因此放宽。审查报告和精确文件清单保存于同证据目录的 `independent-review.md` 与 `final-manifest.json`。
+
+最终暂存检查后只清理三个文件的末尾空行；`format-only-proof.json` 记录测试版本与交付版本的对应哈希，核实转译程序完全一致，重新组合的运行摘要仍为上述值。不将这三个文件的新原始哈希冒称为旧日志中的哈希。
+
+## 先前同宿主接线交付（历史）
+
 2026-10-23；开发基线 `915b4309e90125eecbcaa297bcd0591f850474fd`，分支 `feat/wecom-full-host-conversations`。本轮只做隔离合成候选；保留 [T7-A 必要条件](t7a-necessary-conditions-acceptance.md) 的四类 blocker，不签发恢复许可，不连接真实渠道、不发送真实消息、不调用模型、不读取真实配置/业务数据库、不安装依赖。
 
 ## 组合契约与最小迁接
