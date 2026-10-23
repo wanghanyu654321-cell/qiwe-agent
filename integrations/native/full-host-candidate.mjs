@@ -12,6 +12,7 @@ import {extractOwnedWorkspaceService,extractOwnedProfileService,addOwnedWorkspac
 import {addBotConversationReceipts} from './conversation-overlay.mjs';
 import {applyConversationExecution} from './conversation-execution-overlay.mjs';
 import {applyConversationRecoveryInventory} from './conversation-recovery-overlay.mjs';
+import {applySelectedCardSettlement} from './selected-card-settlement-overlay.mjs';
 
 const digest=value=>createHash('sha256').update(value).digest('hex');
 export const fullHostSourceIdentity='8611519397c78b1f5d9591ae18ea2c5d1c399aab3d63b9ea5311ebd8c18b0bad';
@@ -51,9 +52,11 @@ export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversati
   const url='data:text/javascript;base64,'+Buffer.from(code).toString('base64');moduleUrls.set(name,url);return url;
  }
  const inventory=await import(snapshot('appointment-boot-inventory-overlay.mjs'));
+ const selectedRecovery=fullHostConversationExecution?await import(snapshot('appointment-boot-overlay.mjs')):undefined;
  const files=new Map();
  for(const [name,bytes]of native){
   let value=inventory.applyBootInventoryCandidate(bytes.toString('utf8'),path.join(nativeRoot,name));
+  if(selectedRecovery&&name==='channel-reliability-recovery.ts')value=selectedRecovery.applySelectedCardRecovery(value,path.join(nativeRoot,name));
   // Preserve O's complete DB boot/rejection/inventory stack and transplant only
   // T7's independently validated exact claim function (all other DB code stays).
   if(name==='db.ts'){
@@ -95,6 +98,7 @@ export async function createFullHostCandidate(nativeRoot,overlayRoot,{conversati
  adapted.set('db.ts',conversationIntake?addBotConversationReceipts(ownedDb):ownedDb);
  if(conversationExecution||fullHostConversationExecution)adapted=applyConversationExecution(adapted,native,{fullHost:fullHostConversationExecution});
  if(conversationIntake)adapted=applyConversationRecoveryInventory(adapted,{conversationExecution:conversationExecution||fullHostConversationExecution});
+ if(fullHostConversationExecution)adapted=applySelectedCardSettlement(adapted);
  if(fullHostConversationExecution)return {files:adapted,audit:{fullHostConversationExecution:true,conversationExecution:false,conversationIntake:true,nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'original read-only maintenance diagnostics; no restore permit',scope:'complete O index/main/queue/Web/DB/gate plus D1-D5 hooks; original runner retained; paused admission/query/cancel/delivery refused; no startup replay or recovery permission'}};
  return {files:adapted,audit:{conversationExecution,isolatedExecutionScope:conversationExecution?'N original index closure and GroupQueue; deterministic terminal runner; O complete-host not exercised':undefined,nativeTree:fullHostSourceIdentity,overlayTree:fullHostOverlayIdentity,nativeHashes:hostNativeHashes,overlayHashes:hostOverlayHashes,runtimeOverlayFiles:[...included].sort(),composedHashes:Object.fromEntries([...adapted].map(([name,value])=>[name,digest(value)])),conversationIntake,conversationDbHash:digest(adapted.get('db.ts')),recoveryInspection:'current-admin read-only diagnostics; no restore permit',projectConfigurationCoverage:'original descriptor scanner extended to project .env/config; all original blockers retained',scope:conversationExecution?'isolated D3 N original queue/index processGroupMessages/runAgent/fallback with synthetic terminal runner; main and O complete-host not executed':conversationIntake?'isolated D2 original-service candidate only; index/main not executed or bound; known receipt metadata remains blocked, no recovery permission':'actual original index main, complete O host/queue/Web/DB stack plus exact T7 DB/scheduler and recovery inspection; no inventory completion bypass'}};
 }

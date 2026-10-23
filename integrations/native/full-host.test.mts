@@ -67,6 +67,7 @@ it('boots the actual original main and real loopback Web stack while preserving 
  const now=new Date().toISOString(),adminId='synthetic-full-admin',sessionId='a'.repeat(64);
  const {default:Database}=await import('better-sqlite3');
  const conversationFixture=process.env.QIWE_FULL_HOST_CONVERSATIONS==='1'?await import('./full-host-conversation.fixture.mts'):undefined;
+ const settlementFixture=conversationFixture?await import('./full-host-settlement.fixture.mts'):undefined;
  if(!restarting){
  db.initDatabase();
  const seedSql=new Database(path.join(config.STORE_DIR,'messages.db'));
@@ -83,11 +84,12 @@ it('boots the actual original main and real loopback Web stack while preserving 
  const run=db.createTaskRun({task:db.getTaskById('full-unselected')!,triggerType:'manual',idempotencyKey:'synthetic-full-stale'}).run;
  seedSql.prepare("UPDATE task_runs SET status='success',notification_status='failed',notification_payload=?,notification_available_at='2000-01-01T00:00:00.000Z' WHERE id=?").run(JSON.stringify({kind:'send_message',chatJid:'web:full-role',text:'synthetic never deliver'}),run.id);
  if(conversationFixture)await conversationFixture.seed(db,seedSql,config);
+ if(settlementFixture)await settlementFixture.seed();
  seedSql.close();
  }
  const sql=new Database(path.join(config.STORE_DIR,'messages.db'),{fileMustExist:true});
- const snapshot=()=>({messages:sql.prepare('SELECT * FROM messages ORDER BY id').all(),tasks:sql.prepare('SELECT * FROM scheduled_tasks ORDER BY id').all(),runs:sql.prepare('SELECT * FROM task_runs ORDER BY id').all(),...(conversationFixture?{conversations:conversationFixture.snapshot(sql,config)}:{})});
- const before=restarting?JSON.parse(fs.readFileSync(process.env.QIWE_FULL_HOST_SNAPSHOT!,'utf8')):snapshot();
+ const snapshot=()=>({messages:sql.prepare('SELECT * FROM messages ORDER BY id').all(),tasks:sql.prepare('SELECT * FROM scheduled_tasks ORDER BY id').all(),runs:sql.prepare('SELECT * FROM task_runs ORDER BY id').all(),...(conversationFixture?{conversations:conversationFixture.snapshot(sql,config)}:{}),...(settlementFixture?{settlement:settlementFixture.snapshot(sql)}:{})});
+ let before=restarting?JSON.parse(fs.readFileSync(process.env.QIWE_FULL_HOST_SNAPSHOT!,'utf8')):snapshot();
  if(restarting)expect(snapshot()).toEqual(before);
  else{fs.writeFileSync(process.env.QIWE_FULL_HOST_SNAPSHOT!,JSON.stringify(before));db.closeDatabase();}
  const web=await import('../src/web.js');
@@ -223,6 +225,11 @@ it('boots the actual original main and real loopback Web stack while preserving 
   expect(work).not.toHaveBeenCalled();expect(snapshot()).toEqual(before);expect(host.fullHostBootGate.phase()).toBe('paused');
   events.push('actual-inspect-original-queue-obligations-not-global-proof');
   events.push('actual-queue-db-promoting-notification-preserved');
+  if(settlementFixture){
+   await settlementFixture.exercise({db,host,context,sql,restarting,events});
+   if(!restarting){before=snapshot();fs.writeFileSync(process.env.QIWE_FULL_HOST_SNAPSHOT!,JSON.stringify(before));}
+   else expect(snapshot()).toEqual(before);
+  }
   process.emit('SIGTERM');
   for(let n=0;n<200&&!exits.length;n++)await new Promise(resolve=>originalTimeout(resolve,25));
   expect(exits).toEqual([0]);expect(servers[0].listening).toBe(false);expect(queue.isShuttingDown()).toBe(true);expect(db.isDatabaseInitialized()).toBe(false);events.push('actual-main-signal-shutdown');
