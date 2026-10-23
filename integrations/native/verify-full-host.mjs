@@ -28,6 +28,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  fs.mkdirSync(path.join(directory,'tests'));
  fs.copyFileSync(path.join(here,'full-host.test.mts'),path.join(directory,'tests/full-host.test.mts'));
  fs.copyFileSync(path.join(here,'full-host-conversation.fixture.mts'),path.join(directory,'tests/full-host-conversation.fixture.mts'));
+ fs.copyFileSync(path.join(here,'full-host-settlement.fixture.mts'),path.join(directory,'tests/full-host-settlement.fixture.mts'));
  if(options.fullHostConversations)fs.copyFileSync(path.join(here,'full-host-conversation-queue.test.mts'),path.join(directory,'tests/full-host-conversation-queue.test.mts'));
  if(options.fullHostConversations){
   for(const name of ['full-host-environment.test.mts','full-host-conversation-wrapper.test.mts'])fs.copyFileSync(path.join(here,name),path.join(directory,'tests',name));
@@ -113,6 +114,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  const hashFile=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
  const conversationInstrumentation=options.fullHostConversations?{
   fullHostConversationFixtureHash:hashFile(path.join(directory,'tests/full-host-conversation.fixture.mts')),
+  fullHostSettlementFixtureHash:hashFile(path.join(directory,'tests/full-host-settlement.fixture.mts')),
   fullHostConversationQueueTestHash:hashFile(path.join(directory,'tests/full-host-conversation-queue.test.mts')),
   fullHostEnvironmentTestHash:hashFile(path.join(directory,'tests/full-host-environment.test.mts')),
   fullHostImportSliceHash:hashFile(path.join(directory,'src/index-imports.mjs')),
