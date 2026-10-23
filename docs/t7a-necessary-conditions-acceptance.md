@@ -1,6 +1,6 @@
 # T7-A 必要恢复条件：有限补齐与验收
 
-本文前面的 `fea6957` / `915b430` 元数据与同宿主验收保留为历史，使用其各自基线与运行日期；本次 `cf52468e3f7eb33a2ee9c10319b7de4dd38a8fdd` 基线的增量及当前缺口见文末“原选定卡片处置补证”。旧通过结果不自动覆盖本次组合。
+当前增量基线为 `0e661e486946877a50f9b3fad9c0d3c4c3bdc5e8`，当前事实与未完成处置见文末“原 D5 冻结结果关系证据”。前面的 `fea6957` / `915b430` 元数据与同宿主验收，以及 `cf52468` 基线的“原选定卡片处置补证”均保留为历史，使用各自基线与运行日期；旧通过结果不自动覆盖本次组合。
 
 2026-10-23；开发基线 `fea6957b8a6897e69de1c22c433ed049b311c10e`，分支 `feat/wecom-host-recovery-t7a`。本轮目标是在原恢复门禁保持拒绝的前提下，把 D1–D5 已有状态纳入必要条件，修补有明确生产者依据的最小缺口。仅本地隔离、合成数据；原 N/O 源码只读，无真实配置、数据库、消息、模型或新依赖。T7-A1–A4 与完整产品验收均未完成。
 
@@ -105,4 +105,49 @@ Windows/Linux 最终候选组合摘要均为 `cc5b49abe358a0b74ef08104af876a7094
 
 本次补原一个明确记录族的本地处置接缝和失败收敛证据，部分推进 A1/A2；未解决其 Provider/输出归账、未知 outbox、后台写者失权、跨进程物理回调或完整关联图结清，也未证明其他逐族记录可 eligible/stopped/terminal。
 
-四个全局 blocker 不只是等待外部材料的开关：当前原 scanner 始终加入 `NON_DATABASE_RESIDUE_UNVERIFIED`、`EXTERNAL_WRITERS_UNVERIFIED`、`WRITER_COVERAGE_INCOMPLETE`、`OPAQUE_RUNTIME_METADATA_UNVERIFIED`，所有业务 metadata 记录仍 blocked，`complete:false/safe:false`；它尚无消费真实证据并按原消费者语义分类的接缝。本次没有删除这些 blocker、注入 safe/ready 或以 manual_reconciliation 代替证明。原 review/restore 仍拒绝，A1 全范围、A2 全范围、A3/A4 正向恢复、T7-B/C 与真实员工验收均未完成。Windows 继续保留原 residue unsupported 的失败关闭行为。
+该轮四个全局 blocker 不只是等待外部材料的开关：原 scanner 始终加入 `NON_DATABASE_RESIDUE_UNVERIFIED`、`EXTERNAL_WRITERS_UNVERIFIED`、`WRITER_COVERAGE_INCOMPLETE`、`OPAQUE_RUNTIME_METADATA_UNVERIFIED`，所有业务 metadata 记录仍 blocked，`complete:false/safe:false`；该轮没有消费真实证据并按原消费者语义分类的接缝。没有删除这些 blocker、注入 safe/ready 或以 manual_reconciliation 代替证明。原 review/restore 仍拒绝，A1 全范围、A2 全范围、A3/A4 正向恢复、T7-B/C 与真实员工验收均未完成。Windows 继续保留原 residue unsupported 的失败关闭行为。后续 D5 当前持久关系的局部证据增量见下节。
+
+## 原 D5 冻结结果关系证据（2026-10-23）
+
+本轮基线 `0e661e486946877a50f9b3fad9c0d3c4c3bdc5e8`，分支 `feat/wecom-recovery-evidence`。目标是将已有 D5 原持久结果的事实接到原恢复 scanner 和实际 review 读取路径，减少“结果存在但只见元数据”的已知缺口。只在 `fullHostConversationExecution:true` 的完整 O+D1–D5 组合中应用；N/O 原树只读，没有新 schema、依赖、Agent 循环、证明注册表、HTTP API、模型调用或发送。
+
+### 原生产者、消费者和判定
+
+事实生产者是 [conversation-execution-db.fragment](../integrations/native/conversation-execution-db.fragment) 的 `noteConversationProjection → finishConversationBatch`：前者在原 canonical `messages` 持久化后确认正文、turn、输出方向；后者在同库事务内再次确认 canonical row，按 receipt/query/digest 固定完整答案、source IDs、revision 和 session，并结束 execution。`readConversationResults` 按固定版本读取；[conversation-overlay.mjs](../integrations/native/conversation-overlay.mjs) 的 `readBotConversationReceipt` 另核对来源事件 digest、actor 与原输入的 sender/source/time/text hash。`readResults` 还需要当前授权和可受理 gate，这些不能由结果存在推出。
+
+[conversation-result-evidence-overlay.mjs](../integrations/native/conversation-result-evidence-overlay.mjs) 将 [限定判定片段](../integrations/native/conversation-result-evidence.fragment) 接入原 `scanAppointmentBootMetadata` 已有 deferred 事务。每个 result 只按原主键读取完整 result、receipt、execution 及对应输入和 canonical 输出；先用长度投影估算并扣除原累计行/字节预算，才将正文/JSON 读入进程。沿用 100000 行、64MiB 保守估算和 5000ms 协作时间边界，不宣称同步 SQLite 有硬中断能力。结构白名单、未知对象、主键分页、同连接 change counter 和扫描后变化检查不变。
+
+判定复用原关系：receipt 的 origin/input 一致；execution 的 receipt/workspace/message/completed/query/turn 与输入列表相符；result 的正整数 revision、query/turn、单个 canonical source、正文 SHA-256 和输出方向一致。session 由原生产者允许从显式参数或缓存选择，不增加跨行 session 相等假设；完整原始 session、actor、正文和其他行字段仍全部绑定到关系版本 hash。迁移行缺少可解释关联、JSON 损坏、来源丢失或关系变化时，只记未核实，不修改、删除或重新生成旧结果。
+
+原 inventory record 获得 `d5_frozen_result_verified` 或 `d5_result_relation_unverified`，并固定附带 `current_snapshot_only`、`result_delivery_unverified`、`old_writer_ownership_unverified`。所有原始正文、actor、来源 ID 和 session 仅用于私有判定及 hash，不出现在报告。证据表示**当前 SQLite 快照内持久关系一致**；不证明真正模型执行、当前授权有效、员工已可查回、平台投递完成或旧写者永久失权。该表还会被 D5 delivery 消费并生成回复意图，原恢复规则没有据此赋予终态或可发送的处置契约，因此 record 仍 `blocked`，四类全局 blocker 与 `complete:false/safe:false` 全部保留。
+
+### 行为验证和未完成处置
+
+[full-host-result-evidence.fixture.mts](../integrations/native/full-host-result-evidence.fixture.mts) 在第一进程启动前、隔离合成数据上调用原 witness/finish 生产者生成历史结果，随后由实际 main 的 DB/scanner 消费。它不表示 paused 主宿主执行成功。第二个独立进程只读同一持久结果和关系证据；原 HTTP review 继续 409，原员工查询/执行/发送继续维护拒绝。
+
+有效 RED：原生产者已成功保存答案，原 scanner 却只有 `metadata_snapshot_only`，新增证据断言失败，日志 `.local/t7a-evidence-20261023/windows-red.log`，runId `2026-10-23T09-56-45-639Z-49ca836d-2ce8-4d19-bfad-4b21a24a0191`。篡改正文/digest/source/query/turn、输入 actor/textHash、execution 状态或关联、缺 receipt 均应否定证据；允许的 opaque session 变化仍可通过持久关系检查，但必须改变 version。12MiB canonical 正文在读取前触发原字节预算并保留未核实。首次补充缺 receipt 测试把 DELETE 放在第二连接未提交事务内，scanner 正确看见已提交原行；该夹具错误已改为提交 DELETE 后读取并恢复精确原行，不计运行缺陷或有效 RED。
+
+| 遗留记录 | 本轮结果及仍缺的原契约 |
+| --- | --- |
+| D5 冻结结果 | 补当前持久关系生成与判定；没有把结果或通知标作已结清。独立 manager DB 的 prepared/attempting/unknown 回复和 Provider 回执尚未在原恢复事务结清 |
+| D2 queued/promoting 输入 | 未做写入处置。原 `commitAppointmentSelectedRejection` 仍缺实际装配的同步 `verifyInputUnexecuted`；队列标签、空 outbox 和本进程零计数均不足以证明未执行 |
+| D3 running/cancelling/unknown | 未做写入处置。原取消意图、DB 状态和租约不证明旧 runner 已失权或迟到回调不可写；不重跑、不自动拒绝 |
+| 原 scheduled_tasks/task_runs/通知 | 未做写入处置。暂停/删除定义不结清 active run 或专用取消通知；仍缺旧 scheduler/runner 强制围栏和通知结果生产者 |
+| selected streaming card/turn | 保留上一轮原本地人工核对及第二写补偿；未以该状态替代 Provider/旧发送者结清 |
+
+本轮只完成这个确定的 D5 局部证据切片，其他遗留记录保持阻塞不能称为“已处理”。四类原完整证明、A1/A2 全范围及 A3/A4 正向恢复仍未完成，T7-B/C 和真实员工验收仍待其前置条件。
+
+### 最终同版本验证
+
+工作目录为本仓；Windows 使用 `E:/node.exe`、既有 prepared better-sqlite3 驱动。Windows 实际命令为 `integrations/native/verify-full-host.mjs N --host-overlay O --sqlite-driver PREPARED_DRIVER --full-host-conversations --typecheck`；Linux 复用 `.local/t7a-fullhost-20261023/run-linux.mjs fullhost` 调用同一 verifier，固定镜像 `--pull=never --network=none`、只读输入/rootfs 与临时合成数据。没有下载依赖。日志均在 `.local/t7a-evidence-20261023/`。
+
+| 最终运行 | 实际结果 |
+| --- | --- |
+| Windows `windows-final2.log` | runId `2026-10-23T10-02-28-639Z-cf66acd7-9d3b-4fc5-ba17-fa80ba10ac61`；exit 0，实际候选 typecheck 0，环境 1 pass、原角色 3 pass，boot/restart 各 11 pass/8 Linux 专属 skip；worker PID 14300 / 35416 |
+| Linux `linux-final.log` | runId `2026-10-23T10-02-52-594Z-e7041ee0-f743-44c0-b4f3-6e5d8aecc2fe`；exit 0，实际候选 typecheck 0，环境 1 pass、原角色 3 pass，boot/restart 各 18 pass/1 Windows 专属 skip；worker PID 110 / 185 |
+| 当前源与运行绑定 | `E:/node.exe .local/t7a-evidence-20261023/summarize.mjs` exit 0；两平台的 builder、实际测试/verifier、证据 fixture/overlay/fragment 与当前源一致，且当前重新组合模块摘要一致，写入 `final-summary.json` |
+| 旧组合兼容 | `stage-and-compare.mjs` exit 0；默认 O、D2、旧 isolated D3/D5 各 208 生成模块与 `0e661e4` 逐字节一致。完整 O+D1–D5 仅 `appointment-boot-inventory.ts` 改变；未用旧测试结果代替本轮兼容比较 |
+
+最终双平台组合摘要为 `fb3a8622d92fa22a1f7502da751ac2efb47a17684652733fa825b047b61fb3a5`，实际 inventory hash 为 `9e3f299e8e4305c3a2b7a3f76f52f8a61db7565c54f7cbe10f421ee889aa1fdb`；证据 fragment hash `280a0a75f1d6d1a5fd1d3319e67ad99394533ad88e8c6fce10471a596943f395`，最终 fixture hash `423d372d69e8bdf3ae952f8e4dd9d43c81ccc4d57b80c3a89dd26ade73a834c4`。Linux tmpfs 审计随容器清理，以宿主保留 stdout/log 和绑定摘要为证。最终首进程做否定反例，第二进程不重 seed、不执行或发送，只读第一轮已恢复原值的持久数据。
+
+公共测试、类型检查、构建、独立审查及 GitHub 交付由主执行者核对。当前没有 lint 脚本。既有 harness 缺少 `web/dist` 的静态站点提示保留，本轮不声称浏览器 UI、成功恢复、真实企微实收或员工产品验收通过。
