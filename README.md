@@ -2,6 +2,8 @@
 
 当前已实现本地单成员真实试点装配 `createControlledRealWecomBotPilot`，复用 D1–D5、可信身份、SDK 和持久回复；原 `createWecomBotPilot` 合成入口继续保持隔离限制。真实装配仍需接入具体宿主与当前员工授权，不能仅填密钥就开放。已分别完成一次原 Pi 的 DeepSeek 真实连通测试和新建个人测试机器人的 SDK 认证；认证后已断开，未发送业务消息。员工实际执行和手机查回尚待验收，见[受控真实试点](docs/controlled-real-pilot.md)。此前的完整宿主与真实容器离线闭环证据见[同宿主验收](docs/t7a-fullhost-conversation-acceptance.md)。
 
+2026-10-25：原 Web 已在本机独立容器启动，初始化页面可访问，业务保持暂停。用户已允许先在本地开通原内容营销岗位；单成员开通接口已实现并验证，但员工及岗位资源接纳、实际授权写入和真实宿主恢复仍待完成。该初始化入口不等于员工机器人已经可用。
+
 完整产品目标是**让原Agent Claw作为多岗位、多技能助手供员工在企微使用**，见[产品使用说明与工程对应](docs/product-usage-and-engineering.md)。D1–D5 已接入原岗位、会话、执行与完整答案。2026-10-24，完整宿主在离线 Linux 合成环境中经原恢复流程启动，已验证原 Pi 连续追问、精确取消、岗位多技能与本地工具执行、保存完整答案并经离线企微 SDK 返回；新进程恢复同库后可以查回，不重新执行或补发。具体范围见[同宿主恢复验收](docs/t7a-fullhost-conversation-acceptance.md)。该场景的模型 I/O 和容器传输接点使用合成替身。
 
 完整宿主已取得与真实 Docker runner 同链运行的本地证据：同一自然语言需求经过原恢复流程、队列、原 shell/Pi、真实工具读取、原 SQLite 和离线企微回复，第二进程查回时未重跑或补发，见[同宿主验收](docs/t7a-fullhost-conversation-acceptance.md)。独立审查修复后的最终版本已完成同轮组合验证。模型响应为合成数据，企微为离线 SDK；真实手机实收、模型效果及生产开放仍待验收。原镜像与独立传输记录见[真实容器验收](docs/t7a-real-container-acceptance.md)。
