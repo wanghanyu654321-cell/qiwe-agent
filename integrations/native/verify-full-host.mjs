@@ -119,7 +119,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   publicSupportHashes[name].compiledHash=createHash('sha256').update(compiled).digest('hex');
   fs.writeFileSync(path.join(directory,'test-support',name+'.mjs'),compiled);
  }
- for(const name of ['wecom-bot-preparation','wecom-bot-assembly','wecom-bot-sdk','workbench-access','manager-store'])compilePublic(name);
+ for(const name of ['wecom-bot-pilot','wecom-bot-preparation','wecom-bot-assembly','wecom-bot-sdk','workbench-access','manager-store'])compilePublic(name);
  compilePublic('workbench-opening');
  compilePublic('wecom-bot-task-store');
  fs.copyFileSync(path.join(here,'role-workspace-overlay.mjs'),path.join(directory,'test-support/role-workspace-overlay.mjs'));
