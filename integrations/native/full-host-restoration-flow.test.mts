@@ -79,7 +79,7 @@ it('restores the actual nonempty host through original HTTP before accepting any
    transport.pi=await installRestorationPi({config,transportCalls:transport.calls});
   }
   local?.activate();
-  const employee=await exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls:transport.calls,pi:transport.pi,events,...(local?{expectedAnswer:localContainerAnswer,request:localContainerRequest}:{})});
+  const employee=await exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls:transport.calls,pi:transport.pi,events,...(local?{expectedAnswer:localContainerAnswer,request:localContainerRequest,c4Case:local.c4Case}:{})});
   const localContainer=await local?.verify(boundary);
   process.emit('SIGTERM');shutdown=true;await boundary.wait(()=>boundary.exits.length>0,'original main shutdown');expect(boundary.exits).toEqual([0]);
   fs.writeFileSync(process.env.QIWE_RESTORATION_FLOW_EVIDENCE??path.join(process.cwd(),'restoration-flow.json'),JSON.stringify({phase:process.env.QIWE_FULL_HOST_PHASE??'boot',processId:process.pid,events,transportCalls:transport.calls.length,employee,localContainer},null,2));
