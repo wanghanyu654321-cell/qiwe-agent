@@ -13,8 +13,9 @@ vi.mock('child_process',async importOriginal=>{
  exec:(command:string,...rest:any[])=>actual.execFile(process.env.QIWE_REAL_CONTAINER_DOCKER!,['--host','npipe:////./pipe/dockerDesktopLinuxEngine',...admitDockerShell(command,owned())],...rest),
  spawn:(command:string,args:string[],options:any)=>{
   if(command!=='docker')throw Error('REAL_CONTAINER_UNEXPECTED_SPAWN '+command);
-  const admitted=admitDockerRun(args,{root:process.cwd(),runner:process.env.QIWE_REAL_CONTAINER_RUNNER!,deps:process.env.QIWE_REAL_CONTAINER_RUNNER_DEPS!,provider:path.resolve('real-container-provider.mjs'),image:process.env.QIWE_REAL_CONTAINER_IMAGE!,runId:process.env.QIWE_REAL_CONTAINER_RUN_ID!,expectedMounts:transport.expectedMounts});
-  if(transport.startupFailure)admitted.args[admitted.args.length-1]='/verification/intentionally-missing-startup.mjs';
+  const originalShell=process.env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL?JSON.parse(process.env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL):undefined;
+  const admitted=admitDockerRun(args,{root:process.cwd(),runner:process.env.QIWE_REAL_CONTAINER_RUNNER!,deps:process.env.QIWE_REAL_CONTAINER_RUNNER_DEPS!,provider:path.resolve('real-container-provider.mjs'),image:process.env.QIWE_REAL_CONTAINER_IMAGE!,runId:process.env.QIWE_REAL_CONTAINER_RUN_ID!,expectedMounts:transport.expectedMounts,originalShell,startupFailure:transport.startupFailure});
+  if(transport.startupFailure&&!originalShell)admitted.args[admitted.args.length-1]='/verification/intentionally-missing-startup.mjs';
   const manifest=process.env.QIWE_REAL_CONTAINER_OWNED_MANIFEST;if(!manifest)throw Error('REAL_CONTAINER_OWNED_MANIFEST_REQUIRED');
   fs.appendFileSync(manifest,admitted.name+'\n');
   const proc=actual.spawn(process.env.QIWE_REAL_CONTAINER_DOCKER!,['--host','npipe:////./pipe/dockerDesktopLinuxEngine',...admitted.args],options);
@@ -26,6 +27,7 @@ vi.mock('child_process',async importOriginal=>{
 const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 async function wait(predicate:()=>any,label:string,timeoutMs=30000){const until=Date.now()+timeoutMs;while(Date.now()<until){if(predicate())return;await sleep(25);}throw Error('REAL_CONTAINER_WAIT '+label);}
 const docker=(args:string[])=>transport.actual.execFileSync(process.env.QIWE_REAL_CONTAINER_DOCKER!,['--host','npipe:////./pipe/dockerDesktopLinuxEngine',...args],{encoding:'utf8',timeout:15000});
+const originalShell=process.env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL?JSON.parse(process.env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL):undefined;
 
 it('uses original runContainerAgent pipes and true main for mounts, warm IPC, abort, drain, close and actual startup failure',async()=>{
  const db=await import('../src/db.js'),config=await import('../src/config.js');db.initDatabase();
@@ -64,11 +66,21 @@ it('uses original runContainerAgent pipes and true main for mounts, warm IPC, ab
  }
  const completed=(run:any,id:string)=>run.localOutputs.find((output:any)=>output.inputTurnId===id&&output.inputTurnCompleted);
  async function inspect(run:any){
-  await wait(()=>{if(run.launchEvidence.settled)throw Error('REAL_CONTAINER_EARLY_RETURN '+JSON.stringify(run.launchEvidence));return run.readEvents().some((event:any)=>event.type==='bootstrap');},'child bootstrap');
+  await wait(()=>{if(run.launchEvidence.settled)throw Error('REAL_CONTAINER_EARLY_RETURN '+JSON.stringify(run.launchEvidence));return run.readEvents().some((event:any)=>event.type==='bootstrap');},'child bootstrap',originalShell?90000:30000);
   const value=JSON.parse(docker(['inspect',run.name]))[0];
   expect(value.Name).toBe('/'+run.name);expect(value.State.Running).toBe(true);expect(value.HostConfig.NetworkMode).toBe('none');expect(value.HostConfig.Privileged).toBe(false);expect(value.HostConfig.ReadonlyRootfs).toBe(true);
   expect(value.HostConfig.CapDrop).toContain('ALL');expect(value.Mounts.some((mount:any)=>mount.Destination.includes('docker.sock'))).toBe(false);
-  expect(value.HostConfig.Tmpfs?.['/home/node/.claude/skills']).toBe('rw,nosuid,nodev');
+  if(originalShell){
+   expect(value.Image).toBe(originalShell.image);expect(value.Config.Entrypoint).toEqual(['/app/entrypoint.sh']);
+   expect(value.HostConfig.CapAdd.map((cap:string)=>cap.replace(/^CAP_/,'' )).sort()).toEqual(['CHOWN','DAC_OVERRIDE','FOWNER','KILL','SETGID','SETUID']);
+   expect(value.HostConfig.Tmpfs?.['/run']).toBe('rw,nosuid,nodev');
+   const bootstrap=run.readEvents().find((event:any)=>event.type==='bootstrap');
+   expect(bootstrap.uid).toBe(1000);expect(bootstrap.gid).toBe(1000);expect(bootstrap.originalShellExecuted).toBe(true);expect(bootstrap.chromiumExecuted).toBe(true);expect(bootstrap.identityBridgeExecuted).toBe(true);
+   expect(bootstrap.shellEvidence.mainEffectiveCaps).toBe('0000000000000000');expect(bootstrap.shellEvidence.shellEffectiveCaps).toBe('00000000000000eb');expect(bootstrap.shellEvidence.noNewPrivileges).toBe('1');
+   expect(bootstrap.shellEvidence.piVersion).toBe('0.84.2');
+   for(const [name,hash]of Object.entries(bootstrap.shellEvidence.helpers))expect(hash).toBe(originalShell.files[name]);
+   expect(value.Mounts.some((mount:any)=>['/app','/app/node_modules'].includes(mount.Destination))).toBe(false);
+  }else expect(value.HostConfig.Tmpfs?.['/home/node/.claude/skills']).toBe('rw,nosuid,nodev');
   expect(value.Config.Labels?.['qiwe.verification-run']).toBe(process.env.QIWE_REAL_CONTAINER_RUN_ID);
   const normalized=(source:string)=>source.replaceAll('\\','/').replace(/^\/run\/desktop\/mnt\/host\//,'').replace(/^\/host_mnt\//,'').replace(/^([A-Za-z]):\//,'$1/').toLowerCase();
   const planned=transport.runs.find(item=>item.name===run.name);
@@ -117,10 +129,10 @@ it('uses original runContainerAgent pipes and true main for mounts, warm IPC, ab
   drain.sentinel('drain');await sleep(100);expect(drain.proc.exitCode).toBe(null);expect(drain.readEvents().some((event:any)=>event.type==='aborted')).toBe(false);
   fs.writeFileSync(path.join(drain.ipc,'release-drain'),'');await wait(()=>completed(drain,'initial-drain'),'active drain answer');await exited(drain);
   transport.startupFailure=true;const failure=launch('failure');const failed=await failure.done;await wait(()=>failure.proc.exitCode!==null,'nonzero startup exit');
-  expect(failure.proc.exitCode).not.toBe(0);expect(failed.status).toBe('error');expect(transport.runs.at(-1).stderr).toContain('intentionally-missing-startup');expect(docker(['ps','-a','--filter','name=^/'+failure.name+'$','--format','{{.ID}}']).trim()).toBe('');owned.delete(failure.name);
+  expect(failure.proc.exitCode).not.toBe(0);expect(failed.status).toBe('error');expect(transport.runs.at(-1).stderr).toContain(originalShell?'/verification/provider.mjs':'intentionally-missing-startup');expect(docker(['ps','-a','--filter','name=^/'+failure.name+'$','--format','{{.ID}}']).trim()).toBe('');owned.delete(failure.name);
   passed=true;
  }catch(error){failure=String(error);throw error;}finally{
-  fs.writeFileSync(process.env.QIWE_REAL_CONTAINER_EVIDENCE!,JSON.stringify({status:passed?'passed':'failed',failure,hostPid:process.pid,launches,outputs,events,inspections,runs:transport.runs,remainingOwnedNames:[...owned],cleanupOwner:'outer verifier; validates immutable run label before removal',limitations:['Reduced Node bootstrap; original shell/Chromium/identity bridge not executed','Independent transport evidence; restored-host conjunction unverified','Missing-path tool errors demonstrate absent mount visibility, not a general filesystem ACL']},null,2));
+  fs.writeFileSync(process.env.QIWE_REAL_CONTAINER_EVIDENCE!,JSON.stringify({status:passed?'passed':'failed',failure,hostPid:process.pid,launches,outputs,events,inspections,runs:transport.runs,remainingOwnedNames:[...owned],cleanupOwner:'outer verifier; validates immutable run label before removal',limitations:[originalShell?'Original shell and true main with test-candidate deterministic model I/O':'Reduced Node bootstrap; original shell/Chromium/identity bridge not executed','Independent transport evidence; restored-host conjunction unverified','Missing-path tool errors demonstrate absent mount visibility, not a general filesystem ACL']},null,2));
   db.closeDatabase();
  }
-},180000);
+},originalShell?360000:180000);
