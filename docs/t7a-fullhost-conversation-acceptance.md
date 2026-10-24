@@ -1,8 +1,54 @@
 # T7-A：完整 O 宿主与 D1–D5 对话接线
 
-## 当前恢复改造（本地正向闭环已验证）
+## 当前增量：恢复后的连续追问、取消与原 Pi 技能
 
-2026-10-23，基线 `f3ff566`，分支 `feat/wecom-host-resume`。本节覆盖本轮；下文原接线结果为历史，不能替代本节的当前版本证据。
+2026-10-24，基线 `a119e93`。恢复后的同一完整宿主已通过本地隔离组合验证：原 Pi 连续追问、排队及活动执行的精确取消、多技能与工具调用、完整答案回复，以及新进程恢复后查回。复用 D1–D5 和原 main/queue/SQLite/review/restore；模型 I/O 使用确定性合成数据，容器传输接点使用替身。真实企微、模型效果与真实容器运行尚未验收。
+
+本轮没有重做身份、岗位、账本、会话、发送服务或 Agent 循环，没有新增依赖、数据库表、公开 API 或生产开关。原 Pi SDK 0.84.2、原 runTurn、技能解析与本地工具实际执行；官方企微 SDK 通过离线回调接入。模型事件是合成数据，不能据此认定真实生成质量或手机实收。
+
+### 可观察的闭环
+
+- 员工在已授权岗位提出需求，执行中继续追问；原队列先完成首答，再处理追问。两次答案分别关联自己的受理号、query、turn 和原持久消息。追问能看到前次答案，未知旧任务文字不混入上下文。此合成旧记录触发原历史策略重建 SDK session，未绕过原规则强行复用 session。
+- 原岗位继承三个已安装技能：beauty-local-content、vendor-content-strategy、vendor-copywriting；原工具实际完成四次 read 及一次 mcp__miniclaw__get_channel_context。保存草稿含两项技能方法引用、批准资料来源以及未发布状态。合成 provider 决定工具调用序列，本项证明装配和执行链，不证明模型自主选技能质量。
+- 排队取消不执行；活动取消先显示取消处理中，实际 SDK abort 完成后才成为已取消。重复取消旧任务和迟到旧输出都不影响后继需求，不产生取消任务的答案或完成通知。
+- 第一进程实际启动四轮 runner（首答、追问、取消中的执行、后继），保存三份答案并产生三条离线完成通知。主动查询返回对应完整内容；重放同一查询保留原回复，新查询读取最新状态。
+- 第二个 OS 进程恢复同一数据库，五条受理的状态及结果逐项一致；runner 0 次、主动补发 0 次，取消记录可查回，旧保留记录未被重写。两轮均经过原 review/restore/COMMIT/drain，没有注入 safe/ready。
+
+### 五处必要接线修复
+
+1. 原队列 _drain 表示答完后退出；Pi 活动 shouldClose 只处理 _close，_drain 留给原空闲循环，避免首答提前结束。
+2. 原 queryIdle 会先清理或切换队列编号；D3 固定受理批次开始时的 query，再沿原输入/turn/持久消息关系投影。
+3. 仅在原 session.abort 成功后发布中断事件，由原 writeOutput 绑定当前输入；不预填旧 container turn，pending/失败不伪报取消成功。
+4. runner 已结束就拒绝其迟到 callback，围栏先于等待 D5 通知；运行中的合法 warm 输出继续走原路由。
+5. 恢复扫描只认可关系完整的 cancelled 记录。排队记录须无执行关系及矛盾输出；活动记录须完整匹配原 batch，残留 D5/未知/缺失关系继续阻塞。此判定只允许不重放恢复，不代表取消前未发生工具副作用。
+
+运行变更只作用于显式 fullhost 候选，Pi 修补要求 restoration-pi-scenario。旧 default、D2、D3–D5 各 208 个组合模块与基线逐个内容一致；原 D4 仍使用原准备路径。回退可停用候选选项；原 schema 73 的既有保留语义不能用不兼容旧版回退。
+
+### 最终验证（2026-10-24）
+
+证据根目录：.local/t7a-conversation-20261023/。N/O 路径及来源哈希沿用下文；原源码和技能只读。命令在本仓库运行；Linux 通过固定本地镜像、--network=none、只读输入/rootfs 和独立临时写入目录执行。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 公共回归 | npm test -- --maxWorkers=1：43 文件、598 测试通过；npm run typecheck、npm run build exit 0；10/23 执行后公共源码未变，无 lint 脚本 |
+| 输出/取消专项 | node --test integrations/native/full-host-conversation-projection.test.mjs integrations/native/full-host-pi-abort.test.mjs：7/7；执行实际生成接点片段，非数据库集成 |
+| 恢复判定专项 | node --experimental-strip-types --test integrations/native/full-host-restoration-classifier.test.mts：17/17 |
+| Windows 完整宿主门禁 | verify-full-host.mjs N --host-overlay O --sqlite-driver PREPARED_DRIVER --full-host-conversations --typecheck：原类型、环境 1、岗位 3 通过，boot/restart 各 25 pass、8 平台 skip；PID 29664/16740 |
+| Linux 完整宿主门禁 | 同一 full-host 命令（省略 Windows driver）：原类型、环境 1、岗位 3 通过，boot/restart 各 32 pass、1 平台 skip；PID 110/248 |
+| Linux 原 Pi 正向闭环 | full-host 命令加 --restoration-scenario --restoration-pi-scenario --skill-root SKILLS：原宿主和 Pi runner 类型、seed、boot、restart 全通过；PID 90/134，行为见上文 |
+| 既有 D4 回归 | verify-role-capabilities.mjs N O --skill-root SKILLS：原宿主/runner 类型检查与 5 项测试通过 |
+
+Pi runId：2026-10-24T07-28-29-499Z-6ebfc279-36ff-47fb-bf2d-b715741dc6f1；Windows：2026-10-24T07-18-40-616Z-18e2ecee-20bc-4652-b499-b5c7aa4ba2fb；Linux 门禁：2026-10-24T07-20-27-664Z-076feb98-9f6d-4c47-b0a2-49ffa0dab683。三个运行组合摘要均为 dc2be902b4b2a060cb2066275b5a518afaea3fd7b568fff0fa2e976e963ac8e4。final-manifest.json 将运行来源、冻结代码及日志哈希对应，避免用旧测试覆盖新版本。
+
+有效失败记录包括提前 drain、query 投影丢失、abort 后 unknown、迟到输出写入、取消记录阻塞重启。独立审查发现 warm 中断归因和排队取消矛盾输出两项问题，均先补反例再修复；7/7 与17/17覆盖这些反例。第一次 fixture 的 IPC/tasks ENOTDIR、旧查询复用消息 ID 的断言错误不是产品失败。pi-final-9 在并行验证时因120秒超时失败，保留原日志；冻结代码和原超时不变，串行 pi-final-10 通过，不将超时轮计成功，也未据此承诺性能。独立审查报告位于 independent-review.md 与 final-independent-review.md。
+
+### 尚未证明的边界和下一步
+
+原完整宿主和 Pi runTurn 已执行，但真实容器启动、挂载、真实容器长驻/warm IPC 传输与 Pi 外层 idle 退出循环没有实测；_drain 的外层消费仅按原源码核对。下一步先用既有启动路径验证这些运行接点，再按单独授权进行真实企微受控验收。此轮未动生产、发送真实消息或调用外部模型；静态 Web 页面未验收。生产必须提供自己的旧执行者失权及恢复事实，不可搬用本地测试证明。T7整体与真实产品开放仍未完成。
+
+## 前轮恢复改造（本地正向闭环已验证）
+
+2026-10-23，基线 `f3ff566`，分支 `feat/wecom-host-resume`。本节保留前轮证据；当前增量以上节为准。
 
 - 用户确认：未知旧任务/回复保留待人工核对，不自动续跑/重发；管理员可恢复整个宿主，不能因此读取员工内容。
 - fullhost schema 73 在原 `router_state` 保存精确版本的保留记录，原 task/message/execution/result 行不改写。原到期扫描、claim、回收、通知及会话消费者检查保留状态。不同的新请求仍沿原路径。

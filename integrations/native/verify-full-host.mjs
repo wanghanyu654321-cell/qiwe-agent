@@ -8,12 +8,22 @@ import ts from 'typescript';
 import {nativeVerificationOptions} from './verification-options.mjs';
 import {createFullHostCandidate} from './full-host-candidate.mjs';
 import {createRestorationSupervisorReceipt} from './full-host-restoration-supervisor.mjs';
+import {prepareOriginalPiRunner} from './role-capabilities-runner.mjs';
+import {d4OriginalHashes,d4SkillHashes} from './role-capabilities-overlay.mjs';
+import {applyFullHostPiDrain,applyFullHostPiAbort} from './full-host-restoration-pi-overlay.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url)),project=path.resolve(here,'../..');
+const inputArgs=process.argv.slice(2),piFlags=inputArgs.filter(value=>value==='--restoration-pi-scenario');
+if(piFlags.length>1)throw Error('Invalid duplicate restoration Pi scenario option');
+const skillFlags=inputArgs.filter(value=>value==='--skill-root'),skillIndex=inputArgs.indexOf('--skill-root');
+if(skillFlags.length>1)throw Error('Invalid duplicate skill root');
+const skillRoot=skillIndex>=0?inputArgs.splice(skillIndex,2)[1]:undefined;
+if(piFlags.length!==Number(!!skillRoot)||skillRoot&&!path.isAbsolute(skillRoot))throw Error('RESTORATION_PI_ABSOLUTE_SKILL_ROOT_REQUIRED');
 const fullHostConversationFlags=process.argv.slice(2).filter(value=>value==='--full-host-conversations');
 if(fullHostConversationFlags.length>1)throw Error('Invalid duplicate full host conversation option');
 const restorationFlags=process.argv.slice(2).filter(value=>value==='--restoration-scenario');
 if(restorationFlags.length>1)throw Error('Invalid duplicate restoration scenario option');
-const options={...nativeVerificationOptions(process.argv.slice(2).filter(value=>!['--full-host-conversations','--restoration-scenario'].includes(value))),fullHostConversations:fullHostConversationFlags.length===1,restorationScenario:restorationFlags.length===1},{source,overlay,driver}=options;
+const options={...nativeVerificationOptions(inputArgs.filter(value=>!['--full-host-conversations','--restoration-scenario','--restoration-pi-scenario'].includes(value))),fullHostConversations:fullHostConversationFlags.length===1,restorationScenario:restorationFlags.length===1,restorationPiScenario:piFlags.length===1},{source,overlay,driver}=options;
+if(options.restorationPiScenario&&!options.restorationScenario)throw Error('RESTORATION_PI_REQUIRES_RESTORATION_SCENARIO');
 if(options.restorationScenario&&(!options.fullHostConversations||process.platform!=='linux'))throw Error('RESTORATION_SCENARIO_REQUIRES_COMPLETE_LINUX_HOST');
 const runId=new Date().toISOString().replaceAll(/[:.]/g,'-')+'-'+randomUUID();
 const evidenceRoot=path.join(process.env.QIWE_EVIDENCE_ROOT??path.join(project,'.local/t7d'),runId);
@@ -28,7 +38,11 @@ if(driver){const {verifyPreparedNativeSqlite}=await import('./prepare-native-sql
 else{const {verifyOriginalLinuxSqlite}=await import('./linux-runtime.mjs');verifyOriginalLinuxSqlite(source);}
 candidate=await createFullHostCandidate(source,overlay,options.fullHostConversations?{conversationIntake:true,fullHostConversationExecution:true}:undefined);
 directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
+ const piRunner=options.restorationPiScenario?prepareOriginalPiRunner({source,root:directory,skillRoot}):undefined;
+ if(piRunner)fs.writeFileSync(piRunner.entryFile,applyFullHostPiDrain(fs.readFileSync(piRunner.entryFile,'utf8')));
+ if(piRunner){const runtimeFile=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runner.ts');fs.writeFileSync(runtimeFile,applyFullHostPiAbort(fs.readFileSync(runtimeFile,'utf8')));}
  for(const [name,value]of candidate.files){const target=path.join(directory,'src',name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,value);}
+ if(piRunner)fs.appendFileSync(path.join(directory,'src/container-runner.ts'),'\nexport {resolveAgentProfileUserSkillsPolicy};\n');
  if(options.fullHostConversations&&!options.restorationScenario){
   const legacy=await createFullHostCandidate(source,overlay,{conversationIntake:true,conversationExecution:true});
   for(const [name,value]of legacy.files){const target=path.join(directory,'legacy-src',name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,value);}
@@ -36,6 +50,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  fs.mkdirSync(path.join(directory,'tests'));
  if(options.fullHostConversations&&!options.restorationScenario)fs.copyFileSync(path.join(here,'legacy-work-preservation-compatibility.test.mts'),path.join(directory,'tests/legacy-work-preservation-compatibility.test.mts'));
  if(options.restorationScenario)for(const name of ['full-host-restoration-seed.test.mts','full-host-restoration-flow.test.mts','full-host-restoration.fixture.mts','full-host-restoration-isolation.fixture.mts','full-host-restoration-employee.fixture.mts'])fs.copyFileSync(path.join(here,name),path.join(directory,'tests',name));
+ if(options.restorationScenario)for(const name of ['full-host-restoration-pi.fixture.mts','full-host-restoration-pi-scenario.fixture.mts'])fs.copyFileSync(path.join(here,name),path.join(directory,'tests',name));
  fs.copyFileSync(path.join(here,'full-host.test.mts'),path.join(directory,'tests/full-host.test.mts'));
  fs.copyFileSync(path.join(here,'full-host-conversation.fixture.mts'),path.join(directory,'tests/full-host-conversation.fixture.mts'));
  fs.copyFileSync(path.join(here,'full-host-settlement.fixture.mts'),path.join(directory,'tests/full-host-settlement.fixture.mts'));
@@ -110,6 +125,12 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  const env={PATH:process.env.PATH,SystemRoot:process.env.SystemRoot,TEMP:directory,TMP:directory,HOME:path.join(directory,'home'),USERPROFILE:path.join(directory,'home'),NODE_ENV:'test',TZ:'UTC',NO_COLOR:'1',WEB_PORT:'0',WEB_SESSION_SECRET:'synthetic-full-host-secret-fixed-for-isolation-only',PLUGIN_AUTO_SCAN:'false',MINICLAW_EXECUTION_BOUNDARY:'member-container-only',MINICLAW_WEB_URL:'http://127.0.0.1:19777',QIWE_FULL_HOST_EVIDENCE:path.join(directory,'evidence.json'),QIWE_FULL_HOST_SNAPSHOT:path.join(directory,'before-snapshot.json')};
  fs.mkdirSync(env.HOME);
  env.QIWE_FULL_HOST_CONVERSATIONS=options.fullHostConversations?'1':'0';
+ env.QIWE_RESTORATION_PI=options.restorationPiScenario?'1':'0';
+ if(piRunner){
+  const check=spawnSync(process.execPath,[path.join(project,'node_modules/typescript/bin/tsc'),'--noEmit','--incremental','false'],{cwd:piRunner.runnerTarget,env,encoding:'utf8',timeout:60000});
+  process.stdout.write(check.stdout??'');process.stderr.write(check.stderr??'');
+  if(check.error)throw check.error;if(check.status!==0)throw Error('RESTORATION_PI_RUNNER_TYPECHECK_FAILED');
+ }
  if(options.typecheck){
   fs.copyFileSync(path.resolve(source,'../tsconfig.json'),path.join(directory,'tsconfig.json'));
   const check=spawnSync(process.execPath,[path.join(project,'node_modules/typescript/bin/tsc'),'--noEmit','--incremental','false'],{cwd:directory,env,encoding:'utf8',timeout:60000});
@@ -149,6 +170,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  }
  const hashFile=file=>createHash('sha256').update(fs.readFileSync(file)).digest('hex');
  const conversationInstrumentation=options.fullHostConversations?{
+  ...(piRunner?{piRunner:{runnerTree:piRunner.runnerTree,runnerSourceHashes:piRunner.runnerSourceHashes,originalHashes:d4OriginalHashes,skillHashes:d4SkillHashes,preparationHash:hashFile(path.join(here,'role-capabilities-runner.mjs')),candidateToolHash:hashFile(piRunner.toolFile),candidateEntryHash:hashFile(piRunner.entryFile),candidateRuntimeHash:hashFile(path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runner.ts')),candidateHostRunnerHash:hashFile(path.join(directory,'src/container-runner.ts'))}}:{}),
   fullHostConversationFixtureHash:hashFile(path.join(directory,'tests/full-host-conversation.fixture.mts')),
   fullHostSettlementFixtureHash:hashFile(path.join(directory,'tests/full-host-settlement.fixture.mts')),
   fullHostResultEvidenceFixtureHash:hashFile(path.join(directory,'tests/full-host-result-evidence.fixture.mts')),

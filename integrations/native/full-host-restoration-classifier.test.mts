@@ -3,6 +3,48 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {classifyRestorationRow,classifyRestorationResidue,isPassiveOriginalRunnerSnapshot} from './full-host-restoration-classifier.ts';
 const classify=(table:string,row:Record<string,unknown>,extra:Record<string,unknown>={})=>classifyRestorationRow(table,row,{rows:new Map(),evidence:[],...extra});
+function cancelledFacts(active:boolean){
+ const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+ const actor={tenantId:'tenant',accountId:'owner',storeId:'store',corpId:'corp',botId:'bot',memberId:'member',bindingVersion:1,grantVersion:1};
+ const message={id:'input',chat_jid:'web:owned',source_jid:'web:owned',sender:'owner',timestamp:'synthetic-time',content:'synthetic request',is_from_me:0,delivery_status:null};
+ const receipt={receipt_id:digest(['corp','bot','member','origin']),message_id:'input',workspace_jid:'web:owned',accepted_at:'synthetic-time',origin_message_id:'origin',text_hash:digest(message.content),actor_json:JSON.stringify(actor)};
+ const execution={receipt_id:receipt.receipt_id,message_id:'input',workspace_jid:'web:owned',state:'cancelled',query_id:active?'query':null,turn_id:active?'input':null,input_json:active?'["input"]':null,batch_size:active?1:null,session_id:null};
+ const rows=new Map<string,Record<string,unknown>[]>([['messages',[message]],['wecom_conversation_receipts',[receipt]],['wecom_conversation_execution',[execution]],['wecom_conversation_results',[]]]);
+ return {rows,message,receipt,execution};
+}
+for(const active of [false,true])test('exact D3 cancelled '+(active?'active':'queued')+' input is terminal without replay',()=>{
+ const f=cancelledFacts(active);
+ for(const [table,row] of [['messages',f.message],['wecom_conversation_receipts',f.receipt],['wecom_conversation_execution',f.execution]] as const)
+  assert.equal(classify(table,row,{rows:f.rows}).disposition,'terminal');
+});
+test('cancelled label without exact original input relations stays blocked',()=>{
+ const mutations=[
+  (f:ReturnType<typeof cancelledFacts>)=>f.rows.set('wecom_conversation_receipts',[]),
+  (f:ReturnType<typeof cancelledFacts>)=>f.rows.set('messages',[]),
+  (f:ReturnType<typeof cancelledFacts>)=>{f.execution.workspace_jid='web:foreign';},
+  (f:ReturnType<typeof cancelledFacts>)=>{f.message.source_jid='web:foreign';},
+  (f:ReturnType<typeof cancelledFacts>)=>{f.receipt.actor_json='{}';},
+  (f:ReturnType<typeof cancelledFacts>)=>{f.receipt.text_hash='forged';},
+  (f:ReturnType<typeof cancelledFacts>)=>{f.receipt.origin_message_id='forged';},
+  (f:ReturnType<typeof cancelledFacts>)=>{f.execution.state='unknown';},
+  (f:ReturnType<typeof cancelledFacts>)=>{f.execution.state='cancelling';},
+  (f:ReturnType<typeof cancelledFacts>)=>{f.execution.input_json='["foreign"]';},
+  (f:ReturnType<typeof cancelledFacts>)=>{f.execution.batch_size=2;},
+  (f:ReturnType<typeof cancelledFacts>)=>f.rows.set('wecom_conversation_results',[{receipt_id:f.receipt.receipt_id}]),
+  (f:ReturnType<typeof cancelledFacts>)=>f.rows.get('messages')!.push({id:'output',chat_jid:'web:owned',is_from_me:1,turn_id:'input'}),
+ ];
+ for(const mutate of mutations){const f=cancelledFacts(true);mutate(f);assert.equal(classify('wecom_conversation_execution',f.execution,{rows:f.rows}).disposition,'blocked');}
+ const queued=cancelledFacts(false);queued.execution.turn_id='input';assert.equal(classify('wecom_conversation_execution',queued.execution,{rows:queued.rows}).disposition,'blocked');
+ const preserved=cancelledFacts(true);
+ assert.equal(classify('wecom_conversation_execution',preserved.execution,{rows:preserved.rows,preserved:{state:'manual_review_required',rowVersion:'original',markerVersion:'marker'}}).disposition,'stopped');
+ assert.equal(classify('wecom_conversation_execution',preserved.execution,{rows:preserved.rows,preserved:{state:'changed'}}).disposition,'blocked');
+});
+test('queued cancellation with an impossible canonical output remains unresolved',()=>{
+ const f=cancelledFacts(false);
+ f.rows.get('messages')!.push({id:'impossible-output',chat_jid:'web:owned',is_from_me:1,turn_id:'input',delivery_status:null});
+ for(const [table,row] of [['messages',f.message],['wecom_conversation_receipts',f.receipt],['wecom_conversation_execution',f.execution]] as const)
+  assert.equal(classify(table,row,{rows:f.rows}).disposition,'blocked');
+});
 test('passive audit/log facts are readable without inventing execution settlement',()=>{
  for(const table of ['task_run_logs','auth_audit_log','billing_audit_log','usage_records'])
   assert.equal(classify(table,{id:'retained',status:'unknown'}).disposition,'eligible');
