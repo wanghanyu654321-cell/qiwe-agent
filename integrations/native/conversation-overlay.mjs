@@ -91,8 +91,16 @@ export function submitBotConversationMessage(input:BotConversationNativeSubmit):
 }
 
 /** Isolated Native boundary; the caller's authority callback encloses the synchronous DB commit. */
-export function createBotConversationNativePort({mode,gate,native,readActor,execution}){
- if(mode!=='isolated-synthetic'||!gate||!native||typeof readActor!=='function'||
+export function createBotConversationNativePort(options){
+ if(options.mode!=='isolated-synthetic')throw Error('CONVERSATION_BINDING_INCOMPLETE');
+ return createBotConversationNativePortInternal(options);
+}
+export function createControlledRealBotConversationNativePort(options){
+ if(options.mode!=='controlled-real-pilot')throw Error('CONVERSATION_BINDING_INCOMPLETE');
+ return createBotConversationNativePortInternal(options);
+}
+function createBotConversationNativePortInternal({mode,gate,native,readActor,execution}){
+ if(!gate||!native||typeof readActor!=='function'||
    typeof gate.isPaused!=='function'||typeof gate.beginWrite!=='function'||typeof gate.finishWrite!=='function'||
    typeof native.readBotConversationReceipt!=='function'||typeof native.submitBotConversationMessage!=='function')
    throw Error('CONVERSATION_BINDING_INCOMPLETE');

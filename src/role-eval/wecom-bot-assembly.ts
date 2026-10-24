@@ -1,7 +1,7 @@
 import type {WSClient, WSClientEventMap} from '@wecom/aibot-node-sdk';
-import {createWecomBotContext, type WecomBotContextOptions} from './wecom-bot-context.js';
-import {createBotDelivery,createBotConversationDelivery, type BotDeliveryResult} from './wecom-bot-delivery.js';
-import {createBotSender} from './wecom-bot-sender.js';
+import {createWecomBotContext, createControlledRealWecomBotContext, type WecomBotContextOptions} from './wecom-bot-context.js';
+import {createBotDelivery,createControlledRealBotDelivery,createBotConversationDelivery, type BotDeliveryResult} from './wecom-bot-delivery.js';
+import {createBotSender,createControlledRealBotSender} from './wecom-bot-sender.js';
 import {createBotTasks, type BotTasksOptions} from './wecom-bot-tasks.js';
 import type {BotReportOptions} from './wecom-bot-handler.js';
 import {normalizeBotFrame, type BotEvent} from './wecom-bot-transport.js';
@@ -49,16 +49,28 @@ function freezeFrame<T>(value: T): T {
 }
 
 /** Authenticated SDK event boundary; no connection ownership, network adapter or raw-frame handler. */
-export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
+type AssemblyOptions=Omit<WecomBotAssemblyOptions,'mode'>&{mode:'isolated-synthetic'|'controlled-real-pilot';memberId?:string};
+export function createWecomBotAssembly(options:WecomBotAssemblyOptions){
+  if(options.mode!=='isolated-synthetic')throw Error('invalid_bot_assembly');
+  return createAssembly(options);
+}
+export function createControlledRealWecomBotAssembly(options:Omit<AssemblyOptions,'mode'|'memberId'>&{mode:'controlled-real-pilot';memberId:string}){
+  if(options.mode!=='controlled-real-pilot'||!options.memberId||!options.executionBoundary||options.businesses.some(b=>b.tasks||b.artifacts))throw Error('invalid_bot_assembly');
+  return createAssembly(options);
+}
+function createAssembly(options:AssemblyOptions) {
+  const mode=options.mode,memberId=options.memberId;
+  const createSender=mode==='controlled-real-pilot'?createControlledRealBotSender:createBotSender;
+  const createContext=(value:Omit<WecomBotContextOptions,'mode'>)=>mode==='controlled-real-pilot'?createControlledRealWecomBotContext({...value,mode}):createWecomBotContext({...value,mode});
   const {client, botId, corpId, onOutcome} = options;
   const configuredBoundary = options.executionBoundary;
   const requestTimeout = options.requestTimeoutMs ?? 4000, capacity = options.maxInFlight ?? 8;
   const valid = (s: unknown): s is string => typeof s === 'string' && !!s.trim() && s.length <= 120 && !/[\u0000-\u001f]/.test(s);
-  if (options.mode !== 'isolated-synthetic' || !valid(botId) || !valid(corpId) || !client || typeof client.on !== 'function' || typeof client.off !== 'function' || !Number.isInteger(requestTimeout) || requestTimeout < 1 || requestTimeout > 4000 || !Number.isInteger(capacity) || capacity < 1 || capacity > 1024 || !options.businesses.length || configuredBoundary && (typeof configuredBoundary.admit !== 'function' || typeof configuredBoundary.enter !== 'function' || typeof configuredBoundary.check !== 'function' || typeof configuredBoundary.close !== 'function')) throw Error('invalid_bot_assembly');
+  if (!valid(botId) || !valid(corpId) || !client || typeof client.on !== 'function' || typeof client.off !== 'function' || !Number.isInteger(requestTimeout) || requestTimeout < 1 || requestTimeout > 4000 || !Number.isInteger(capacity) || capacity < 1 || capacity > 1024 || !options.businesses.length || configuredBoundary && (typeof configuredBoundary.admit !== 'function' || typeof configuredBoundary.enter !== 'function' || typeof configuredBoundary.check !== 'function' || typeof configuredBoundary.close !== 'function')) throw Error('invalid_bot_assembly');
   const boundary = configuredBoundary && {admit: configuredBoundary.admit.bind(configuredBoundary), enter: configuredBoundary.enter.bind(configuredBoundary), check: configuredBoundary.check.bind(configuredBoundary), close: configuredBoundary.close.bind(configuredBoundary), onInputRejected: configuredBoundary.onInputRejected?.bind(configuredBoundary)};
   if (attached.has(client)) throw Error('assembly_already_attached');
   // Validate sender now, without taking ownership of either injected SDK port.
-  createBotSender(options.sender).close();
+  createSender(options.sender).close();
   const port = options.sender.sdk, filePort = options.sender.fileSdk;
   const senderOptions = {...options.sender, sdk: {mode: port.mode, ready: port.ready.bind(port), reply: port.reply.bind(port), sendMessage: port.sendMessage.bind(port), ...(port.updateTemplateCard ? {updateTemplateCard: port.updateTemplateCard.bind(port)} : {})},
     ...(filePort ? {fileSdk: {mode: filePort.mode, uploadMedia: filePort.uploadMedia.bind(filePort), sendMessage: filePort.sendMessage.bind(filePort)}} : {})};
@@ -103,7 +115,7 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
     const metadata = {reqId: event.reqId, messageId: event.messageId, memberId: event.memberId};
     const reject = (detail: string) => observe({state: 'rejected', detail, event: metadata});
     if (!authenticated || !connected()) {reject('not_authenticated'); return;}
-    if (event.botId !== botId || event.corpId !== undefined && event.corpId !== corpId) {reject('access_denied'); return;}
+    if (event.botId !== botId || event.corpId !== undefined && event.corpId !== corpId || memberId !== undefined && (event.memberId !== memberId || event.action.kind !== 'text')) {reject('access_denied'); return;}
     if (active.size >= capacity) {reject('capacity_exceeded'); return;}
     let ticket: unknown;
     if (boundary) {
@@ -142,17 +154,17 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
           const value: unknown = Reflect.get(target, key, target);
           return typeof value === 'function' ? value.bind(target) : value;
         }}) : identity.store;
-        const authority = createWecomBotContext({...identity, store: guardedStore,
+        const authority = createContext({...identity, store: guardedStore,
           readBinding: async (subject, scope) => {check(); const value = await trackPhysical(identity.readBinding(subject, scope)); check(); return value;},
           readNative: async (accountId, scope) => {check(); const value = await trackPhysical(identity.readNative(accountId, scope)); check(); return value;},
-          mode: 'isolated-synthetic', botId, corpId,
+          botId, corpId,
           readSubject: async () => {check(); return {botId, memberId: event.memberId};}});
         resources.push(() => authority.close());
         const command = event.action.kind === 'text' ? parseBotTaskCommand(event.action.text) : undefined;
         const context = await authority.authorize(scope, businesses.some(b=>b.conversations)?null:command?.role ?? 'manager'); check();
         const business = businesses.find(b => b.scope.tenant === context.identity.tenantId && b.scope.store === context.identity.storeId && b.employees.some(e => e.accountId === context.identity.accountId));
         if (!business) throw Error('access_denied');
-        const sender = createBotSender({...senderOptions, sdk: {...senderOptions.sdk, ready: () => {
+        const sender = createSender({...senderOptions, sdk: {...senderOptions.sdk, ready: () => {
           try {check(); return senderOptions.sdk.ready();} catch {return false;}
         }}});
         resources.push(() => sender.close());
@@ -165,7 +177,8 @@ export function createWecomBotAssembly(options: WecomBotAssemblyOptions) {
         },...(business.conversations.intake?{intake:{...(business.conversations.intake.readResults?{readResults:(input:Parameters<NonNullable<BotConversationIntakePort['readResults']>>[0])=>trackPhysical(business.conversations!.intake!.readResults!(input))}:{}),readReceipt:input=>trackPhysical(business.conversations!.intake!.readReceipt(input)),submitMessage:input=>trackPhysical(business.conversations!.intake!.submitMessage(input)),...(business.conversations.intake.cancelReceipt?{cancelReceipt:(input:Parameters<BotConversationIntakePort['readReceipt']>[0])=>trackPhysical(business.conversations!.intake!.cancelReceipt!(input))}:{})}}:{})}):undefined;
         // Original services fence business writes with this request's authority/budget. Their
         // finalizers must still persist unknown outcomes for actions already attempted at abort.
-        const delivery = createBotDelivery({mode: 'isolated-synthetic', authority, ledger: business.ledger, scope: business.scope, employees: business.employees,
+        const createDelivery=(value:Omit<Parameters<typeof createBotDelivery>[0],'mode'>)=>mode==='controlled-real-pilot'?createControlledRealBotDelivery({...value,mode}):createBotDelivery({...value,mode});
+        const delivery = createDelivery({ authority, ledger: business.ledger, scope: business.scope, employees: business.employees,
           ...(business.artifacts ? {artifacts: business.artifacts} : {}), ...(tasks ? {tasks} : {}),...(conversations?{conversations}:{}), readEvent: () => {check(); return frame;}, sender});
         resources.push(() => delivery.close());
         const result = await delivery.handle(scope); check();

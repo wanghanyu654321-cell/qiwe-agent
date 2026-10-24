@@ -132,8 +132,16 @@ export function resolveOwnedRoleWorkspace(pending: OwnedRoleWorkspaceClaim, prof
 }
 
 /** Bind only original Native owner services and the current appointment gate. */
-export function createRoleWorkspaceNativePort({mode,gate,native,templates,prepareOwnProfiles,journalDirectory,readActor}){
- if(mode!=='isolated-synthetic'||!gate||!native||!Array.isArray(templates)||typeof prepareOwnProfiles!=='function'||!journalDirectory||typeof readActor!=='function')throw Error('ROLE_WORKSPACE_BINDING_INCOMPLETE');
+export function createRoleWorkspaceNativePort(options){
+ if(options.mode!=='isolated-synthetic')throw Error('ROLE_WORKSPACE_BINDING_INCOMPLETE');
+ return createRoleWorkspaceNativePortInternal(options);
+}
+export function createControlledRealRoleWorkspaceNativePort(options){
+ if(options.mode!=='controlled-real-pilot')throw Error('ROLE_WORKSPACE_BINDING_INCOMPLETE');
+ return createRoleWorkspaceNativePortInternal(options);
+}
+function createRoleWorkspaceNativePortInternal({mode,gate,native,templates,prepareOwnProfiles,journalDirectory,readActor}){
+ if(!gate||!native||!Array.isArray(templates)||typeof prepareOwnProfiles!=='function'||!journalDirectory||typeof readActor!=='function')throw Error('ROLE_WORKSPACE_BINDING_INCOMPLETE');
  const source=Object.freeze({...native}),policy=Object.freeze({...gate});
  const catalog=structuredClone(templates);
  if(new Set(catalog.map(item=>item.key)).size!==catalog.length)throw Error('ROLE_WORKSPACE_TEMPLATE_CONFLICT');

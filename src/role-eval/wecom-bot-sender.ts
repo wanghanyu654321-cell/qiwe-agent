@@ -2,7 +2,7 @@ import type {BotReadScope} from './wecom-bot-context.js';
 import type {BotReplyPlan,BotCard} from './wecom-bot-transport.js';
 import {isBotSdkNotStarted} from './wecom-bot-sdk.js';
 export interface BotSdkPort {
- mode:'isolated-synthetic';
+ mode:'isolated-synthetic' | 'controlled-real-pilot';
  /** Authenticated and connected lifecycle, not merely WebSocket.OPEN. */
  ready():boolean;
  reply(frame:{headers:{req_id:string}},body:BotReplyPlan['body'],scope?:BotReadScope):Promise<unknown>;
@@ -11,16 +11,25 @@ export interface BotSdkPort {
 }
 export interface BotSendOutcome {state:'blocked'|'accepted'|'rejected'|'unknown';apiErrorCode:number|null;msgid:null;detail:string;ackReqId?:string;}
 export interface BotFileSdkPort {
- mode:'isolated-synthetic';
+ mode:'isolated-synthetic' | 'controlled-real-pilot';
  uploadMedia(bytes:Buffer,options:{type:'file';filename:string},scope?:BotReadScope):Promise<unknown>;
  /** Explicit single-chat extension documented by the current official protocol. */
  sendMessage(member:string,body:{msgtype:'file';chat_type:1;file:{media_id:string}},scope?:BotReadScope):Promise<unknown>;
 }
 /** Adapted from the existing application sender's bounded/preflight/result policy.
  * No HTTP credential flow or implicit network fallback is valid for this channel. */
-export function createBotSender(options:{sdk:BotSdkPort;timeoutMs?:number;fileSdk?:BotFileSdkPort}){
+type SenderOptions={sdk:BotSdkPort;timeoutMs?:number;fileSdk?:BotFileSdkPort};
+export function createBotSender(options:SenderOptions){
+ if(options.sdk.mode!=='isolated-synthetic'||options.fileSdk&&options.fileSdk.mode!=='isolated-synthetic')throw Error('invalid_bot_sender');
+ return createSender(options);
+}
+export function createControlledRealBotSender(options:Omit<SenderOptions,'fileSdk'>){
+ if(options.sdk.mode!=='controlled-real-pilot'||'fileSdk' in options)throw Error('invalid_bot_sender');
+ return createSender(options);
+}
+function createSender(options:SenderOptions){
  const {sdk,fileSdk}=options,timeout=options.timeoutMs??3000,closing=new AbortController();
- if(sdk.mode!=='isolated-synthetic'||!['ready','reply','sendMessage'].every(k=>typeof Reflect.get(sdk,k)==='function')||!Number.isInteger(timeout)||timeout<1||timeout>4000)throw Error('invalid_bot_sender');
+ if(!['ready','reply','sendMessage'].every(k=>typeof Reflect.get(sdk,k)==='function')||!Number.isInteger(timeout)||timeout<1||timeout>4000)throw Error('invalid_bot_sender');
  if(fileSdk&&(fileSdk.mode!=='isolated-synthetic'||typeof fileSdk.uploadMedia!=='function'||typeof fileSdk.sendMessage!=='function'))throw Error('invalid_bot_sender');
  const outcome=(state:BotSendOutcome['state'],detail:string):BotSendOutcome=>({state,apiErrorCode:null,msgid:null,detail});
  const safe=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=200&&!/[\u0000-\u0020]/.test(v);

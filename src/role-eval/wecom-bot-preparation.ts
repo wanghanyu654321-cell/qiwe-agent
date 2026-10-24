@@ -1,4 +1,4 @@
-import type {WSClient, WSClientEventMap} from '@wecom/aibot-node-sdk';
+import {WSClient, type WSClientEventMap} from '@wecom/aibot-node-sdk';
 import type {WecomBotExecutionBoundary} from './wecom-bot-assembly.js';
 
 type OwnedClient = Pick<WSClient, 'on' | 'off' | 'isConnected' | 'eventNames' | 'listenerCount'>;
@@ -47,9 +47,19 @@ function snapshot(read: () => WecomPreparationFingerprint): string {
 
 /** Isolated synthetic preparation. It does not grant recovery or create a real connection. */
 export function createWecomBotPreparation(options: WecomBotPreparationOptions) {
+  if(options.mode!=='isolated-synthetic')throw Error('invalid_preparation_port');
+  return createPreparation(options);
+}
+export function createControlledRealWecomBotPreparation(options:Omit<WecomBotPreparationOptions,'mode'|'createClient'|'connect'|'disconnect'>&{mode:'controlled-real-pilot';botId:string;secret:string}) {
+  if(options.mode!=='controlled-real-pilot'||!options.botId||typeof options.secret!=='string'||!options.secret.trim()||['createClient','connect','disconnect'].some(k=>k in options))throw Error('invalid_preparation_port');
+  const botId=options.botId,secret=options.secret,requestTimeout=options.timeoutMs??4000;
+  return createPreparation({...options,createClient:()=>new WSClient({botId,secret,maxReconnectAttempts:0,maxAuthFailureAttempts:0,requestTimeout,logger:{debug(){},info(){},warn(){},error(){}}}),
+    connect:client=>{(client as WSClient).connect();},disconnect:client=>{(client as WSClient).disconnect();}});
+}
+function createPreparation(options:Omit<WecomBotPreparationOptions,'mode'>&{mode:'isolated-synthetic' | 'controlled-real-pilot'}) {
   const {mode, gate, signal} = options;
   const timeout = options.timeoutMs ?? 4000;
-  if (mode !== 'isolated-synthetic' || !Number.isInteger(timeout) || timeout < 1 || timeout > 4000 ||
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 4000 ||
     !gate || typeof gate.phase !== 'function' || typeof gate.noteArrival !== 'function' || typeof gate.beginWrite !== 'function' || typeof gate.finishWrite !== 'function' ||
     typeof options.createClient !== 'function' || typeof options.connect !== 'function' || typeof options.disconnect !== 'function' || typeof options.assemble !== 'function' || typeof options.readFingerprint !== 'function') throw Error('invalid_preparation_port');
   // Capture every executable port before any asynchronous boundary.
