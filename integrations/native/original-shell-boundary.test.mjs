@@ -27,6 +27,10 @@ test('original shell mode retains image entrypoint and fixed six-capability prof
    assert.throws(()=>admitDockerRun(args,{...options,originalShell:shell}),/ORIGINAL_SHELL/);
   }
   assert.throws(()=>admitDockerRun(args.map(value=>value==='MINICLAW_HOST_IDENTITY_MODE=virtualized'?'MINICLAW_HOST_IDENTITY_MODE=direct':value),options),/ORIGINAL_SHELL_IDENTITY/);
+  const directArgs=[...args.slice(0,-1).map(value=>value==='MINICLAW_HOST_IDENTITY_MODE=virtualized'?'MINICLAW_HOST_IDENTITY_MODE=direct':value),'-e','MINICLAW_HOST_UID=1000','-e','MINICLAW_HOST_GID=1000',image];
+  const directOptions={...options,expectedIdentity:'direct',expectedUid:1000,expectedGid:1000};
+  assert.doesNotThrow(()=>admitDockerRun(directArgs,directOptions));
+  for(const changed of [directArgs.filter(value=>value!=='MINICLAW_HOST_UID=1000'),directArgs.map(value=>value==='MINICLAW_HOST_UID=1000'?'MINICLAW_HOST_UID=0':value),directArgs.map(value=>value==='MINICLAW_HOST_GID=1000'?'MINICLAW_HOST_GID=1001':value)])assert.throws(()=>admitDockerRun(changed,directOptions),/ORIGINAL_SHELL|REAL_CONTAINER/);
   assert.throws(()=>admitDockerRun(args,{...options,provider:path.dirname(root)+'/foreign-provider'}),/ORIGINAL_SHELL_PROVIDER/);
   assert.throws(()=>admitDockerRun(args,{...options,originalShell:{...options.originalShell,piVersion:'0.84.3'}}),/ORIGINAL_SHELL/);
   assert.throws(()=>admitDockerRun(args,{...options,originalShell:{...options.originalShell,files:{}}}),/ORIGINAL_SHELL/);

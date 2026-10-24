@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {inspectLocalDockerReceipt} from './full-host-local-docker.mjs';
 
 export interface RestorationBoundaryReceipt {
- version:1;runId:string;issuedAt:string;
+ version:1|2;runId:string;issuedAt:string;helperSha256?:string;
  supervisor:{pid:1;startTime:string;scriptPath:string;scriptSha256:string;modulePath:string;moduleSha256:string};
  hostRoot:{path:string;dev:string;ino:string};dataRoot:{path:string;dev:string;ino:string};
  namespaces:{pid:string;net:string;mnt:string};
@@ -32,7 +33,7 @@ export function inspectRestorationBoundary(dataDir:string,supervisorHash:string,
  if(!stat.isFile()||stat.nlink!==0n||stat.size<=0n||stat.size>65536n)return fail();
  const raw=fs.readFileSync(locator,'utf8');
  const receipt:RestorationBoundaryReceipt=JSON.parse(raw);
- if(receipt.version!==1||typeof receipt.runId!=='string'||!receipt.runId||receipt.supervisor?.pid!==1||
+ if((receipt.version!==1&&receipt.version!==2)||typeof receipt.runId!=='string'||!receipt.runId||receipt.supervisor?.pid!==1||
   receipt.supervisor.scriptSha256!==supervisorHash||sha(fs.readFileSync(receipt.supervisor.scriptPath))!==supervisorHash||
   proc(1).startTime!==receipt.supervisor.startTime)return fail();
  if(receipt.supervisor.modulePath!==path.join(path.dirname(receipt.supervisor.scriptPath),'full-host-restoration-supervisor.mjs')||
@@ -60,9 +61,14 @@ export function inspectRestorationBoundary(dataDir:string,supervisorHash:string,
   return {mount:fields[4]!,options:fields[5]!.split(','),type};
  });
  const containing=(target:string)=>mounts.filter(row=>target===row.mount||target.startsWith(row.mount==='/'?'/':row.mount+'/')).sort((a,b)=>b.mount.length-a.mount.length)[0];
- if(!mounts.find(row=>row.mount==='/'&&row.options.includes('ro'))||containing(dataDir)?.type!=='tmpfs'||
+ if(!mounts.find(row=>row.mount==='/'&&row.options.includes('ro'))||(receipt.version===1&&containing(dataDir)?.type!=='tmpfs')||
   !containing(receipt.supervisor.scriptPath)?.options.includes('ro')||!containing(receipt.supervisor.modulePath)?.options.includes('ro'))return fail();
  if(fs.existsSync('/var/run/docker.sock')||fs.existsSync('/run/docker.sock'))return fail();
+ if(receipt.version===2){
+  const helper=path.join(path.dirname(receipt.supervisor.scriptPath),'full-host-local-docker.mjs');
+  if(receipt.helperSha256!=='LOCAL_DOCKER_HELPER_HASH'||sha(fs.readFileSync(helper))!==receipt.helperSha256||!containing(helper)?.options.includes('ro'))return fail();
+  inspectLocalDockerReceipt(receipt);
+ }else if(process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'||fs.existsSync('/qiwe-control/docker.sock'))return fail();
  const interfaces=fs.readFileSync('/proc/net/dev','utf8').split('\n').slice(2).filter(line=>line.includes(':')).map(line=>line.split(':')[0]!.trim());
  if(interfaces.some(name=>name!=='lo'))return fail();
  if(!Array.isArray(receipt.oldWriters)||receipt.oldWriters.length>128)return fail();
@@ -75,5 +81,5 @@ export function inspectRestorationBoundary(dataDir:string,supervisorHash:string,
  // The fixed local harness permits only the supervisor and the current test
  // process ancestor chain. An untracked sibling/old runner closes restoration.
  for(const entry of fs.readdirSync('/proc'))if(/^\d+$/.test(entry)&&!ancestorPids.has(Number(entry)))return fail();
- return {version:sha(raw),evidence:['pinned_pid1_supervisor','readonly_unlinked_receipt','same_confined_namespace','observed_old_writer_exit','local_isolated_scope']};
+ return {version:sha(raw),evidence:['pinned_pid1_supervisor','readonly_unlinked_receipt','same_host_namespace','observed_old_writer_exit',...(receipt.version===2?['controlled_local_docker_daemon','observed_old_container_removed','same_volume_inode_canary','live_no_other_volume_mounts']:['local_isolated_scope'])]};
 }

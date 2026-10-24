@@ -7,7 +7,7 @@ import {syncBuiltinESMExports} from 'node:module';
 
 /** Same boundaries as the existing actual-main fixture; only its exact HTTP
  * listeners may be reached, and subprocess/model transport cannot escape. */
-export function installRestorationIsolation(){
+export function installRestorationIsolation(childPorts?:Record<string,any>){
  const originalTimeout=globalThis.setTimeout,originalInterval=globalThis.setInterval;
  const timers:any[]=[],intervals:any[]=[],servers:net.Server[]=[],blocked:string[]=[],exits:number[]=[];
  vi.spyOn(globalThis,'setTimeout').mockImplementation(((...args:any[])=>{const timer=(originalTimeout as any)(...args);timers.push(timer);return timer;}) as any);
@@ -29,13 +29,13 @@ export function installRestorationIsolation(){
  vi.spyOn(dns.promises,'lookup').mockImplementation(((hostname:string,...args:any[])=>{if(!['127.0.0.1','::1'].includes(hostname)){blocked.push('dns');throw Error('RESTORATION_DNS_FORBIDDEN');}return (promiseLookup as any)(hostname,...args);}) as any);
  for(const surface of [dns,dns.promises])for(const name of Object.keys(surface).filter(name=>name.startsWith('resolve')||name==='reverse'||name==='lookupService'))vi.spyOn(surface,name as any).mockImplementation((()=>{blocked.push('dns');throw Error('RESTORATION_DNS_FORBIDDEN');}) as any);
  for(const name of ['send','connect','bind'])vi.spyOn(dgram.Socket.prototype,name as any).mockImplementation((()=>{blocked.push('udp');throw Error('RESTORATION_UDP_FORBIDDEN');}) as any);
- for(const name of ['exec','execFile','execSync','execFileSync','spawn','spawnSync','fork'])vi.spyOn(childProcess,name as any).mockImplementation((()=>{blocked.push('child');throw Error('RESTORATION_CHILD_FORBIDDEN');}) as any);
+ for(const name of ['exec','execFile','execSync','execFileSync','spawn','spawnSync','fork'])vi.spyOn(childProcess,name as any).mockImplementation(((...args:any[])=>{if(childPorts?.[name])return childPorts[name](...args);blocked.push('child');throw Error('RESTORATION_CHILD_FORBIDDEN');}) as any);
  vi.spyOn(process,'exit').mockImplementation(((code:number)=>{exits.push(code);}) as any);syncBuiltinESMExports();
  const probe=new net.Socket();for(const target of [{host:'192.0.2.1',port:443},{host:'::1',port:443},{host:'127.0.0.1',port:65534},{path:'/synthetic-denied.sock'},{path:'\\\\.\\pipe\\synthetic-denied'}])expect(()=>probe.connect(target as any)).toThrow('RESTORATION_NETWORK_FORBIDDEN');
  expect(()=>net.createServer().listen('/synthetic-denied.sock')).toThrow('RESTORATION_LISTEN_FORBIDDEN');
  expect(()=>dns.resolve('synthetic.invalid',()=>{})).toThrow('RESTORATION_DNS_FORBIDDEN');
  const udp=dgram.createSocket('udp4');expect(()=>udp.send('synthetic',1,'192.0.2.1')).toThrow('RESTORATION_UDP_FORBIDDEN');udp.close();
- expect(()=>childProcess.spawn('synthetic')).toThrow('RESTORATION_CHILD_FORBIDDEN');blocked.length=0;
- return {servers,blocked,exits,wait:async(predicate:()=>boolean,label:string)=>{for(let count=0;count<200&&!predicate();count++)await new Promise(resolve=>originalTimeout(resolve,25));expect(predicate(),label).toBe(true);},
+ expect(()=>childProcess.spawn('synthetic')).toThrow();blocked.length=0;
+ return {servers,blocked,exits,wait:async(predicate:()=>boolean,label:string)=>{for(let count=0;count<(childPorts?4800:200)&&!predicate();count++)await new Promise(resolve=>originalTimeout(resolve,25));expect(predicate(),label).toBe(true);},
   close(){for(const timer of timers)clearTimeout(timer);for(const timer of intervals)clearInterval(timer);process.removeAllListeners('SIGTERM');process.removeAllListeners('SIGINT');vi.restoreAllMocks();syncBuiltinESMExports();}};
 }

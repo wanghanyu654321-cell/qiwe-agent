@@ -35,12 +35,18 @@ export function verifyCurrentLocalBoundary(){
  }
  if(indexContracts.size===0)throw Error('RESTORATION_INDEX_CONTRACT_MISSING');
  for(const name of ['full-host-restoration-classifier','full-host-restoration-boundary'])result.set(name+'.ts',fs.readFileSync(new URL('./'+name+'.ts',import.meta.url),'utf8'));
+ const dockerHelper=fs.readFileSync(new URL('./full-host-local-docker.mjs',import.meta.url),'utf8');
+ result.set('full-host-local-docker.mjs',dockerHelper);
+ result.set('full-host-local-docker.d.mts',fs.readFileSync(new URL('./full-host-local-docker.d.mts',import.meta.url),'utf8'));
+ for(const name of ['full-host-local-residue.mjs','full-host-local-residue.d.mts'])result.set(name,fs.readFileSync(new URL('./'+name,import.meta.url),'utf8'));
+ result.set('full-host-restoration-boundary.ts',result.get('full-host-restoration-boundary.ts').replace('LOCAL_DOCKER_HELPER_HASH',digest(dockerHelper)));
  let source=files.get('appointment-boot-inventory.ts').replaceAll('\r\n','\n');
  source=`import { classifyRestorationRow, classifyRestorationResidue, isPassiveOriginalRunnerSnapshot, type RestorationRow } from './full-host-restoration-classifier.js';
 import { inspectRestorationBoundary } from './full-host-restoration-boundary.js';
 import { readLegacyWorkPreservationEvidence } from './legacy-work-preservation.js';
 import { getSystemSettings } from './runtime-config.js';
 import { BUSINESS_EXECUTION_BOUNDARY } from './business-execution-policy.js';
+import { inspectLocalRunnerResidue, settledLocalSessions, type SettledLocalSession } from './full-host-local-residue.mjs';
 `+source;
  source=once(source,"const digest = (value: string) =>",`const restorationIndexContracts: Record<string,readonly string[]> = ${JSON.stringify(Object.fromEntries([...indexContracts].map(([name,values])=>[name,[...values]])))};
 const normalizeRestorationIndex=(sql:string)=>sql.replace(/\\s+IF\\s+NOT\\s+EXISTS\\s+/i,' ').replace(/;\\s*$/,'').replace(/\\s+/g,' ').trim();
@@ -82,13 +88,21 @@ const digest = (value: string) =>`);
       version:${JSON.stringify(digest(JSON.stringify(coverage)))},disposition:'eligible',evidence:['supported_source_fences','original_gate_write_obligations']});
   } catch { blockers.add('LOCAL_SUPERVISOR_BOUNDARY_UNVERIFIED'); }
   let rowsEstimated = 0,`);
- source=once(source,'  remainingBytes: number,\n): void {','  remainingBytes: number,\n  registeredFolders: ReadonlySet<string>,\n): void {');
- source=once(source,"  function add(relative: string, kind: string, stamp: string, evidence: string) {",`  function add(relative: string, kind: string, stamp: string, evidence: string) {
+ source=once(source,'  remainingBytes: number,\n): void {','  remainingBytes: number,\n  registeredFolders: ReadonlySet<string>,\n  localSessions: readonly SettledLocalSession[],\n): void {');
+ source=once(source,"  function add(relative: string, kind: string, stamp: string, evidence: string) {",`  const observedLocalSessions=new Set<string>();
+  function add(relative: string, kind: string, stamp: string, evidence: string) {
     const passiveSnapshot=isPassiveOriginalRunnerSnapshot(relative,kind,registeredFolders);
     const migrationMarker=kind==='config/opaque'&&relative==='config/.im-config-migrated';`);
  source=once(source,"evidence: ['filesystem_metadata_only', evidence] });","evidence: ['filesystem_metadata_only', evidence, ...(passiveSnapshot?['passive_original_runner_snapshot']:[]), ...(migrationMarker?['original_im_migration_presence_marker']:[])] });");
+ source=once(source,"            add(key, stat.isFile() ? fileKind(root, key) : root + '/unsafe', version(stat),\n              stat.isFile() ? 'file_unsettled' : 'unsafe_entry');\n            if (!stat.isFile()) blockers.add('RESIDUE:UNSAFE_ENTRY');",`            if(localSessions.length&&stat.isFile()&&stat.size<=131072n)remainingBytes-=Number(stat.size)*6;
+            if(remainingBytes<0)blockers.add('RESIDUE:BUDGET');
+            const verifiedLocal=localSessions.length&&remainingBytes>=0?inspectLocalRunnerResidue(name,key,stat,localSessions,observedLocalSessions):undefined;
+            add(key, stat.isFile() ? fileKind(root, key) : root + (verifiedLocal?'/passive_link':'/unsafe'), version(stat),
+              verifiedLocal?'verified_local_runner_residue:'+verifiedLocal:stat.isFile()?'file_unsettled':'unsafe_entry');
+            if (!stat.isFile()&&!verifiedLocal) blockers.add('RESIDUE:UNSAFE_ENTRY');`);
  source=once(source,'    started + 5000, 100000 - rowsEstimated, 64 * 1024 * 1024 - estimatedBytes);',`    started + 5000, 100000 - rowsEstimated, 64 * 1024 * 1024 - estimatedBytes,
-    new Set((restorationRows.get('registered_groups')??[]).map(row=>String(row.folder))));`);
+    new Set((restorationRows.get('registered_groups')??[]).map(row=>String(row.folder))),
+    boundaryVersion&&process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'?settledLocalSessions(restorationRows,restorationRecords):[]);`);
  // Full row values remain private; hashes detect changes to opaque payloads.
  // Probe lengths and all existing budgets run before these values are read.
  source=once(source,`            columns = [

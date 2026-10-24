@@ -1,6 +1,36 @@
 # T7-A：完整 O 宿主与 D1–D5 对话接线
 
-## 当前增量：恢复后的连续追问、取消与原 Pi 技能
+## 当前增量：完整宿主与真实 runner 的同请求闭环
+
+2026-10-24，基线 `20aad7ab4088168ff23fbe896cf44eaae9cba538`。本轮复用 D1–D5、原 main/queue/SQLite、review/restore、Pi SDK 0.84.2 及发送能力，集中补共同运行环境。独立审查修复后的最终版本已通过同轮两进程验证，结果如下。未改生产、发真实消息或调用外部模型。
+
+需求为“请根据已有批准资料，为美容门店写一段项目体验介绍，读取内容营销技能，说明每场限额并给出行动建议。”离线官方企微 SDK 接受合成可信成员消息，原授权和岗位选择进入原空间；原 runContainerAgent 用真实 stdin/stdout 启动 Docker，保留原 entrypoint、Chromium、降权、Pi main 和 SDK。真实 read 读取批准资料和技能，原宿主 Memory IPC 实际响应；仅 ModelRuntime 的响应事件为确定性替身，不证明真实模型语义或自主选技能效果。
+
+必要改动仅作用于显式本地模式：
+
+- `--restoration-real-container` 使用受控 Desktop daemon 和全新专有卷，严格翻译原挂载前缀；宿主 UID/GID1000、capabilities0、附加组0仅连接控制 socket。短命初始化容器仅用 CHOWN 设置新卷属主，退出后再起宿主。原启动器实际探测 direct1000，runner 不挂 socket。
+- 原 PID1 supervisor 保留旧进程写者观察，增加真实旧容器对同库同值 UPDATE/readback，实际停止并移除；独立只读 probe 比较目录、DB、canary 的 dev/ino/内容。原扫描前后实时核对 daemon、宿主、CLI/socket、卷和所有容器挂载；暴露同卷或父目录的其他容器仍拒绝。
+- 保留实际 9 个文件和 3 个技能链接。仅在有效 v2、原 completed execution/session/input/D5 完整关联下，识别固定空配置、关闭外部扩展的设置、官方端点 env、onboarding 设置、已完成的单链只读 Pi 历史和原精确链接。内容未知、凭证/MCP/hooks、未完成工具、错结果及越界链接仍阻塞，不使用任意 hash 或路径白名单。
+- 复用原时间/条目/字节预算；固定 descriptor、O_NOFOLLOW、属主/权限及前后 stat，原有界遍历拒绝重复 session 文件。默认 v1 的私有 tmpfs、无控制 socket及原拒绝规则保留。未新增 Agent 循环、业务库、公开 API、依赖或通用恢复框架。
+
+本地 v2 信任本次 daemon 管理权受控，不声称抵御其他管理员在检查间隙挂卷，也不是生产恢复证明。有限会话协议不代表任意生产会话均已支持。
+
+| 验收 | 实际结果 |
+| --- | --- |
+| 原恢复 | 非空旧库保留 task、排队/运行/完成对话及未知回复；经原管理员 review、保留待核对、restore/COMMIT/drain；员工无全局恢复权，管理员无员工内容读取权 |
+| 同一需求 | 原队列启动 1 个真实 runner，实际读取、canonical message、D3 完成、D5 冻结答案和离线员工通知对应同一受理号；新查询返回同一完整答案 |
+| 第二进程 | 原进程退出后，另一 PID 恢复同库并查回；runner0、主动补发0，不重新 seed，不改旧未知记录；不称重启后 SDK 续聊 |
+| 最终版本 | outer `091e1686-8b50-4061-b4b8-a7cc60341637`，verifier `2026-10-24T10-42-38-488Z-de3cc9d3-3a59-4736-9fc7-05bba1eb4aa7`，总状态passed；boot PID315，restart PID2157，两阶段status0/receipt v2；runner ID `1113db350d8c68b63892f0126bf9971bacb48ef2ef7468060003ea18259b6cb2` |
+| 回归 | 公共598、类型/构建通过；接点专项20 pass/1 Linux专用skip，封存专项12 pass/1 Linux驱动环境skip，原分类器17/17；原v1同库两进程恢复回归passed（PID83/127），run `2026-10-24T10-46-50-101Z-bf3563b4-9be3-4dee-864b-d7b0dd46420f`，旧模式未挂Docker控制socket；无lint脚本 |
+| 审查修复 | 原目录根挂载遗漏与新增目录扫描预算问题均经有效反例修复；最终规格/质量结论绑定独立审查记录的确切暂存树，不能用旧版本意见替代 |
+
+命令为 `verify-full-host.mjs N --host-overlay O --full-host-conversations --restoration-scenario --restoration-real-container --skill-root SKILLS --typecheck`。由 Linux PID1 执行，`QIWE_LOCAL_DOCKER_{RUN_ID,VOLUME,HOST,IMAGE,DRIVER_IMAGE}` 必须对应本轮真实对象。CLI和socket固定 `/qiwe-control/docker`、`unix:///qiwe-control/docker.sock`，构建记录只读挂 `/qiwe-control/build-input.json`，`/input`只读，`/tmp`专有卷，网络关闭、只读rootfs、cap-drop ALL、no-new-privileges。单设变量不能签发许可，receipt来自真实观察。
+
+证据根 `.local/t7a-fullhost-container-20261024/`：实际命令、封存源码、两进程audit及supervisorReceipt、容器/挂载/输出和来源hash。`final-manifest.json`将21个Native变更文件与本轮封存输入逐一比较，provider、fixture、挂载准入和collector哈希均与实际audit相符。原shell实际编译入口哈希为 `cbb7aa99e42bc8a20e553d3c4d3d9caf65e5f0bf839313a02d00145652db7b43`；所有本轮标记容器确认不存在，测试卷保留复核。前三轮失败分别是测试keepalive重置、UID0/cap0与node1000权限不匹配、真实会话残留被原门禁阻断。第四轮通过但含随后修复的目录预算问题，只作中间证据，最终采用上述第五轮。模型与企微网络均为离线合成。日志中SQLite experimental及缺少静态Web构建提示属于既有测试环境限制，本轮未验收Web页面。
+
+下一步复用该组合补T7-B未覆盖业务/异常与C1回归，再准备C3有限真实企微和C4有限模型验收；生产恢复、手机实收和部署仍需对应事实、授权及验收。
+
+## 前轮增量：恢复后的连续追问、取消与原 Pi 技能
 
 2026-10-24，基线 `a119e93`。恢复后的同一完整宿主已通过本地隔离组合验证：原 Pi 连续追问、排队及活动执行的精确取消、多技能与工具调用、完整答案回复，以及新进程恢复后查回。复用 D1–D5 和原 main/queue/SQLite/review/restore；模型 I/O 使用确定性合成数据，容器传输接点使用替身。真实企微和模型效果尚未验收；本节恢复场景未使用真实容器传输。
 
@@ -44,7 +74,7 @@ Pi runId：2026-10-24T07-28-29-499Z-6ebfc279-36ff-47fb-bf2d-b715741dc6f1；Windo
 
 ### 尚未证明的边界和下一步
 
-本节场景中的容器传输仍是替身。后续独立 [真实 Docker 传输验证](t7a-real-container-acceptance.md) 已用本地构建副本覆盖原启动器、挂载、完整 shell、Chromium、身份桥接及 Pi 追问、取消。它尚未与此处完整宿主恢复运行在同一链路：现有恢复隔离环境禁止 Docker 调用，其私有 tmpfs 也不能直接由外部 daemon 挂载；需先核实共同环境与真实旧写者失权事实。此轮未动生产、发送真实消息或调用外部模型；静态 Web 页面未验收。生产不可搬用本地测试证明。T7整体与真实产品开放仍未完成。
+本节历史场景的容器传输为替身；原启动器、shell、Chromium和身份链后来独立通过。同宿主共享环境由本页当前v2增量另验；前轮追问/取消多轮尚未在该真实Docker同宿主场景重验。静态Web、真实企微、模型效果和生产部署仍未验收，不把本地证明作为生产恢复许可。
 
 ## 前轮恢复改造（本地正向闭环已验证）
 

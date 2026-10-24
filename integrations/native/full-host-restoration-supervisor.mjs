@@ -4,6 +4,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createHash,randomUUID} from 'node:crypto';
+import {observeLocalDockerBoundary} from './full-host-local-docker.mjs';
 
 const sha=value=>createHash('sha256').update(value).digest('hex');
 function failure(code){const error=new Error(code);error.code=code;return error;}
@@ -133,7 +134,7 @@ function linuxSupervisor(scriptPath){
  const containing=target=>mounts.filter(row=>target===row.mount||target.startsWith(row.mount==='/'?'/':row.mount+'/')).sort((a,b)=>b.mount.length-a.mount.length)[0];
  const status=fs.readFileSync('/proc/1/status','utf8');
  if(!mounts.some(row=>row.mount==='/'&&row.options.includes('ro'))||!containing(scriptPath)?.options.includes('ro')||
-  containing(os.tmpdir())?.type!=='tmpfs'||!/^CapEff:\s+0+$/m.test(status)||!/^NoNewPrivs:\s+1$/m.test(status))throw failure('RESTORATION_SUPERVISOR_BOUNDARY_REQUIRED');
+  (process.env.QIWE_RESTORATION_REAL_CONTAINER!=='1'&&containing(os.tmpdir())?.type!=='tmpfs')||!/^CapEff:\s+0+$/m.test(status)||!/^NoNewPrivs:\s+1$/m.test(status))throw failure('RESTORATION_SUPERVISOR_BOUNDARY_REQUIRED');
  const modulePath=fileURLToPath(import.meta.url);
  if(!modulePath.startsWith('/input/')||!containing(modulePath)?.options.includes('ro'))throw failure('RESTORATION_SUPERVISOR_BOUNDARY_REQUIRED');
  return {pid:1,startTime:processIdentity(1).startTime,scriptPath,scriptSha256:sha(fs.readFileSync(scriptPath)),modulePath,moduleSha256:sha(fs.readFileSync(modulePath))};
@@ -143,10 +144,11 @@ function linuxSupervisor(scriptPath){
 export async function createRestorationSupervisorReceipt(options){
  const supervisor=linuxSupervisor(process.argv[1]),input=inputs(options);
  const oldWriter=await observeOwnedRestorationWriter(options);
+ const docker=process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'?await observeLocalDockerBoundary(input):undefined;
  if(!sameIdentity(input.hostRoot,input.host,true)||!sameIdentity(input.dataDir,input.data,true)||
   JSON.stringify(linuxSupervisor(process.argv[1]))!==JSON.stringify(supervisor))throw failure('RESTORATION_SUPERVISOR_IDENTITY_CHANGED');
  const namespaces=Object.fromEntries(['pid','net','mnt'].map(name=>[name,fs.readlinkSync(`/proc/1/ns/${name}`)]));
- const receipt={version:1,runId:input.runId,issuedAt:new Date().toISOString(),supervisor,hostRoot:input.host,dataRoot:input.data,namespaces,oldWriters:[oldWriter]};
+ const receipt={version:docker?2:1,runId:input.runId,issuedAt:new Date().toISOString(),supervisor,hostRoot:input.host,dataRoot:input.data,namespaces,oldWriters:[oldWriter],...(docker?{docker,helperSha256:sha(fs.readFileSync(new URL('./full-host-local-docker.mjs',import.meta.url)))}:{})};
  const raw=Buffer.from(JSON.stringify(receipt)),receiptPath=path.join(input.hostRoot,`.qiwe-restoration-receipt-${randomUUID()}.json`);
  let writerFd,readerFd,owned;
  try{
