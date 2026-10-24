@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {applyPiToolErrorBoundary,d4OriginalHashes,d4SkillHashes} from './role-capabilities-overlay.mjs';
 
 /** Shared D4 source admission and test-only startup export; never changes originals. */
-export function prepareOriginalPiRunner({source,root,skillRoot}) {
+export function prepareOriginalPiRunner({source,root,skillRoot,trueMain=false}) {
  const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
  if(skillRoot)for(const id of ['beauty-local-content','vendor-content-strategy','vendor-copywriting']){
   if(digest(fs.readFileSync(path.join(skillRoot,id,'SKILL.md')))!==d4SkillHashes[id])throw Error('D4_SKILL_SOURCE_CHANGED: '+id);
@@ -34,6 +34,6 @@ export function prepareOriginalPiRunner({source,root,skillRoot}) {
  let entry=fs.readFileSync(entryFile,'utf8').replaceAll('\r\n','\n');
  const startup="main().catch((error) => {\n  console.error(`[agent-runner] Fatal error in Pi main: ${String(error)}`);\n  process.exit(1);\n});";
  if(entry.split(startup).length!==2)throw Error('D4_RUNNER_STARTUP_ANCHOR_CHANGED');
- fs.writeFileSync(entryFile,entry.replace(startup,'export { runTurn };'));
+ fs.writeFileSync(entryFile,trueMain?entry:entry.replace(startup,'export { runTurn };'));
  return {runnerTarget,runnerTree,runnerSourceHashes,toolFile,entryFile};
 }
