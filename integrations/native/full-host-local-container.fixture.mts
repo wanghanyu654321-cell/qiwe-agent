@@ -7,8 +7,12 @@ import {translateLocalMounts,inspectLocalDockerReceipt,localDocker,localEndpoint
 import {actor,folder} from './full-host-restoration.fixture.mts';
 const actual={spawn:childProcess.spawn,execFile:childProcess.execFile,execFileSync:childProcess.execFileSync};
 const skillIds=['beauty-local-content','vendor-content-strategy','vendor-copywriting'];
-export const localContainerAnswer=JSON.stringify({tag:'synthetic-real-container-answer',approved:'synthetic-approved-v1: 每场限额 12 人',skillRead:true,denied:true,priorAnswer:false});
-export const localContainerRequest='请根据已有批准资料，为美容门店写一段项目体验介绍，读取内容营销技能，说明每场限额并给出行动建议。';
+const c4Case=process.env.QIWE_C4_SYNTHETIC_CASE;
+if(c4Case&&!['grounded','missing-evidence'].includes(c4Case))throw Error('Invalid C4 synthetic case option');
+export const localContainerAnswer=c4Case?JSON.stringify({tag:'synthetic-c4-real-container-answer',status:c4Case==='grounded'?'draft':'partial',executed:false,published:false,
+ draft:c4Case==='grounded'?{topic:'项目体验介绍：每场限额 12 人',copy:'了解项目体验。每场限额 12 人。咨询核对项目。',source:'approved.txt',evidence:'synthetic-approved-v1',methods:[{source:'vendor-content-strategy/SKILL.md',method:'主题对应到可展示的服务步骤'},{source:'vendor-copywriting/SKILL.md',method:'单一行动号召'}]}:null,
+ missingMaterial:c4Case==='grounded'?[]:['approved.txt'],skillRead:true,denied:true}):JSON.stringify({tag:'synthetic-real-container-answer',approved:'synthetic-approved-v1: 每场限额 12 人',skillRead:true,denied:true,priorAnswer:false});
+export const localContainerRequest=c4Case?'[c4-synthetic] 请根据已有批准资料，为美容门店写一段项目体验活动草稿，读取美容内容、内容策划和文案三个技能，说明每场限额与行动建议，并标明来源及尚未发布、尚未执行。':'请根据已有批准资料，为美容门店写一段项目体验介绍，读取内容营销技能，说明每场限额并给出行动建议。';
 export function prepareLocalContainerTransport(calls:any[]){
  const receipt=JSON.parse(fs.readFileSync(process.env.QIWE_RESTORATION_RECEIPT!,'utf8'));
  const dockerFacts=inspectLocalDockerReceipt(receipt),runs:any[]=[],owned=new Set<string>();
@@ -42,11 +46,13 @@ export function prepareLocalContainerTransport(calls:any[]){
    proc.stderr.on('data',(bytes:Buffer)=>run.stderr+=bytes.toString());proc.on('exit',(code:number)=>{run.exitCode=code;owned.delete(admitted.name);});return proc;
   },
  };
- return {ports,runs,
+ return {ports,runs,c4Case,
   prepare(config:any){
    const group=path.join(config.GROUPS_DIR,folder),ipc=path.join(config.DATA_DIR,'ipc',folder);
    if(process.env.QIWE_FULL_HOST_PHASE!=='restart'){
-    fs.mkdirSync(group,{recursive:true});fs.writeFileSync(path.join(group,'approved.txt'),'synthetic-approved-v1: 每场限额 12 人');
+    fs.mkdirSync(group,{recursive:true});
+    if(c4Case==='missing-evidence')expect(fs.existsSync(path.join(group,'approved.txt'))).toBe(false);
+    else fs.writeFileSync(path.join(group,'approved.txt'),'synthetic-approved-v1: 每场限额 12 人');
     for(const id of skillIds){const target=path.join(config.DATA_DIR,'skills',actor.accountId,id);fs.mkdirSync(target,{recursive:true});fs.copyFileSync(path.resolve('skill-sources',id,'SKILL.md'),path.join(target,'SKILL.md'));}
    }
    expectedMounts=Object.fromEntries([
@@ -69,8 +75,19 @@ export function prepareLocalContainerTransport(calls:any[]){
    expect(bootstrap.shellEvidence).toMatchObject({mainEffectiveCaps:'0000000000000000',shellEffectiveCaps:'00000000000000eb',noNewPrivileges:'1',piVersion:'0.84.2'});
    const used=events.find(e=>e.type==='provider'&&e.messages.some((m:any)=>m.role==='toolResult'));
    expect(used).toBeDefined();const results=used.messages.filter((m:any)=>m.role==='toolResult');
-   for(const id of ['approved','skill'])expect(results.find((r:any)=>r.toolCallId===id)?.isError).not.toBe(true);
-   const {proc,...evidence}=run;const output={runs:[evidence],events};
+   const ids=['approved','skill',...(c4Case?['strategy','copywriting']:[]),'forbidden-project','forbidden-user'];
+   expect(results).toHaveLength(ids.length);
+   for(const id of ids){const found=results.filter((r:any)=>r.toolCallId===id);expect(found).toHaveLength(1);expect(found[0].toolName).toBe('read');
+    if(['forbidden-project','forbidden-user'].includes(id)||id==='approved'&&c4Case==='missing-evidence')expect(found[0].isError).toBe(true);else expect(found[0].isError).not.toBe(true);
+   }
+   if(c4Case){
+    expect(used.messages.findLast((m:any)=>m.role==='user')?.content).toBeDefined();
+    const textOf=(id:string)=>results.find((r:any)=>r.toolCallId===id).content.map((p:any)=>p.text??'').join('');
+    for(const [id,skill]of [['skill',skillIds[0]],['strategy',skillIds[1]],['copywriting',skillIds[2]]] as const)expect(textOf(id).trim()).toBe(fs.readFileSync(path.resolve('skill-sources',skill,'SKILL.md'),'utf8').trim());
+    const final=run.stdout;expect(final).toContain('synthetic-c4-real-container-answer');
+    expect(fs.existsSync(path.join(run.mounts.find((mount:any)=>mount.destination==='/workspace/group').source,'approved.txt'))).toBe(c4Case==='grounded');
+   }
+   const {proc,...evidence}=run;const output={c4Case:c4Case??null,runs:[evidence],events};
    fs.writeFileSync(path.resolve('local-container-evidence.json'),JSON.stringify(output,null,2));
    // Move only the exact instrumentation file out of scanned application IPC.
    fs.renameSync(eventFile,path.resolve('local-container-events.ndjson'));

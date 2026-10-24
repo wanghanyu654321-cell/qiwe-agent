@@ -1,6 +1,57 @@
 # T7-A：完整 O 宿主与 D1–D5 对话接线
 
-## 当前增量：完整宿主与真实 runner 的同请求闭环
+## 当前增量：T7-C4 合成前置评测
+
+2026-10-24，基线 `78fc5cf`。用户要求先跳过真实企微认证，其余采用合成测试，优先增量回归。本轮复用下节的完整宿主、原真实容器、岗位与 D1–D5，不新增业务能力或改恢复门禁。C4 原计划中的真实模型评测仍待有限模型及预算授权；合成 provider 的正确输出不证明真实模型自主选技能或回答质量。
+
+验收范围：
+
+| 场景 | 观察对象与通过条件 |
+| --- | --- |
+| 多技能草稿 | 同一美容门店自然语言需求实际读取批准资料和三个已装技能；保存的完整草稿包含来源、两项方法及未发布状态，离线通知和查询对应同一 D5 结果 |
+| 资料缺失 | 仅缺少本次隔离空间的批准资料；实际 read 失败后返回 `partial` 和缺项，`draft:null`，不能回填活动人数或声称任务成果已完成 |
+| 明确拒绝后的回复恢复 | 原执行及结果已完成；离线平台明确拒绝后，显式恢复原通知，重复恢复不再发送，不重跑 Agent |
+| 重启查回 | 每个真实容器场景分别使用新卷并经过原恢复流程；第二个进程只查第一轮结果，不重建样例，不执行或补发 |
+| 培训增量 | 原知识、生成、引用与输出校验服务：45 分钟教案、模型禁用/预算/未知错误、无效教案；持久终态可重读，同请求不重复生成 |
+| 相关既有行为 | 原培训任务、取消与答案查询专项；原会话输出归属和取消专项。它们是各自层级的回归，不拼成真实容器多轮或培训端到端证据 |
+
+培训仍通过原 `createTrainingGenerationService` 的合成 `generate` 接点验证，没有装到当前完整宿主的员工 assembly。真实容器仍是一条需求、一次 runner、完成后退出；本轮不扩大到重启后 SDK 续聊、任意失败残留放行或高副作用工具。模型生成替身、资料和成员均为合成；企微 SDK 网络为离线替身。
+
+### 实际验证记录
+
+2026-10-24，本仓库基线 `78fc5cf` 加本轮增量，两组最终冻结源码均通过。证据目录 `.local/t7c4-synthetic-20261024/`，其中 `final-manifest.json` 核对实际 audit、源码与封存输入 hash。
+
+| 验证 | 本轮实际结果 |
+| --- | --- |
+| 有资料的三技能草稿 | outer `9e9775fd-5741-4cf1-9e77-f296e248d6df`；verifier `2026-10-24T11-19-15-672Z-f28f9f2f-01c6-4fda-b421-59c2a505dd83`。PID301→2148；首次 runner1，通知两次尝试（明确拒绝→原通知恢复 accepted，attempt2），重复恢复不重发；重启 runner0、通知0，查回同一草稿 |
+| 同需求缺批准资料 | outer `891a5b61-c413-408a-8c34-bd0a8331c101`；verifier `2026-10-24T11-18-13-265Z-8fc3b3fe-2eff-4763-87f3-120954777b8f`。PID298→2142；实际 read 返回 ENOENT，业务结果 partial、draft:null；首次 runner1、通知1，重启 runner0、通知0，查回同一缺项答复 |
+| 原工具与隔离 | 两组均真实执行六次 read：三个技能读取成功、两条越界路径拒绝，批准资料分别成功/缺失；实际输出的 query/turn/单 sourceOutputId 与原执行一致。原 review/restore 通过，未知旧记录保留，未放松门禁 |
+| 公共增量 | 五专项61/61，加培训新增7项（培训文件最终11/11，包含重复的原4项），合计68个不同用例通过；日志 `targeted-public.log`、`training-incremental.log` |
+| Native 增量 | C4/参数/启动/残留19/19，原投影/精确取消7/7，合计26/26；日志 `native-incremental.log`、`targeted-native-existing-configured.log` |
+| 静态检查 | `node node_modules/typescript/bin/tsc --noEmit` exit0；原候选类型检查在本轮首组通过，后续仅补测试关联断言，最终两组按更新后的源码重跑。语法和 diff 检查通过 |
+
+外层命令分别为 `node .local/t7c4-synthetic-20261024/run-combination.mjs grounded skip-typecheck` 和 `node .local/t7c4-synthetic-20261024/run-combination.mjs missing-evidence`，使用现有本地镜像及专有卷。内层沿原 `verify-full-host.mjs N --host-overlay O --full-host-conversations --restoration-scenario --restoration-real-container --skill-root SKILLS` 追加 `--c4-synthetic-case grounded` 或 `missing-evidence`；两组网络均关闭。每组包含原恢复后的首次执行与新 OS 进程查回；运行后本轮容器均已退出并移除，测试卷保留复核。
+
+Native 增量运行 `node --test`，逐一指定 `integrations/native/` 下的 `real-container-c4.test.mjs`、`verification-options.test.mjs`、`full-host-local-spawn.test.mjs`、`full-host-local-residue.test.mjs`；另设置原 N/O 环境后指定 `full-host-conversation-projection.test.mjs`、`full-host-pi-abort.test.mjs`。公共命令为 `node node_modules/vitest/vitest.mjs run`，指定 `tests/role-eval/` 下的 `training-generation.test.ts`、`training-cancel.test.ts`、`training-output.test.ts`、`wecom-bot-tasks.test.ts`、`wecom-bot-conversation-results.test.ts --no-file-parallelism`；培训新增后单独重跑该文件。初次投影专项因缺 N/O 环境变量未执行到目标测试，补齐后7/7，不将环境错误算作有效行为 RED。
+
+本轮未运行全仓598项及全量构建；未改生产服务或依赖，按用户要求仅运行相关增量和必要组合。仓库没有 lint 脚本。上述草稿与培训生成均为合成响应，真实企微认证、发送、模型和生产均未启用。
+
+### 开始真实企微联调仍需满足的条件
+
+| 条件 | 当前状态与下一步 |
+| --- | --- |
+| 受控真实渠道启动入口 | 当前 assembly、preparation、SDK 和 Native 适配仍明确限定 `isolated-synthetic`，完整组合由验证脚本启动。需复用这些能力提供受控试点装配，接入真实生命周期和可信配置；不能删除模式检查或把合成认证当真实认证 |
+| 真实成员与授权 | 本轮按要求跳过。联调时指定一个测试成员、一个门店和原已授权岗位，核实成员绑定、真实应用认证、撤权和收件人；不能仅凭拿到 token 认定完成 |
+| 实际运行宿主 | 选定试点宿主与原 runner 制品，核实其旧进程/容器写者、持久数据及原恢复证据。当前受控本地 daemon 的 v2 证据不能迁作其他环境的恢复许可 |
+| 有限发送与停止方式 | 明确测试数据、允许动作和有限发送范围，保留原未知结果不盲重试规则；出现身份不符、重复执行或越权立即停止新受理与发送，保留持久结果供核对。生产部署另验配置和回退 |
+| 自然语言真实生成 | 若首轮只测固定业务或合成回答，可继续关闭外部模型；要验收员工真实自然语言多技能工作，仍须配置获准模型、调用上限/预算、可信资料和人工判定样例，完成有限质量验收 |
+| 培训入口 | 若首轮包含培训，还需把原培训服务和对应模型适配装到试点员工入口并验收；当前独立服务测试不能替代这一步 |
+
+满足前四项才进入有限真实企微收发联调；真实自然语言辅助工作还需第五项，培训还需第六项。这里没有宣称只补认证即可上线，也不将这些未执行条件记为通过。
+
+首轮试点应限于已验证的单需求与查回。连续追问和精确取消已有原 Pi 合成传输组合及相关专项证据，但尚未在本轮完整宿主的真实容器组合重验；试点要包含这些动作时，需沿原链补相应组合验证。C1 的更正、汇总、Excel 等历史能力也不因本轮 C4 通过自动变成真实渠道已开放。
+
+## 前轮增量：完整宿主与真实 runner 的同请求闭环
 
 2026-10-24，基线 `20aad7ab4088168ff23fbe896cf44eaae9cba538`。本轮复用 D1–D5、原 main/queue/SQLite、review/restore、Pi SDK 0.84.2 及发送能力，集中补共同运行环境。独立审查修复后的最终版本已通过同轮两进程验证，结果如下。未改生产、发真实消息或调用外部模型。
 

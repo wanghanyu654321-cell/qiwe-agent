@@ -16,6 +16,9 @@ import {cleanupOwnedContainers} from './real-container-cleanup.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url)),project=path.resolve(here,'../..');
 const inputArgs=process.argv.slice(2),piFlags=inputArgs.filter(value=>value==='--restoration-pi-scenario');
 const realFlags=inputArgs.filter(value=>value==='--restoration-real-container');
+const c4Flags=inputArgs.filter(value=>value==='--c4-synthetic-case'),c4Index=inputArgs.indexOf('--c4-synthetic-case');
+const c4SyntheticCase=c4Index>=0?inputArgs.splice(c4Index,2)[1]:undefined;
+if(c4Flags.length>1||c4Flags.length&&(!['grounded','missing-evidence'].includes(c4SyntheticCase)||realFlags.length!==1))throw Error('Invalid C4 synthetic case option');
 if(realFlags.length>1||realFlags.length&&piFlags.length)throw Error('Invalid restoration real container option');
 if(piFlags.length>1)throw Error('Invalid duplicate restoration Pi scenario option');
 const skillFlags=inputArgs.filter(value=>value==='--skill-root'),skillIndex=inputArgs.indexOf('--skill-root');
@@ -26,7 +29,7 @@ const fullHostConversationFlags=process.argv.slice(2).filter(value=>value==='--f
 if(fullHostConversationFlags.length>1)throw Error('Invalid duplicate full host conversation option');
 const restorationFlags=process.argv.slice(2).filter(value=>value==='--restoration-scenario');
 if(restorationFlags.length>1)throw Error('Invalid duplicate restoration scenario option');
-const options={...nativeVerificationOptions(inputArgs.filter(value=>!['--full-host-conversations','--restoration-scenario','--restoration-pi-scenario','--restoration-real-container'].includes(value))),fullHostConversations:fullHostConversationFlags.length===1,restorationScenario:restorationFlags.length===1,restorationPiScenario:piFlags.length===1,restorationRealContainer:realFlags.length===1},{source,overlay,driver}=options;
+const options={...nativeVerificationOptions(inputArgs.filter(value=>!['--full-host-conversations','--restoration-scenario','--restoration-pi-scenario','--restoration-real-container'].includes(value))),fullHostConversations:fullHostConversationFlags.length===1,restorationScenario:restorationFlags.length===1,restorationPiScenario:piFlags.length===1,restorationRealContainer:realFlags.length===1,c4SyntheticCase},{source,overlay,driver}=options;
 if(options.restorationRealContainer&&!options.restorationScenario)throw Error('RESTORATION_REAL_CONTAINER_REQUIRES_RESTORATION');
 if(options.restorationRealContainer)process.env.QIWE_RESTORATION_REAL_CONTAINER='1';
 if(options.restorationPiScenario&&!options.restorationScenario)throw Error('RESTORATION_PI_REQUIRES_RESTORATION_SCENARIO');
@@ -143,6 +146,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  env.QIWE_RESTORATION_PI=options.restorationPiScenario?'1':'0';
  if(options.restorationRealContainer){
   env.QIWE_RESTORATION_REAL_CONTAINER='1';
+  if(c4SyntheticCase)env.QIWE_C4_SYNTHETIC_CASE=c4SyntheticCase;
   for(const key of ['QIWE_LOCAL_DOCKER_RUN_ID','QIWE_LOCAL_DOCKER_VOLUME','QIWE_LOCAL_DOCKER_HOST','QIWE_LOCAL_DOCKER_IMAGE','QIWE_LOCAL_DOCKER_DRIVER_IMAGE'])env[key]=process.env[key];
   env.MINICLAW_CONTAINER_IMAGE=process.env.QIWE_LOCAL_DOCKER_IMAGE;env.QIWE_REAL_CONTAINER_OWNED_MANIFEST=ownedManifest;
   env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL=JSON.stringify(Object.fromEntries(['verified','image','entrypoint','piVersion','files'].map(key=>[key,originalShell[key]])));

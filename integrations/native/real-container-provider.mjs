@@ -45,22 +45,45 @@ catch(error){record({type:'sdk-error',error:String(error),stack:error?.stack});t
 ModelRuntime.prototype.streamSimple=function(model,context,options){
  const latest=context.messages.findLastIndex(message=>message.role==='user');
  const userText=JSON.stringify(context.messages[latest]);
+ const c4=userText.includes('[c4-synthetic]');
  const kind=userText.includes('[hold-interrupt]')?'interrupt':userText.includes('[hold-drain]')?'drain':'normal';
  const results=context.messages.slice(latest+1).filter(message=>message.role==='toolResult');
  record({type:'provider',kind,messages:context.messages,tools:context.tools?.map(tool=>tool.name)});
  const resultText=id=>results.find(result=>result.toolCallId===id)?.content.map(part=>part.text??'').join('')??'';
- const ids=['approved','skill','forbidden-project','forbidden-user'];
- const exactResults=results.length===4&&ids.every(id=>results.filter(result=>result.toolCallId===id).length===1);
+ const ids=['approved','skill',...(c4?['strategy','copywriting']:[]),'forbidden-project','forbidden-user'];
+ const exactResults=results.length===ids.length&&ids.every(id=>results.filter(result=>result.toolCallId===id).length===1);
  const success=id=>results.find(result=>result.toolCallId===id)?.isError!==true;
  const expectedSkill=fs.readFileSync('/workspace/effective-skills/beauty-local-content/SKILL.md','utf8').trim();
- const content=results.length===0?[
+ let content=results.length===0?[
   {type:'toolCall',id:'approved',name:'read',arguments:{path:'approved.txt'}},
   {type:'toolCall',id:'skill',name:'read',arguments:{path:'/home/node/.claude/skills/beauty-local-content/SKILL.md'}},
+  ...(c4?[
+   {type:'toolCall',id:'strategy',name:'read',arguments:{path:'/home/node/.claude/skills/vendor-content-strategy/SKILL.md'}},
+   {type:'toolCall',id:'copywriting',name:'read',arguments:{path:'/home/node/.claude/skills/vendor-copywriting/SKILL.md'}},
+  ]:[]),
   {type:'toolCall',id:'forbidden-project',name:'read',arguments:{path:'/workspace/project/private.txt'}},
   {type:'toolCall',id:'forbidden-user',name:'read',arguments:{path:'/workspace/other-user/private.txt'}},
  ]:[{type:'text',text:JSON.stringify({tag:'synthetic-real-container-answer',approved:resultText('approved'),skillRead:exactResults&&success('approved')&&success('skill')&&resultText('skill').trim()===expectedSkill,
   denied:exactResults&&['forbidden-project','forbidden-user'].every(id=>results.find(result=>result.toolCallId===id)?.isError===true),
   priorAnswer:context.messages.slice(0,latest).some(message=>message.role==='assistant'&&JSON.stringify(message.content).includes('synthetic-real-container-answer'))})}];
+ if(c4&&results.length){
+  const readable=id=>results.filter(result=>result.toolCallId===id).length===1&&success(id);
+  const fact=resultText('approved').match(/每场限额 \d+ 人/)?.[0];
+  const cta=resultText('copywriting').match(/行动号召为([^。]+)。/)?.[1];
+  const evidence=resultText('approved').includes('synthetic-approved-v1');
+  const missingMaterial=[];
+  if(!readable('approved')||!fact||!evidence)missingMaterial.push('approved.txt');
+  if(!readable('skill')||resultText('skill').trim()!==expectedSkill)missingMaterial.push('beauty-local-content/SKILL.md');
+  if(!readable('strategy')||!resultText('strategy').includes('主题对应到可展示的服务步骤')||!resultText('strategy').includes('拍摄资源需求'))missingMaterial.push('vendor-content-strategy/SKILL.md');
+  if(!readable('copywriting')||!cta||!resultText('copywriting').includes('单一行动号召'))missingMaterial.push('vendor-copywriting/SKILL.md');
+  if(!exactResults&&!missingMaterial.length)missingMaterial.push('tool-observations');
+  const denied=exactResults&&['forbidden-project','forbidden-user'].every(id=>results.find(result=>result.toolCallId===id)?.isError===true);
+  if(!denied&&!missingMaterial.length)missingMaterial.push('read-boundary');
+  const valid=missingMaterial.length===0;
+  content=[{type:'text',text:JSON.stringify({tag:'synthetic-c4-real-container-answer',status:valid?'draft':'partial',executed:false,published:false,
+   draft:valid?{topic:`项目体验介绍：${fact}`,copy:`了解项目体验。${fact}。${cta}。`,source:'approved.txt',evidence:'synthetic-approved-v1',methods:[{source:'vendor-content-strategy/SKILL.md',method:'主题对应到可展示的服务步骤'},{source:'vendor-copywriting/SKILL.md',method:'单一行动号召'}]}:null,
+   missingMaterial,skillRead:['skill','strategy','copywriting'].every(readable),denied})}];
+ }
  const message={role:'assistant',content,api:model.api,provider:model.provider,model:model.id,
   usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason:results.length?'stop':'toolUse',timestamp:Date.now()};
  const finish=(async()=>{
