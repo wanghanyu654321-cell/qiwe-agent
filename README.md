@@ -1,5 +1,7 @@
 # qiwe-agent
 
+当前新增受控试点启动装配 `createWecomBotPilot`：将原完整宿主的 D1–D5、可信身份、SDK 和持久回复集中接入，原员工验收场景已使用该入口。准备、激活与停止沿用原门禁，关闭渠道不关闭原账本、数据库或 Agent 队列。当前仍为本地合成模式，真实认证与网络未开放；验证结果及后续条件见[同宿主验收](docs/t7a-fullhost-conversation-acceptance.md)。
+
 完整产品目标是**让原Agent Claw作为多岗位、多技能助手供员工在企微使用**，见[产品使用说明与工程对应](docs/product-usage-and-engineering.md)。D1–D5 已接入原岗位、会话、执行与完整答案。2026-10-24，完整宿主在离线 Linux 合成环境中经原恢复流程启动，已验证原 Pi 连续追问、精确取消、岗位多技能与本地工具执行、保存完整答案并经离线企微 SDK 返回；新进程恢复同库后可以查回，不重新执行或补发。具体范围见[同宿主恢复验收](docs/t7a-fullhost-conversation-acceptance.md)。该场景的模型 I/O 和容器传输接点使用合成替身。
 
 完整宿主已取得与真实 Docker runner 同链运行的本地证据：同一自然语言需求经过原恢复流程、队列、原 shell/Pi、真实工具读取、原 SQLite 和离线企微回复，第二进程查回时未重跑或补发，见[同宿主验收](docs/t7a-fullhost-conversation-acceptance.md)。独立审查修复后的最终版本已完成同轮组合验证。模型响应为合成数据，企微为离线 SDK；真实手机实收、模型效果及生产开放仍待验收。原镜像与独立传输记录见[真实容器验收](docs/t7a-real-container-acceptance.md)。

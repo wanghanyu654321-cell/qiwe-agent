@@ -1,6 +1,38 @@
 # T7-A：完整 O 宿主与 D1–D5 对话接线
 
-## 当前增量：T7-C4 合成前置评测
+## 当前增量：受控试点启动装配
+
+2026-10-24，基线 `b3f28a4`。本轮目标是把员工验收脚本内的实际接线移入可复用的具体生命周期模块，再由同一个完整宿主场景调用。仍只接受 `isolated-synthetic`；外部模型、真实认证、真实消息及生产均不在本轮授权范围。
+
+原宿主仍负责唯一队列、恢复与执行。新入口负责组装原 preparation、SDK、身份、岗位会话和持久通知，复用可信 Native 工厂；不自行恢复、不自动重放旧工作、不替换 runner。准备、激活、停止分别沿用原状态；失效授权按原实时读取处理，迟到完成不能借关闭后的渠道发送。
+
+装配依据为当前 `wecom-bot-preparation.ts` 的独占客户端及门禁合同、`wecom-bot-assembly.ts` 的可信成员分发、`wecom-bot-delivery.ts` 的持久回执恢复，以及完整宿主的 `initializeFullHostConversationExecution` 单次绑定。Pi SDK 和原执行循环不变，本轮无新 SDK 事件映射。MiniClaw 证据边界仍将本地合成、真实渠道和生产分开。
+
+具体入口为 `src/role-eval/wecom-bot-pilot.ts` 的 `createWecomBotPilot`，已替换员工夹具原手工装配。调用方提供原宿主 initializer、原 Native intake/岗位工厂、可信身份读取器、借用的授权/业务存储及显式合成客户端生命周期。入口内实际组装原服务，不接受另一套通用 assembly 或 runner 替身。
+
+调用顺序为：原宿主完成恢复 → 创建 pilot → `prepare()` → `activate()` → 原消息/完成回调与 `recover()` → `close()`。准备成功不代表可受理，激活仍检查原 ready 门禁与同连接认证。停止立即封住渠道新收发，不停止宿主队列或撤销已经受理的工作；原结果保持持久化。`idle()` 只等待本入口拥有的工作，不能代替整个宿主停机。原 initializer 只绑定一次，关闭后不支持同宿主原地重绑。
+
+独立审查复现并修复了身份读取超时的票据提前释放：每次恢复用 Node 内置 `AsyncLocalStorage` 关联自己的实际读取，原 finalizer 请求释放时，待该次读取结束才委托原 `finishWrite`；不同恢复互不等待。没有新依赖或新门禁。未结清或释放失败仍由原 preparation 返回 `cleanup_unknown`，不得据此关闭借用数据库或宣称安全停止。
+
+### 本轮验收状态
+
+最终修复版本已通过本地隔离验证。证据根 `.local/t7-pilot-20261024/`，`final-manifest.json` 对照当前源码、封存输入以及实际 audit 中的 Native 和递归 public support 哈希；新 pilot 的源哈希为 `4a4552b20ce226162d222dbe4add35be1f644ad5e865ee04bd2eaa6386a8e006`。
+
+| 检查 | 本轮实际结果 |
+| --- | --- |
+| 必要增量 | pilot 新增10项；连同原 preparation、assembly、conversation-results 三专项，共103/103通过。涵盖准备/激活、原受理与答案查回、拒绝恢复不重跑、关闭/构造失败、回调快照、实时撤权，以及三种身份读取迟到后的原票据保留和独立恢复 |
+| 类型和构建 | 本仓库 `npm run typecheck`、`npm run build` exit0；最终日志 `pilot-authority-typecheck.log`、`pilot-authority-build.log`。没有运行全仓回归；仓库无 lint 脚本 |
+| 完整宿主与真实容器 | outer `e9e71dee-6ff1-4576-8d98-c78b9922a8e6`，verifier `2026-10-24T14-54-53-327Z-83078154-c1d9-405c-aa07-3a674710fe82`，两阶段passed。首次PID308，runner1；批准资料及三技能实际读取，原SQLite保存草稿；通知两次尝试为明确拒绝后accepted attempt2，重复恢复不重发 |
+| 第二进程与关闭 | PID2157恢复同库，查回同一完整答案，runner0、主动通知0；旧未知记录不变。两阶段均断言pilot已closed后才关闭调用方存储；本轮容器已移除，测试卷保留复核 |
+| 审查修复 | 身份读取提前释放票据问题经subject/binding/native三项有效RED后修复；独立复审确认每次恢复独立收尾，迟到读取后的延迟finishWrite抛错路径保留cleanup_unknown且无未处理rejection。原D5、队列、门禁、schema和依赖均未改 |
+
+增量命令为 `npm test -- tests/role-eval/wecom-bot-pilot.test.ts tests/role-eval/wecom-bot-preparation.test.ts tests/role-eval/wecom-bot-assembly.test.ts tests/role-eval/wecom-bot-conversation-results.test.ts`；最终103项日志为 `pilot-authority-focused.log`。初轮7项RED针对尚未实现的装配行为，修复轮3项RED针对已复现的票据错误，不以导入失败当RED。
+
+实际组合命令为 `node .local/t7-pilot-20261024/run-combination.mjs grounded skip-typecheck`，内层复用前轮原验证器及 `--c4-synthetic-case grounded`，只使用现有本地镜像、只读输入、独立卷和关闭的网络。原候选类型检查已在本轮首组通过，最终仅跳过未变化候选的重复检查；修改后的public模块已另跑最终类型检查和构建。首组outer `7a6b8ac7-83cc-4f0f-bec7-90c028d53812` 虽通过，但属于修复前版本，仅作中间记录。
+
+本轮证明可复用装配接入了实际同宿主链，尚未接真实SDK生命周期和认证。首轮真实试点仍需下方真实配置/成员、实际宿主恢复事实、有限收发授权；真实自然语言效果另需模型与预算。本轮没有改变队列、runner、会话、turn或取消语义，未重复扩大为多轮/精确取消真实容器组合；若真实试点包含这些动作，仍按原计划先补该组合。培训装配也未扩入本轮。
+
+## 前轮增量：T7-C4 合成前置评测
 
 2026-10-24，基线 `78fc5cf`。用户要求先跳过真实企微认证，其余采用合成测试，优先增量回归。本轮复用下节的完整宿主、原真实容器、岗位与 D1–D5，不新增业务能力或改恢复门禁。C4 原计划中的真实模型评测仍待有限模型及预算授权；合成 provider 的正确输出不证明真实模型自主选技能或回答质量。
 
@@ -40,7 +72,7 @@ Native 增量运行 `node --test`，逐一指定 `integrations/native/` 下的 `
 
 | 条件 | 当前状态与下一步 |
 | --- | --- |
-| 受控真实渠道启动入口 | 当前 assembly、preparation、SDK 和 Native 适配仍明确限定 `isolated-synthetic`，完整组合由验证脚本启动。需复用这些能力提供受控试点装配，接入真实生命周期和可信配置；不能删除模式检查或把合成认证当真实认证 |
+| 受控真实渠道启动入口 | 本页当前增量已将手工接线集中为可复用 pilot 装配；assembly、preparation、SDK 和 Native 适配仍限定 `isolated-synthetic`。真实客户端生命周期和可信配置仍须单独接入、授权及验证，不能删除模式检查或把合成认证当真实认证 |
 | 真实成员与授权 | 本轮按要求跳过。联调时指定一个测试成员、一个门店和原已授权岗位，核实成员绑定、真实应用认证、撤权和收件人；不能仅凭拿到 token 认定完成 |
 | 实际运行宿主 | 选定试点宿主与原 runner 制品，核实其旧进程/容器写者、持久数据及原恢复证据。当前受控本地 daemon 的 v2 证据不能迁作其他环境的恢复许可 |
 | 有限发送与停止方式 | 明确测试数据、允许动作和有限发送范围，保留原未知结果不盲重试规则；出现身份不符、重复执行或越权立即停止新受理与发送，保留持久结果供核对。生产部署另验配置和回退 |
