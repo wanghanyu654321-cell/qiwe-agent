@@ -61,6 +61,8 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
  index=once(index,'    output = await runAgent(\n      effectiveGroup,',`    startConversationBatch(chatJid,missedMessages.map(m=>m.id),queue.getConversationQueryId(chatJid)??undefined,lastProcessed.id);
     output = await runConversationAgent(
       effectiveGroup,`);
+ if(fullHost)index=once(index,'    startConversationBatch(chatJid,missedMessages.map(m=>m.id),queue.getConversationQueryId(chatJid)??undefined,lastProcessed.id);',`    const conversationBatchQueryId=queue.getConversationQueryId(chatJid)??undefined;
+    startConversationBatch(chatJid,missedMessages.map(m=>m.id),conversationBatchQueryId,lastProcessed.id);`);
  index=index.replaceAll('queryRunId: queue.getActiveQueryId(chatJid) ?? undefined,','queryRunId: queue.getConversationQueryId(chatJid) ?? undefined,');
  index=once(index,'              lastReplyMsgId = replySendOutcome.messageId;',`              if (!holdReason && result.status === 'success' && !result.providerFailure &&
                   result.sourceKind !== 'compact_partial' && result.sourceKind !== 'overflow_partial' &&
@@ -69,6 +71,7 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
                   outputChannelScope.inputId,turnIdForDb,replySendOutcome.messageId,dbText);
               }
               lastReplyMsgId = replySendOutcome.messageId;`);
+ if(fullHost)index=once(index,'noteConversationProjection(chatJid,queue.getConversationQueryId(chatJid)??undefined,','noteConversationProjection(chatJid,conversationBatchQueryId,');
  index=once(index,'        runContainerAgent,\n        group,','        d3Runner,\n        group,');
  const main=`main().catch((err) => {
   logger.error({ err }, 'Failed to start miniclaw');
@@ -88,6 +91,7 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
   // callbacks still belong to O's original onOutput, never to this first
   // conversation receipt's projection, session or terminal result.
   fragment=once(fragment,' let interrupted=false,completed=false;',` let interrupted=false,completed=false;
+ let runnerSettled=false;
  let initialOutput:Awaited<ReturnType<typeof runContainerAgent>>|undefined;
  const ownsInitial=(event:Awaited<ReturnType<typeof runContainerAgent>>)=>{
   const supplied=[event.turnId,event.inputTurnId,event.streamEvent?.turnId].filter(id=>id!==undefined);
@@ -95,12 +99,14 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
  };`);
   fragment=once(fragment,'   if(unhealthy||!!event.result&&!event.inputTurnCompleted)',`   if(event.status!=='stream'||event.inputTurnCompleted||unhealthy)initialOutput=event;
    if(unhealthy||!!event.result&&!event.inputTurnCompleted)`);
-  fragment=once(fragment,'   observe(event);','   if(ownsInitial(event)){\n   observe(event);');
+  fragment=once(fragment,'   observe(event);','   if(runnerSettled)return;\n   if(ownsInitial(event)){\n   observe(event);');
   fragment=once(fragment,'   await onOutput?.(event);','   }\n   await onOutput?.(event);');
   fragment=once(fragment,`  observe(output);
-  const frozen=finishConversationBatch(input.chatJid,queryId,interrupted?'cancelled':output.status==='success'&&completed?'completed':output.status==='error'?'failed':'unknown',output.status==='success'?output.newSessionId:undefined);`,`  if(ownsInitial(output))observe(output);
+  const frozen=finishConversationBatch(input.chatJid,queryId,interrupted?'cancelled':output.status==='success'&&completed?'completed':output.status==='error'?'failed':'unknown',output.status==='success'?output.newSessionId:undefined);`,`  runnerSettled=true;
+  if(ownsInitial(output))observe(output);
   const own=initialOutput;
   const frozen=finishConversationBatch(input.chatJid,queryId,interrupted?'cancelled':own?.status==='success'&&completed?'completed':own?.status==='error'?'failed':'unknown',own?.status==='success'?own.newSessionId:undefined);`);
+  fragment=once(fragment," }catch(error){finishConversationBatch(input.chatJid,queryId,'unknown');throw error;}"," }catch(error){runnerSettled=true;finishConversationBatch(input.chatJid,queryId,'unknown');throw error;}");
   fragment+=fs.readFileSync(new URL('./full-host-conversation-index.fragment',import.meta.url),'utf8');
  }
  index=once(index,main,fragment+(fullHost?'\n'+main:''));

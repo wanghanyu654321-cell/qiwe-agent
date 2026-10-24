@@ -34,6 +34,34 @@ export function classifyRestorationRow(table:string,row:RestorationRow,facts:Res
  const optionalLink=(name:string,column:string,value:unknown)=>value===null||value===''||linked(name,column,value);
  const passive=()=>decision('eligible','passive_fact_no_replay_consumer');
  const resource=()=>decision('eligible','supported_original_resource_contract');
+ // D3's queued cancellation never claims a query; active cancellation only
+ // becomes terminal after the matching runner interruption. Validate the
+ // persisted producer relationships, not the word "cancelled" alone. This
+ // establishes no automatic replay, not absence of earlier tool side effects.
+ const cancelled=(execution:RestorationRow|undefined):boolean=>{
+  if(!execution||execution.state!=='cancelled'||!text(execution.message_id)||!text(execution.workspace_jid))return false;
+  const receipt=all('wecom_conversation_receipts').find(item=>item.receipt_id===execution.receipt_id);
+  if(!receipt||receipt.workspace_jid!==execution.workspace_jid||receipt.message_id!==execution.message_id)return false;
+  const actor=object(receipt.actor_json),message=all('messages').find(item=>item.id===receipt.message_id&&item.chat_jid===receipt.workspace_jid);
+  const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  if(!actor||!['tenantId','accountId','storeId','corpId','botId','memberId'].every(key=>text(actor[key]))||
+    !integer(actor.bindingVersion)||Number(actor.bindingVersion)<1||!integer(actor.grantVersion)||Number(actor.grantVersion)<1||
+    !text(receipt.origin_message_id)||receipt.receipt_id!==digest([actor.corpId,actor.botId,actor.memberId,receipt.origin_message_id])||
+    !message||message.is_from_me!==0||message.source_jid!==receipt.workspace_jid||message.sender!==actor.accountId||
+    message.timestamp!==receipt.accepted_at||typeof message.content!=='string'||receipt.text_hash!==digest(message.content)||
+    all('wecom_conversation_results').some(item=>item.receipt_id===receipt.receipt_id))return false;
+  if(execution.query_id===null)return ['turn_id','input_json','batch_size','session_id'].every(key=>execution[key]===null)&&
+   !all('messages').some(item=>item.chat_jid===execution.workspace_jid&&item.turn_id===execution.message_id&&item.is_from_me===1);
+  const inputs=array(execution.input_json);
+  if(!text(execution.query_id)||!text(execution.turn_id)||!inputs?.length||!inputs.every(text)||new Set(inputs).size!==inputs.length||
+    execution.batch_size!==inputs.length||!inputs.includes(execution.message_id)||!inputs.includes(execution.turn_id))return false;
+  if(all('messages').some(item=>item.chat_jid===execution.workspace_jid&&item.turn_id===execution.turn_id&&item.is_from_me===1))return false;
+  return inputs.every(id=>all('wecom_conversation_execution').some(item=>item.workspace_jid===execution.workspace_jid&&item.message_id===id&&
+    item.query_id===execution.query_id&&item.turn_id===execution.turn_id&&item.state==='cancelled'&&item.input_json===execution.input_json&&item.batch_size===execution.batch_size))&&
+   all('wecom_conversation_execution').filter(item=>item.workspace_jid===execution.workspace_jid&&item.query_id===execution.query_id)
+    .every(item=>item.state==='cancelled'&&text(item.message_id)&&inputs.includes(item.message_id)&&item.turn_id===execution.turn_id&&item.input_json===execution.input_json&&item.batch_size===execution.batch_size);
+ };
+ const cancelledFact=()=>decision('terminal','exact_d3_cancelled_input_no_replay');
  if(facts.preserved){
   if(facts.preserved.state==='manual_review_required'&&text(facts.preserved.rowVersion)&&text(facts.preserved.markerVersion))
    return decision('stopped','exact_durable_manual_review:'+facts.preserved.markerVersion);
@@ -127,10 +155,11 @@ export function classifyRestorationRow(table:string,row:RestorationRow,facts:Res
    if(row.is_from_me===1&&oneOf(row.delivery_status,[null,'released','cancelled','rejected']))return passive();
    if(oneOf(row.delivery_status,['cancelled','rejected']))return decision('terminal','original_input_terminal_state');
    const execution=all('wecom_conversation_execution').find(item=>item.workspace_jid===row.chat_jid&&item.message_id===row.id);
+   if(cancelled(execution))return cancelledFact();
    return execution?.state==='completed'&&all('wecom_conversation_results').some(item=>item.receipt_id===execution.receipt_id)?passive():closed();
   }
-  case 'wecom_conversation_receipts':return all('wecom_conversation_execution').some(item=>item.receipt_id===row.receipt_id&&item.state==='completed')?passive():closed();
-  case 'wecom_conversation_execution':return row.state==='completed'&&all('wecom_conversation_results').some(item=>item.receipt_id===row.receipt_id)?passive():closed();
+  case 'wecom_conversation_receipts':return cancelled(all('wecom_conversation_execution').find(item=>item.receipt_id===row.receipt_id))?cancelledFact():all('wecom_conversation_execution').some(item=>item.receipt_id===row.receipt_id&&item.state==='completed')?passive():closed();
+  case 'wecom_conversation_execution':return cancelled(row)?cancelledFact():row.state==='completed'&&all('wecom_conversation_results').some(item=>item.receipt_id===row.receipt_id)?passive():closed();
   case 'wecom_conversation_results':return facts.evidence.includes('d5_frozen_result_verified')?passive():closed();
   // A terminal label does not settle a notification lease or provider outcome.
   // Exact preserved task rows are handled above; other executable families

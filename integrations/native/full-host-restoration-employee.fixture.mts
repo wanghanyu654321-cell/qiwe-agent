@@ -16,7 +16,7 @@ import {createBotSender} from '../test-support/wecom-bot-sender.mjs';
 import {offlineBotSdk} from '../test-support/offline-bot-sdk.mjs';
 import {actor,business,employee,staff,digest,workspaceJid,completedContent,receiptId,factFile,grantFile,retainedSnapshot} from './full-host-restoration.fixture.mts';
 
-export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls,events}:any){
+export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls,pi,events}:any){
  const restarting=process.env.QIWE_FULL_HOST_PHASE==='restart';
  const grants=new WorkbenchAccessStore(grantFile(config.DATA_DIR)),ledger=new ManagerStore(factFile(config.DATA_DIR)),tasks=new BotTaskStore(factFile(config.DATA_DIR));
  const offline=offlineBotSdk();offline.lifecycle('disconnected');
@@ -25,7 +25,7 @@ export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,s
   readBinding:async()=>({botId:actor.botId,corpId:actor.corpId,memberId:actor.memberId,accountId:actor.accountId,active:true,version:1}),
   readNative:async()=>({user:db.getUserById(actor.accountId),workspaceJid:'web:home-'+actor.accountId})};
  const authority=createWecomBotContext({...identity,mode:'isolated-synthetic',botId:actor.botId,corpId:actor.corpId,readSubject:async()=>({botId:actor.botId,memberId:actor.memberId})});
- let delivery:any,assembly:any,adapter:any,sender:any,completedDeliveries:any[]=[];
+ let delivery:any,assembly:any,adapter:any,sender:any,piEvidence:any,completedDeliveries:any[]=[];
  const execution=host.initializeFullHostConversationExecution({mode:'isolated-synthetic',
   authorize:(receipt:any)=>{
    if(!receipt)return false;const grant=grants.get(receipt.actor.accountId);
@@ -72,7 +72,10 @@ export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,s
   const historicalReq=await send((restarting?'restart':'boot')+'-query-historical','查询对话 '+receiptId('restoration-old-completed'));
   expect(JSON.stringify(reply(historicalReq))).toContain(completedContent);
   expect(JSON.stringify(reply(historicalReq))).toContain('待人工核对');expect(transportCalls).toEqual([]);
-  if(!restarting){
+  if(pi){
+   const {exerciseRestorationPiScenario}=await import('./full-host-restoration-pi-scenario.fixture.mts');
+   piEvidence=await exerciseRestorationPiScenario({host,db,sql,config,boundary,transportCalls,pi,send,reply,offline,completedDeliveries,events,restarting});
+  }else if(!restarting){
    const origin='restoration-new-demand',id=receiptId(origin);
    const requestId=await send(origin,'请为同一岗位生成这条新的合成需求答案。');
    expect(JSON.stringify(reply(requestId))).toContain(id);
@@ -101,6 +104,6 @@ export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,s
   for(const frame of offline.sent)expect(JSON.stringify(frame)).not.toContain('Synthetic Q unknown reply; never resend');
   expect(offline.connect).not.toHaveBeenCalled();expect(boundary.blocked).toEqual([]);
   events.push('retained-task-D2-and-Q-unknown-unchanged-no-automatic-resume-or-resend');
-  return {sdkReplies:offline.sent.filter(frame=>frame.cmd==='aibot_respond_msg').length,sdkNotifies:offline.sent.filter(frame=>frame.cmd==='aibot_send_msg').length,runnerCalls:transportCalls.length};
+  return {sdkReplies:offline.sent.filter(frame=>frame.cmd==='aibot_respond_msg').length,sdkNotifies:offline.sent.filter(frame=>frame.cmd==='aibot_send_msg').length,runnerCalls:transportCalls.length,...(piEvidence?{pi:piEvidence}:{})};
  }finally{await preparation.close();authority.close();grants.close();ledger.close();tasks.close();}
 }

@@ -8,9 +8,10 @@ import {exerciseEmployeeRestoration} from './full-host-restoration-employee.fixt
 
 // The only runtime replacement is the external runner/model transport. The
 // original main/queue/DB/scanner/gate/HTTP restore transaction remain real.
-const transport=vi.hoisted(()=>({calls:[] as any[]}));
+const transport=vi.hoisted(()=>({calls:[] as any[],pi:undefined as any}));
 vi.mock('../src/container-runner.js',async importOriginal=>{
  const actual:any=await importOriginal();return {...actual,runContainerAgent:async(_group:any,input:any,_onProcess:any,onOutput:any)=>{
+  if(transport.pi)return transport.pi.run(_group,input,_onProcess,onOutput);
   transport.calls.push(structuredClone(input));
   const output={status:'success',result:'合成恢复后答案',sourceKind:'sdk_final',finalizationReason:'completed',turnId:input.turnId,inputTurnId:input.turnId,inputTurnCompleted:true,newSessionId:'restoration-new-session'};
   await onOutput?.(output);return output;
@@ -24,7 +25,7 @@ it('restores the actual nonempty host through original HTTP before accepting any
  const sql=new Database(path.join(config.STORE_DIR,'messages.db'),{fileMustExist:true});
  const web=await import('../src/web.js'),context=await import('../src/web-context.js');
  const host=await import('../src/index.js') as any;
- let shutdown=false;
+ let shutdown=false,failure:unknown;
  try{
   await boundary.wait(()=>!!context.getWebDeps()&&boundary.servers.some(server=>server.listening),'actual main reaches loopback HTTP');
   expect(boundary.exits).toEqual([]);expect(host.fullHostBootGate.phase()).toBe('paused');
@@ -70,11 +71,23 @@ it('restores the actual nonempty host through original HTTP before accepting any
   expect(await privateRead.json()).toEqual({error:'Group not found'});
   const memberRead=await fetch(base+privatePath,{headers:memberHeaders});expect(memberRead.status,'real owning member can read own messages').toBe(200);
   events.push('original-main-admin-review-preserve-restore-commit-and-drain');
-  const employee=await exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls:transport.calls,events});
+  if(process.env.QIWE_RESTORATION_PI==='1'){
+   const {installRestorationPi}=await import('./full-host-restoration-pi.fixture.mts');
+   transport.pi=await installRestorationPi({config,transportCalls:transport.calls});
+  }
+  const employee=await exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls:transport.calls,pi:transport.pi,events});
   process.emit('SIGTERM');shutdown=true;await boundary.wait(()=>boundary.exits.length>0,'original main shutdown');expect(boundary.exits).toEqual([0]);
   fs.writeFileSync(process.env.QIWE_RESTORATION_FLOW_EVIDENCE??path.join(process.cwd(),'restoration-flow.json'),JSON.stringify({phase:process.env.QIWE_FULL_HOST_PHASE??'boot',processId:process.pid,events,transportCalls:transport.calls.length,employee},null,2));
+ }catch(error){
+  failure=error;
+  console.error('RESTORATION_PRIMARY_FAILURE',JSON.stringify({error:String(error),executions:sql.prepare('SELECT receipt_id,state,query_id,turn_id FROM wecom_conversation_execution').all(),piRuns:transport.pi?.runs.map(({kind,interrupted,closed,providerAborted}:any)=>({kind,interrupted,closed,providerAborted}))}));
+  throw error;
  }finally{
-  if(!shutdown&&db.isDatabaseInitialized()){process.emit('SIGTERM');await boundary.wait(()=>boundary.exits.length>0,'failure cleanup original shutdown');}
-  await web.shutdownWebServer();if(db.isDatabaseInitialized())db.closeDatabase();sql.close();boundary.close();
+  transport.pi?.releaseAll();
+  if(!shutdown&&db.isDatabaseInitialized()){
+   process.emit('SIGTERM');
+   try{await boundary.wait(()=>boundary.exits.length>0,'failure cleanup original shutdown');}catch(error){if(!failure)throw error;console.error('RESTORATION_CLEANUP_FAILURE',String(error));}
+  }
+  await web.shutdownWebServer();if(db.isDatabaseInitialized())db.closeDatabase();sql.close();transport.pi?.close();boundary.close();
  }
 });
