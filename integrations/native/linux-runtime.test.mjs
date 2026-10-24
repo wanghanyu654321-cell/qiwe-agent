@@ -57,6 +57,23 @@ test('automatic removal after stop preserves the original timeout and does not r
 
 const source=process.env.QIWE_LINUX_NATIVE_SOURCE;
 
+test('controlled copy admits exact original shell build inputs and rejects adjacent runtime files',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-shell-test-'));
+  const container=path.join(root,'.local/full-instance/stage/app/container');
+  try{
+    fs.mkdirSync(container,{recursive:true});
+    for(const name of ['Dockerfile','.dockerignore','entrypoint.sh','session-generated-paths.mjs','session-permissions-mount.mjs','session-permissions-watcher.mjs','session-permissions.sh','session-prompts-copy.mjs'])fs.writeFileSync(path.join(container,name),'synthetic');
+    sealControlledLinuxCopy(root);assert.equal(verifyControlledLinuxCopy(root).files,8);
+    for(const name of ['credentials.json','session.json','.env','other-helper.sh']){
+      const file=path.join(container,name);fs.writeFileSync(file,'synthetic');
+      assert.throws(()=>sealControlledLinuxCopy(root),/Unapproved stage path/);fs.unlinkSync(file);
+    }
+  }finally{
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));
+    fs.rmSync(root,{recursive:true,force:true});
+  }
+});
+
 test('controlled copy admits runner source, prompts and dependencies but excludes runtime data',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-runner-test-'));
   const runner=path.join(root,'.local/full-instance/stage/app/container/agent-runner');

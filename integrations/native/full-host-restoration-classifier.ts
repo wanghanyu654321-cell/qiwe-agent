@@ -175,6 +175,8 @@ export function isPassiveOriginalRunnerSnapshot(relative:string,kind:string,regi
 }
 
 export function classifyRestorationResidue(kind:string,evidence:readonly string[]):RestorationDecision {
+ if(evidence.some(item=>item.startsWith('verified_local_runner_residue:')))
+  return decision('eligible','content_verified_settled_local_runner_artifact');
  if(evidence.includes('root_absent')||evidence.includes('directory_observed'))return decision('eligible','descriptor_traversed_namespace');
  if(kind==='residue/ipc/snapshot'&&evidence.includes('passive_original_runner_snapshot'))
   return decision('eligible','passive_snapshot_no_automatic_consumer');

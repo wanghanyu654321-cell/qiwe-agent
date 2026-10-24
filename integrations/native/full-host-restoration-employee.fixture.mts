@@ -16,7 +16,7 @@ import {createBotSender} from '../test-support/wecom-bot-sender.mjs';
 import {offlineBotSdk} from '../test-support/offline-bot-sdk.mjs';
 import {actor,business,employee,staff,digest,workspaceJid,completedContent,receiptId,factFile,grantFile,retainedSnapshot} from './full-host-restoration.fixture.mts';
 
-export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls,pi,events}:any){
+export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls,pi,events,expectedAnswer='合成恢复后答案',request='请为同一岗位生成这条新的合成需求答案。'}:any){
  const restarting=process.env.QIWE_FULL_HOST_PHASE==='restart';
  const grants=new WorkbenchAccessStore(grantFile(config.DATA_DIR)),ledger=new ManagerStore(factFile(config.DATA_DIR)),tasks=new BotTaskStore(factFile(config.DATA_DIR));
  const offline=offlineBotSdk();offline.lifecycle('disconnected');
@@ -77,26 +77,26 @@ export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,s
    piEvidence=await exerciseRestorationPiScenario({host,db,sql,config,boundary,transportCalls,pi,send,reply,offline,completedDeliveries,events,restarting});
   }else if(!restarting){
    const origin='restoration-new-demand',id=receiptId(origin);
-   const requestId=await send(origin,'请为同一岗位生成这条新的合成需求答案。');
+   const requestId=await send(origin,request);
    expect(JSON.stringify(reply(requestId))).toContain(id);
    await boundary.wait(()=>db.readConversationExecution(id)?.state==='completed','actual original queue produces completed D3 and D5');
    await boundary.wait(()=>completedDeliveries.length===1,'actual frozen result delivery settles');
-   expect(transportCalls).toHaveLength(1);expect(transportCalls[0].prompt).toContain('这条新的合成需求');
+   expect(transportCalls).toHaveLength(1);expect(transportCalls[0].prompt).toContain(request);
    expect(transportCalls[0].prompt).not.toContain('Synthetic old running');expect(transportCalls[0].prompt).not.toContain('Synthetic old queued');
-   const results=db.readConversationResults(id);expect(results).toHaveLength(1);expect(results[0]).toMatchObject({receiptId:id,revision:1,content:'合成恢复后答案'});
+   const results=db.readConversationResults(id);expect(results).toHaveLength(1);expect(results[0]).toMatchObject({receiptId:id,revision:1,content:expectedAnswer});
    const canonical=sql.prepare('SELECT * FROM messages WHERE id=? AND chat_jid=?').get(results[0].sourceOutputIds[0],workspaceJid) as any;
    expect(canonical).toMatchObject({content:results[0].content,turn_id:results[0].turnId,is_from_me:1});
    const proactive=offline.sent.filter(frame=>frame.cmd==='aibot_send_msg');expect(proactive).toHaveLength(1);
-   expect(proactive[0].body).toMatchObject({chatid:actor.memberId,chat_type:1,msgtype:'markdown'});expect(JSON.stringify(proactive[0].body)).toContain('合成恢复后答案');
+   expect(proactive[0].body).toMatchObject({chatid:actor.memberId,chat_type:1,msgtype:'markdown'});expect(JSON.stringify(proactive[0].body)).toContain(JSON.stringify(expectedAnswer).slice(1,-1));
    expect(completedDeliveries[0].deliveries).toMatchObject([{state:'accepted'}]);
-   const queryReq=await send('boot-query-new','查询对话 '+id);expect(JSON.stringify(reply(queryReq))).toContain('合成恢复后答案');
+   const queryReq=await send('boot-query-new','查询对话 '+id);expect(JSON.stringify(reply(queryReq))).toContain(JSON.stringify(expectedAnswer).slice(1,-1));
    fs.writeFileSync(marker,JSON.stringify({processId:process.pid,receiptId:id,result:results[0]},null,2));
    events.push('same-host-offline-sdk-identity-D1-D2-original-queue-D3-canonical-D5-reply-and-query');
   }else{
    const first=JSON.parse(fs.readFileSync(marker,'utf8'));expect(first.processId).not.toBe(process.pid);
    const results=db.readConversationResults(first.receiptId);expect(results).toEqual([first.result]);
    const queryReq=await send('restart-query-new','查询对话 '+first.receiptId);
-   expect(JSON.stringify(reply(queryReq))).toContain('合成恢复后答案');expect(transportCalls).toEqual([]);expect(completedDeliveries).toEqual([]);
+   expect(JSON.stringify(reply(queryReq))).toContain(JSON.stringify(expectedAnswer).slice(1,-1));expect(transportCalls).toEqual([]);expect(completedDeliveries).toEqual([]);
    expect(offline.sent.filter(frame=>frame.cmd==='aibot_send_msg')).toEqual([]);
    events.push('new-os-process-restores-same-host-and-sdk-queries-existing-D5-without-reexecution');
   }

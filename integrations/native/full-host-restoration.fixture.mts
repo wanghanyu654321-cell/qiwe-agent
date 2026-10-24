@@ -9,7 +9,7 @@ export const actor={tenantId:'restoration-tenant',accountId:'restoration-member'
 export const business={tenant:actor.tenantId,store:actor.storeId,workspace:'web:restoration-business'};
 export const employee={accountId:actor.accountId,employeeId:'restoration-employee',employeeName:'Synthetic employee'};
 export const staff={...business,employeeId:employee.employeeId,employeeName:employee.employeeName};
-export const workspaceJid='web:restoration-role',folder='restoration-role',profileId='restoration-marketing-profile';
+export const workspaceJid='web:restoration-role',folder=process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'?'synthetic-restoration-role':'restoration-role',profileId='restoration-marketing-profile';
 export const roleKey=digest([actor.tenantId,actor.accountId,actor.storeId,'marketing']);
 export const receiptId=(origin:string)=>digest([actor.corpId,actor.botId,actor.memberId,origin]);
 export const completedContent='合成历史答案：本内容来自原始D5持久化结果。';

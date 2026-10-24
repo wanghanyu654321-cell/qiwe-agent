@@ -41,6 +41,7 @@ const stageFiles=['qiwe-agent/package.json','qiwe-agent/package-lock.json','qiwe
 const runnerStage='.local/full-instance/stage/app/container/agent-runner/';
 stageTrees.push(...['src/','prompts/','node_modules/'].map(name=>runnerStage+name));
 stageFiles.push(runnerStage+'package.json',runnerStage+'package-lock.json',runnerStage+'tsconfig.json');
+stageFiles.push(...['Dockerfile','.dockerignore','entrypoint.sh','session-generated-paths.mjs','session-permissions-mount.mjs','session-permissions-watcher.mjs','session-permissions.sh','session-prompts-copy.mjs'].map(name=>'.local/full-instance/stage/app/container/'+name));
 stageFiles.push(...['beauty-local-content','vendor-content-strategy','vendor-copywriting'].map(id=>`.local/d4-skills/${id}/SKILL.md`));
 function stageInventory(copyRoot){
   const files={};

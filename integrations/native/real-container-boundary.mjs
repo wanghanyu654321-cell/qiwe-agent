@@ -30,9 +30,14 @@ export function admitDockerShell(command,owned){
  return admitDockerControl('docker',['stop',match[1]],owned);
 }
 
+export function admitLocalDockerSpawn(command,args,options,{ready,alreadyStarted}){
+ if(!ready||alreadyStarted||command!=='docker'||!/^miniclaw-synthetic-restoration-role-[a-z0-9-]+$/.test(args?.[4]??'')||
+  !options||Object.keys(options).join(',')!=='stdio'||JSON.stringify(options.stdio)!=='["pipe","pipe","pipe"]')throw Error('LOCAL_DOCKER_SPAWN_FORBIDDEN');
+}
+
 // The only admitted command is the original runner's docker run. No daemon
 // socket or executable is exposed to the child; callers retain real pipes.
-export function admitDockerRun(args,{root,runner,deps,provider,image,expectedMounts,runId,originalShell,startupFailure=false}){
+export function admitDockerRun(args,{root,runner,deps,provider,image,expectedMounts,runId,originalShell,startupFailure=false,expectedIdentity='virtualized',expectedUid,expectedGid}){
  if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(runId??''))throw Error('REAL_CONTAINER_RUN_ID');
  if(!expectedMounts||typeof expectedMounts!=='object')throw Error('REAL_CONTAINER_EXPECTED_MOUNTS');
  if(!/^(?:node@)?sha256:[a-f0-9]{64}$/.test(image)||args.at(-1)!==image)throw Error('REAL_CONTAINER_IMAGE');
@@ -60,7 +65,9 @@ export function admitDockerRun(args,{root,runner,deps,provider,image,expectedMou
   if(originalShell.verified!==true||originalShell.image!==image||JSON.stringify(originalShell.entrypoint)!=='["/app/entrypoint.sh"]')throw Error('ORIGINAL_SHELL_IMAGE_EVIDENCE');
   if(originalShell.piVersion!=='0.84.2'||Object.entries(originalShellHelpers).some(([name,hash])=>originalShell.files?.[name]!==hash))throw Error('ORIGINAL_SHELL_SOURCE_EVIDENCE');
   const identities=args.filter(value=>value.startsWith('MINICLAW_HOST_IDENTITY_MODE='));
-  if(identities.length!==1||identities[0]!=='MINICLAW_HOST_IDENTITY_MODE=virtualized'||args.some(value=>/^MINICLAW_HOST_(UID|GID)=/.test(value)))throw Error('ORIGINAL_SHELL_IDENTITY');
+  const ids=args.filter(value=>/^MINICLAW_HOST_(UID|GID)=/.test(value));
+  const validIds=expectedIdentity==='direct'?Number.isSafeInteger(expectedUid)&&expectedUid>0&&Number.isSafeInteger(expectedGid)&&expectedGid>0&&ids.length===2&&ids.includes('MINICLAW_HOST_UID='+expectedUid)&&ids.includes('MINICLAW_HOST_GID='+expectedGid):ids.length===0;
+  if(!['virtualized','host-root','direct'].includes(expectedIdentity)||identities.length!==1||identities[0]!=='MINICLAW_HOST_IDENTITY_MODE='+expectedIdentity||!validIds)throw Error('ORIGINAL_SHELL_IDENTITY');
   let resolvedProvider;try{resolvedProvider=fs.realpathSync(provider);}catch{throw Error('ORIGINAL_SHELL_PROVIDER');}
   const relative=path.relative(canonicalRoot,resolvedProvider);
   if(!relative||relative.startsWith('..')||path.isAbsolute(relative)||!fs.statSync(provider).isFile())throw Error('ORIGINAL_SHELL_PROVIDER');

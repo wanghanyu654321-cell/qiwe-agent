@@ -11,18 +11,24 @@ import {createRestorationSupervisorReceipt} from './full-host-restoration-superv
 import {prepareOriginalPiRunner} from './role-capabilities-runner.mjs';
 import {d4OriginalHashes,d4SkillHashes} from './role-capabilities-overlay.mjs';
 import {applyFullHostPiDrain,applyFullHostPiAbort} from './full-host-restoration-pi-overlay.mjs';
+import {verifyOriginalShellImage,prepareOriginalShellCandidate} from './original-shell.mjs';
+import {cleanupOwnedContainers} from './real-container-cleanup.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url)),project=path.resolve(here,'../..');
 const inputArgs=process.argv.slice(2),piFlags=inputArgs.filter(value=>value==='--restoration-pi-scenario');
+const realFlags=inputArgs.filter(value=>value==='--restoration-real-container');
+if(realFlags.length>1||realFlags.length&&piFlags.length)throw Error('Invalid restoration real container option');
 if(piFlags.length>1)throw Error('Invalid duplicate restoration Pi scenario option');
 const skillFlags=inputArgs.filter(value=>value==='--skill-root'),skillIndex=inputArgs.indexOf('--skill-root');
 if(skillFlags.length>1)throw Error('Invalid duplicate skill root');
 const skillRoot=skillIndex>=0?inputArgs.splice(skillIndex,2)[1]:undefined;
-if(piFlags.length!==Number(!!skillRoot)||skillRoot&&!path.isAbsolute(skillRoot))throw Error('RESTORATION_PI_ABSOLUTE_SKILL_ROOT_REQUIRED');
+if(piFlags.length+realFlags.length!==Number(!!skillRoot)||skillRoot&&!path.isAbsolute(skillRoot))throw Error('RESTORATION_PI_ABSOLUTE_SKILL_ROOT_REQUIRED');
 const fullHostConversationFlags=process.argv.slice(2).filter(value=>value==='--full-host-conversations');
 if(fullHostConversationFlags.length>1)throw Error('Invalid duplicate full host conversation option');
 const restorationFlags=process.argv.slice(2).filter(value=>value==='--restoration-scenario');
 if(restorationFlags.length>1)throw Error('Invalid duplicate restoration scenario option');
-const options={...nativeVerificationOptions(inputArgs.filter(value=>!['--full-host-conversations','--restoration-scenario','--restoration-pi-scenario'].includes(value))),fullHostConversations:fullHostConversationFlags.length===1,restorationScenario:restorationFlags.length===1,restorationPiScenario:piFlags.length===1},{source,overlay,driver}=options;
+const options={...nativeVerificationOptions(inputArgs.filter(value=>!['--full-host-conversations','--restoration-scenario','--restoration-pi-scenario','--restoration-real-container'].includes(value))),fullHostConversations:fullHostConversationFlags.length===1,restorationScenario:restorationFlags.length===1,restorationPiScenario:piFlags.length===1,restorationRealContainer:realFlags.length===1},{source,overlay,driver}=options;
+if(options.restorationRealContainer&&!options.restorationScenario)throw Error('RESTORATION_REAL_CONTAINER_REQUIRES_RESTORATION');
+if(options.restorationRealContainer)process.env.QIWE_RESTORATION_REAL_CONTAINER='1';
 if(options.restorationPiScenario&&!options.restorationScenario)throw Error('RESTORATION_PI_REQUIRES_RESTORATION_SCENARIO');
 if(options.restorationScenario&&(!options.fullHostConversations||process.platform!=='linux'))throw Error('RESTORATION_SCENARIO_REQUIRES_COMPLETE_LINUX_HOST');
 const runId=new Date().toISOString().replaceAll(/[:.]/g,'-')+'-'+randomUUID();
@@ -31,16 +37,25 @@ fs.mkdirSync(evidenceRoot,{recursive:true});
 const writeAudit=value=>fs.writeFileSync(path.join(evidenceRoot,'full-host-audit.json'),JSON.stringify({runId,...value},null,2));
 writeAudit({status:'preparing',events:[]});
 console.log('FULL_HOST_RUN',JSON.stringify({runId,evidenceRoot,status:'preparing'}));
-let candidate,directory;
+let candidate,directory,ownedManifest;
 try{
 if(!overlay||options.unpatched)throw Error('FULL_HOST_EXPLICIT_OVERLAY_REQUIRED');
 if(driver){const {verifyPreparedNativeSqlite}=await import('./prepare-native-sqlite.mjs');verifyPreparedNativeSqlite(source,driver);}
 else{const {verifyOriginalLinuxSqlite}=await import('./linux-runtime.mjs');verifyOriginalLinuxSqlite(source);}
 candidate=await createFullHostCandidate(source,overlay,options.fullHostConversations?{conversationIntake:true,fullHostConversationExecution:true}:undefined);
 directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
- const piRunner=options.restorationPiScenario?prepareOriginalPiRunner({source,root:directory,skillRoot}):undefined;
+ const piRunner=options.restorationPiScenario||options.restorationRealContainer?prepareOriginalPiRunner({source,root:directory,skillRoot,trueMain:options.restorationRealContainer}):undefined;
  if(piRunner)fs.writeFileSync(piRunner.entryFile,applyFullHostPiDrain(fs.readFileSync(piRunner.entryFile,'utf8')));
  if(piRunner){const runtimeFile=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runner.ts');fs.writeFileSync(runtimeFile,applyFullHostPiAbort(fs.readFileSync(runtimeFile,'utf8')));}
+ let originalShell;
+ if(options.restorationRealContainer){
+  ownedManifest=path.join(directory,'owned-containers.txt');
+  originalShell=verifyOriginalShellImage({source,buildInput:'/qiwe-control/build-input.json',image:process.env.QIWE_LOCAL_DOCKER_IMAGE,docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,manifest:ownedManifest,runnerHashes:piRunner.runnerSourceHashes});
+  prepareOriginalShellCandidate(piRunner);
+  const hotRoot=path.join(directory,'container/agent-runner');fs.mkdirSync(hotRoot,{recursive:true});
+  for(const name of ['src','prompts'])fs.cpSync(path.join(piRunner.runnerTarget,name),path.join(hotRoot,name),{recursive:true});
+  fs.copyFileSync(path.join(here,'real-container-provider.mjs'),path.join(directory,'real-container-provider.mjs'));
+ }
  for(const [name,value]of candidate.files){const target=path.join(directory,'src',name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,value);}
  if(piRunner)fs.appendFileSync(path.join(directory,'src/container-runner.ts'),'\nexport {resolveAgentProfileUserSkillsPolicy};\n');
  if(options.fullHostConversations&&!options.restorationScenario){
@@ -49,7 +64,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  }
  fs.mkdirSync(path.join(directory,'tests'));
  if(options.fullHostConversations&&!options.restorationScenario)fs.copyFileSync(path.join(here,'legacy-work-preservation-compatibility.test.mts'),path.join(directory,'tests/legacy-work-preservation-compatibility.test.mts'));
- if(options.restorationScenario)for(const name of ['full-host-restoration-seed.test.mts','full-host-restoration-flow.test.mts','full-host-restoration.fixture.mts','full-host-restoration-isolation.fixture.mts','full-host-restoration-employee.fixture.mts'])fs.copyFileSync(path.join(here,name),path.join(directory,'tests',name));
+ if(options.restorationScenario)for(const name of ['full-host-restoration-seed.test.mts','full-host-restoration-flow.test.mts','full-host-restoration.fixture.mts','full-host-restoration-isolation.fixture.mts','full-host-restoration-employee.fixture.mts','full-host-local-container.fixture.mts','real-container-boundary.mjs'])fs.copyFileSync(path.join(here,name),path.join(directory,'tests',name));
  if(options.restorationScenario)for(const name of ['full-host-restoration-pi.fixture.mts','full-host-restoration-pi-scenario.fixture.mts'])fs.copyFileSync(path.join(here,name),path.join(directory,'tests',name));
  fs.copyFileSync(path.join(here,'full-host.test.mts'),path.join(directory,'tests/full-host.test.mts'));
  fs.copyFileSync(path.join(here,'full-host-conversation.fixture.mts'),path.join(directory,'tests/full-host-conversation.fixture.mts'));
@@ -113,7 +128,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  fs.writeFileSync(path.join(directory,'vitest.config.mts'),"export default {test:{include:['tests/*.test.mts'],exclude:['tests/role-workspace-candidate.test.mts','tests/full-host-environment.test.mts'],fileParallelism:false,testTimeout:120000,hookTimeout:120000}};");
  if(options.fullHostConversations)fs.writeFileSync(path.join(directory,'environment.vitest.config.mts'),"export default {test:{include:['tests/full-host-environment.test.mts'],fileParallelism:false,testTimeout:120000,hookTimeout:120000}};");
  fs.writeFileSync(path.join(directory,'role-workspace.vitest.config.mts'),"export default {test:{include:['tests/role-workspace-candidate.test.mts'],fileParallelism:false,testTimeout:120000,hookTimeout:120000}};");
- if(options.restorationScenario)for(const phase of ['seed','flow'])fs.writeFileSync(path.join(directory,`restoration-${phase}.vitest.config.mts`),`export default {test:{include:['tests/full-host-restoration-${phase}.test.mts'],fileParallelism:false,maxWorkers:1,testTimeout:120000,hookTimeout:120000}};`);
+ if(options.restorationScenario)for(const phase of ['seed','flow'])fs.writeFileSync(path.join(directory,`restoration-${phase}.vitest.config.mts`),`export default {test:{include:['tests/full-host-restoration-${phase}.test.mts'],fileParallelism:false,maxWorkers:1,testTimeout:${options.restorationRealContainer?300000:120000},hookTimeout:120000}};`);
  const dependencies=path.resolve(source,'../node_modules'),target=path.join(directory,'node_modules');
  fs.mkdirSync(target);
  for(const entry of fs.readdirSync(dependencies,{withFileTypes:true})){
@@ -126,6 +141,12 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  fs.mkdirSync(env.HOME);
  env.QIWE_FULL_HOST_CONVERSATIONS=options.fullHostConversations?'1':'0';
  env.QIWE_RESTORATION_PI=options.restorationPiScenario?'1':'0';
+ if(options.restorationRealContainer){
+  env.QIWE_RESTORATION_REAL_CONTAINER='1';
+  for(const key of ['QIWE_LOCAL_DOCKER_RUN_ID','QIWE_LOCAL_DOCKER_VOLUME','QIWE_LOCAL_DOCKER_HOST','QIWE_LOCAL_DOCKER_IMAGE','QIWE_LOCAL_DOCKER_DRIVER_IMAGE'])env[key]=process.env[key];
+  env.MINICLAW_CONTAINER_IMAGE=process.env.QIWE_LOCAL_DOCKER_IMAGE;env.QIWE_REAL_CONTAINER_OWNED_MANIFEST=ownedManifest;
+  env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL=JSON.stringify(Object.fromEntries(['verified','image','entrypoint','piVersion','files'].map(key=>[key,originalShell[key]])));
+ }
  if(piRunner){
   const check=spawnSync(process.execPath,[path.join(project,'node_modules/typescript/bin/tsc'),'--noEmit','--incremental','false'],{cwd:piRunner.runnerTarget,env,encoding:'utf8',timeout:60000});
   process.stdout.write(check.stdout??'');process.stderr.write(check.stderr??'');
@@ -193,6 +214,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   fullHostConversationIndexFragmentHash:hashFile(path.join(here,'full-host-conversation-index.fragment')),
  }:{};
  const instrumentation={executedIndexHash:hashFile(path.join(directory,'src/index.ts')),testHash:hashFile(path.join(directory,'tests/full-host.test.mts')),projectResidueTestHash:hashFile(path.join(directory,'tests/project-residue.test.mts')),queueRecoveryTestHash:hashFile(path.join(directory,'tests/queue-recovery.test.mts')),botPreparationNativeTestHash:hashFile(path.join(directory,'tests/bot-preparation-native.test.mts')),roleWorkspaceCandidateTestHash:hashFile(path.join(directory,'tests/role-workspace-candidate.test.mts')),roleWorkspaceOverlayHash:hashFile(path.join(directory,'test-support/role-workspace-overlay.mjs')),roleWorkspaceConfigHash:hashFile(path.join(directory,'role-workspace.vitest.config.mts')),publicSupportHashes,configHash:hashFile(path.join(directory,'vitest.config.mts')),verifierHash:hashFile(fileURLToPath(import.meta.url)),candidateBuilderHash:hashFile(path.join(here,'full-host-candidate.mjs'))};
+ if(options.restorationRealContainer)instrumentation.localDocker={originalShell,runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,fixtureHash:hashFile(path.join(directory,'tests/full-host-local-container.fixture.mts')),providerHash:hashFile(path.join(directory,'real-container-provider.mjs')),admissionHash:hashFile(path.join(directory,'tests/real-container-boundary.mjs')),helperHash:hashFile(path.join(directory,'src/full-host-local-docker.mjs')),limitations:['Controlled local Desktop daemon; concurrent independent Docker administrators are outside this proof','Deterministic ModelRuntime I/O is not evidence of model semantic quality','No production, external message, external model, or deployment']};
  const phases=[];
  if(options.fullHostConversations){
   conversationInstrumentation.restorationSources=Object.fromEntries(fs.readdirSync(here).filter(name=>/^(?:full-host-(?:restoration|entry-fencing|recovery-authority|execution-fences)|legacy-work-preservation)/.test(name)).map(name=>[name,hashFile(path.join(here,name))]));
@@ -206,10 +228,10 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   if(supervisor)env.QIWE_RESTORATION_RECEIPT=supervisor.locator;
   console.log('FULL_HOST_PHASE',JSON.stringify({runId,phase,status:'starting'}));
   let result;
-  try{result=spawnSync(process.execPath,[path.join(project,'node_modules/vitest/vitest.mjs'),'run','--config',path.join(directory,options.restorationScenario?'restoration-flow.vitest.config.mts':'vitest.config.mts')],{cwd:directory,env,encoding:'utf8',timeout:180000});}finally{supervisor?.close();}
+  try{result=spawnSync(process.execPath,[path.join(project,'node_modules/vitest/vitest.mjs'),'run','--config',path.join(directory,options.restorationScenario?'restoration-flow.vitest.config.mts':'vitest.config.mts')],{cwd:directory,env,encoding:'utf8',timeout:options.restorationRealContainer?360000:180000,maxBuffer:16*1024*1024});}finally{supervisor?.close();}
   process.stdout.write(result.stdout??'');process.stderr.write(result.stderr??'');
   const evidence=fs.existsSync(env.QIWE_FULL_HOST_EVIDENCE)?JSON.parse(fs.readFileSync(env.QIWE_FULL_HOST_EVIDENCE,'utf8')):null;
-  phases.push({phase,status:result.status,evidence,stdout:result.stdout,stderr:result.stderr});
+  phases.push({phase,status:result.status,evidence,...(supervisor?{supervisorReceipt:supervisor.receipt}:{}),stdout:result.stdout,stderr:result.stderr});
   writeAudit({...candidate.audit,instrumentation:{...instrumentation,...conversationInstrumentation},platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF',status:result.status===0?'in_progress':'failed',roleWorkspacePhase,phases});
   if(result.error)throw result.error;
   if(result.status!==0){process.exitCode=result.status??1;break;}
@@ -226,8 +248,10 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
 }catch(error){writeAudit({...JSON.parse(fs.readFileSync(path.join(evidenceRoot,'full-host-audit.json'),'utf8')),...candidate?.audit,status:'failed',error:String(error)});throw error;
 }finally{
  if(directory){
+ if(ownedManifest)cleanupOwnedContainers({docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',manifest:ownedManifest,runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID});
  const resolved=fs.realpathSync(directory);
  if(path.dirname(resolved)!==fs.realpathSync(os.tmpdir())||!path.basename(resolved).startsWith('qiwe-full-host-'))throw Error('FULL_HOST_UNSAFE_TEMP_CLEANUP');
- fs.rmSync(resolved,{recursive:true,force:true});
+ if(options.restorationRealContainer)console.log('FULL_HOST_RETAINED_VOLUME_ROOT',resolved);
+ else fs.rmSync(resolved,{recursive:true,force:true});
  }
 }

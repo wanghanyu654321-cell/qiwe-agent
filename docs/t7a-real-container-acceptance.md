@@ -2,7 +2,7 @@
 
 ## 当前增量：本地原 Dockerfile 与原 shell 启动链
 
-2026-10-24，基线 `030bfcd0d36b614c31c912a437d61320b31ff94a`。本轮在已有验证器增加显式原 shell 模式，复用原启动器、挂载、Pi main、追问、取消和退出场景；业务服务、D1–D5、恢复证明及门禁保持不变。本地构建副本与原 shell 实测已通过；完整宿主恢复与真实容器的同次联动仍未通过，具体缺口见下文。
+2026-10-24，基线 `030bfcd0d36b614c31c912a437d61320b31ff94a`。本页记录显式原 shell 独立模式，复用原启动器、挂载、Pi main、追问、取消和退出场景；本地构建副本与原 shell 实测通过。当时未覆盖的完整宿主联动由后续 `20aad7a` 基线增量补验，当前状态见[同宿主验收](t7a-fullhost-conversation-acceptance.md)，不将本页独立通过拼成端到端证据。
 
 构建使用本地 N 的 `container/Dockerfile` 和明确选出的 75 个源码、prompt、清单及启动辅助文件，没有复制业务数据、配置、密钥或宿主 `node_modules`。原 Dockerfile SHA256 为 `fbc6077c10535cbc65e2f7d4815cdf00971be249adcac8dde2f7de8b14e7e61a`。沿用原 Pi 0.84.2 和 agent-browser 0.33.1，下载仅用于构建原文件列出的依赖；运行验收禁用容器网络。构建输入与日志保存在 `.local/t7-runner-shell-20261024/`。
 
@@ -36,11 +36,11 @@ node --test integrations/native/original-shell-dockerfile.test.mjs
 
 本轮专项 6/6；默认 Node 镜像模式回归 `be8954fc-fe83-4d8d-ae84-ad57ef6fcdbd` 为 `local-transport-passed`，原类型、编译及场景均通过，4 个容器已退出、合成目录已清理。公共 `npm test -- --no-file-parallelism` 为 43 文件、598 项通过，`npm run typecheck`、`npm run build` exit 0；无 lint 脚本。日志均保留在上述本轮证据根目录。测试模型响应为确定性合成数据，未调用外部模型、发送真实消息或修改生产。
 
-### 完整宿主联动的实际缺口
+### 本页独立运行时的完整宿主缺口（后续增量另验）
 
 当前原 shell 模式单独运行容器传输，不能称为“完整宿主恢复后带真实容器跑通”。现有恢复验证器的物理环境要求固定 PID1、仅祖先进程、无 Docker socket、无外网及私有 tmpfs 数据；完整宿主场景还禁止子进程，并用进程内 Pi 接点替换容器传输。原启动器却需要调用 Docker，并把宿主绝对路径交给 daemon 挂载。外部 daemon 不能自动看到该私有 tmpfs 的同一目录。
 
-因此缺的是两者共用、可核实的运行环境：恢复检查需覆盖真实 daemon 与旧容器写者的退出/失权，以及宿主和容器挂载的是同一批合成文件。当前证明没有提供这些事实。不能靠换镜像、移动 socket 路径、删除进程检查或把两次独立通过拼接来满足。此轮不改这份恢复契约；组合验收保留为未通过，后续应先收敛这一个环境接点，不重复开发岗位、会话、账本、技能或发送能力。
+当时缺少共同环境、真实daemon/旧容器退出和同一挂载文件的事实。该次独立验收保留原v1契约，不能靠移动socket或拼接两次通过补齐。后续已按[同宿主增量](t7a-fullhost-conversation-acceptance.md)增加明确受控的本地v2环境并实际组合验证；原v1默认要求继续保留。
 
 ## 上轮记录：缓存 Node 镜像的独立传输验证
 
@@ -90,4 +90,4 @@ node --test integrations/native/real-container-cleanup.test.mjs
 
 ## 上轮未覆盖项与当前边界
 
-上轮缺少的原 runner 镜像、完整 shell、浏览器及身份启动链，已由本页当前增量覆盖。完整宿主与真实子容器的同次运行仍未通过。两轮独立传输场景均没有完整宿主的 memory IPC 消费者，原运行时按既有策略提示无法取得持久记忆快照后继续；验证的追问上下文是原 SDK 会话历史，不是持久记忆服务。真实企微实收、模型质量和生产部署仍待单独授权与验收；不把独立 transport 通过写成产品已开放。
+原 runner 镜像、完整shell、浏览器和身份链由本页覆盖。两轮独立传输没有完整宿主的memory IPC消费者，其追问只证明SDK历史；同宿主实际执行及memory IPC由后续[组合增量](t7a-fullhost-conversation-acceptance.md)另验。真实企微实收、模型质量和生产部署仍待对应授权与验收。

@@ -5,12 +5,13 @@ import Database from 'better-sqlite3';
 import {installRestorationIsolation} from './full-host-restoration-isolation.fixture.mts';
 import {adminId,sessionId,memberSessionId,actor,workspaceJid,oldTaskId,readSeed,retainedSnapshot} from './full-host-restoration.fixture.mts';
 import {exerciseEmployeeRestoration} from './full-host-restoration-employee.fixture.mts';
+import {prepareLocalContainerTransport,localContainerAnswer,localContainerRequest} from './full-host-local-container.fixture.mts';
 
 // The only runtime replacement is the external runner/model transport. The
 // original main/queue/DB/scanner/gate/HTTP restore transaction remain real.
 const transport=vi.hoisted(()=>({calls:[] as any[],pi:undefined as any}));
 vi.mock('../src/container-runner.js',async importOriginal=>{
- const actual:any=await importOriginal();return {...actual,runContainerAgent:async(_group:any,input:any,_onProcess:any,onOutput:any)=>{
+ const actual:any=await importOriginal();if(process.env.QIWE_RESTORATION_REAL_CONTAINER==='1')return actual;return {...actual,runContainerAgent:async(_group:any,input:any,_onProcess:any,onOutput:any)=>{
   if(transport.pi)return transport.pi.run(_group,input,_onProcess,onOutput);
   transport.calls.push(structuredClone(input));
   const output={status:'success',result:'合成恢复后答案',sourceKind:'sdk_final',finalizationReason:'completed',turnId:input.turnId,inputTurnId:input.turnId,inputTurnCompleted:true,newSessionId:'restoration-new-session'};
@@ -19,9 +20,11 @@ vi.mock('../src/container-runner.js',async importOriginal=>{
 });
 
 it('restores the actual nonempty host through original HTTP before accepting any employee work',async()=>{
- const boundary=installRestorationIsolation(),seed=readSeed(),events:string[]=[];
+ const local=process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'?prepareLocalContainerTransport(transport.calls):undefined;
+ const boundary=installRestorationIsolation(local?.ports),seed=readSeed(),events:string[]=[];
  expect(seed.processId).not.toBe(process.pid);
  const db=await import('../src/db.js'),config=await import('../src/config.js');
+ local?.prepare(config);
  const sql=new Database(path.join(config.STORE_DIR,'messages.db'),{fileMustExist:true});
  const web=await import('../src/web.js'),context=await import('../src/web-context.js');
  const host=await import('../src/index.js') as any;
@@ -34,7 +37,7 @@ it('restores the actual nonempty host through original HTTP before accepting any
   expect(retainedSnapshot(sql)).toEqual(seed.retained);expect(transport.calls).toEqual([]);
   const address=boundary.servers.find(server=>server.listening)!.address() as any,base='http://127.0.0.1:'+address.port;
   const {signSessionToken}=await import('../src/auth.js');
-  const headers={cookie:'miniclaw_session='+signSessionToken(sessionId),Origin:'http://127.0.0.1:19777','content-type':'application/json'};
+  const headers={cookie:'miniclaw_session='+signSessionToken(sessionId),Origin:'http://127.0.0.1:19777','content-type':'application/json',...(local?{Connection:'close'}:{})};
   const memberHeaders={...headers,cookie:'miniclaw_session='+signSessionToken(memberSessionId)};
   const status=await fetch(base+'/api/appointment/maintenance',{headers});expect(status.status).toBe(200);
   expect(await status.json()).toMatchObject({maintenance:true,phase:'paused'});
@@ -75,9 +78,11 @@ it('restores the actual nonempty host through original HTTP before accepting any
    const {installRestorationPi}=await import('./full-host-restoration-pi.fixture.mts');
    transport.pi=await installRestorationPi({config,transportCalls:transport.calls});
   }
-  const employee=await exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls:transport.calls,pi:transport.pi,events});
+  local?.activate();
+  const employee=await exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls:transport.calls,pi:transport.pi,events,...(local?{expectedAnswer:localContainerAnswer,request:localContainerRequest}:{})});
+  const localContainer=await local?.verify(boundary);
   process.emit('SIGTERM');shutdown=true;await boundary.wait(()=>boundary.exits.length>0,'original main shutdown');expect(boundary.exits).toEqual([0]);
-  fs.writeFileSync(process.env.QIWE_RESTORATION_FLOW_EVIDENCE??path.join(process.cwd(),'restoration-flow.json'),JSON.stringify({phase:process.env.QIWE_FULL_HOST_PHASE??'boot',processId:process.pid,events,transportCalls:transport.calls.length,employee},null,2));
+  fs.writeFileSync(process.env.QIWE_RESTORATION_FLOW_EVIDENCE??path.join(process.cwd(),'restoration-flow.json'),JSON.stringify({phase:process.env.QIWE_FULL_HOST_PHASE??'boot',processId:process.pid,events,transportCalls:transport.calls.length,employee,localContainer},null,2));
  }catch(error){
   failure=error;
   console.error('RESTORATION_PRIMARY_FAILURE',JSON.stringify({error:String(error),executions:sql.prepare('SELECT receipt_id,state,query_id,turn_id FROM wecom_conversation_execution').all(),piRuns:transport.pi?.runs.map(({kind,interrupted,closed,providerAborted}:any)=>({kind,interrupted,closed,providerAborted}))}));
