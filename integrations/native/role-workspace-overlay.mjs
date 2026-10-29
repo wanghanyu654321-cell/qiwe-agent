@@ -140,11 +140,7 @@ export function createControlledRealRoleWorkspaceNativePort(options){
  if(options.mode!=='controlled-real-pilot')throw Error('ROLE_WORKSPACE_BINDING_INCOMPLETE');
  return createRoleWorkspaceNativePortInternal(options);
 }
-function createRoleWorkspaceNativePortInternal({mode,gate,native,templates,prepareOwnProfiles,journalDirectory,readActor}){
- if(!gate||!native||!Array.isArray(templates)||typeof prepareOwnProfiles!=='function'||!journalDirectory||typeof readActor!=='function')throw Error('ROLE_WORKSPACE_BINDING_INCOMPLETE');
- const source=Object.freeze({...native}),policy=Object.freeze({...gate});
- const catalog=structuredClone(templates);
- if(new Set(catalog.map(item=>item.key)).size!==catalog.length)throw Error('ROLE_WORKSPACE_TEMPLATE_CONFLICT');
+function roleWorkspaceChecks(source,readActor){
  const unknown={state:'unknown',detail:'role_workspace_unverifiable'};
  const within=scope=>!scope.signal.aborted&&Number.isFinite(scope.deadline)&&performance.now()<scope.deadline;
  const frozen=input=>{
@@ -168,6 +164,14 @@ function createRoleWorkspaceNativePortInternal({mode,gate,native,templates,prepa
   if(claim.corpId!==actor.corpId||claim.botId!==actor.botId||claim.memberId!==actor.memberId)throw Error('ROLE_WORKSPACE_BINDING_CHANGED');
   return claim;
  };
+ return {unknown,within,frozen,trusted,owner,binding};
+}
+function createRoleWorkspaceNativePortInternal({mode,gate,native,templates,prepareOwnProfiles,journalDirectory,readActor}){
+ if(!gate||!native||!Array.isArray(templates)||typeof prepareOwnProfiles!=='function'||!journalDirectory||typeof readActor!=='function')throw Error('ROLE_WORKSPACE_BINDING_INCOMPLETE');
+ const source=Object.freeze({...native}),policy=Object.freeze({...gate});
+ const catalog=structuredClone(templates);
+ if(new Set(catalog.map(item=>item.key)).size!==catalog.length)throw Error('ROLE_WORKSPACE_TEMPLATE_CONFLICT');
+ const {unknown,within,frozen,trusted,owner,binding}=roleWorkspaceChecks(source,readActor);
  async function read(input){
   try{
    const actor=frozen(input);if(!within(input.scope))return unknown;
@@ -225,4 +229,57 @@ function createRoleWorkspaceNativePortInternal({mode,gate,native,templates,prepa
   }catch{return unknown;}finally{policy.finishWrite(ticket);}
  }
  return Object.freeze({readRoleWorkspace:read,prepareRoleWorkspace:prepare});
+}
+
+/** Operator-only admission of a previously verified, exact existing resource map. */
+export function createExistingRoleWorkspaceAdopter({gate,native,readActor,approvedResources}){
+ if(!gate||!native||typeof readActor!=='function'||!Array.isArray(approvedResources))throw Error('ROLE_WORKSPACE_BINDING_INCOMPLETE');
+ const source=Object.freeze({...native}),policy=Object.freeze({...gate});
+ const {unknown,within,frozen,trusted,owner,binding}=roleWorkspaceChecks(source,readActor);
+ const fields=['tenantId','accountId','storeId','role','profileId','workspaceJid','corpId','botId','memberId'];
+ const catalog=Object.freeze(structuredClone(approvedResources).map(item=>{
+  if(!item||fields.some(field=>typeof item[field]!=='string'||!item[field]||/[\s\u0000#]/.test(item[field])))throw Error('ROLE_WORKSPACE_APPROVAL_INVALID');
+  if(!/^web:(?!home(?:-|:|$))[^\s#]{1,196}$/.test(item.workspaceJid))throw Error('ROLE_WORKSPACE_APPROVAL_INVALID');
+  return Object.freeze(Object.fromEntries(fields.map(field=>[field,item[field]])));
+ }));
+ const scopes=catalog.map(item=>JSON.stringify([item.tenantId,item.accountId,item.storeId,item.role]));
+ if(new Set(scopes).size!==catalog.length||new Set(catalog.map(item=>item.workspaceJid)).size!==catalog.length||new Set(catalog.map(item=>item.profileId)).size!==catalog.length)throw Error('ROLE_WORKSPACE_APPROVAL_CONFLICT');
+ const checkResources=(actor,approved)=>{
+  owner(actor);
+  const groups=source.getGroupsByOwner(actor.accountId);
+  if(!Array.isArray(groups))throw Error('ROLE_WORKSPACE_HOME_INVALID');
+  const homes=groups.filter(group=>group.is_home);
+  const home=homes[0];
+  if(homes.length!==1||home.created_by!==actor.accountId||home.executionMode!=='container'||typeof home.jid!=='string'||!/^web:[^\s\u0000#]{1,196}$/.test(home.jid))throw Error('ROLE_WORKSPACE_HOME_INVALID');
+  const group=source.getRegisteredGroup(approved.workspaceJid),profile=source.getAgentProfileForUser(approved.profileId,actor.accountId);
+  if(!group||group.jid!==approved.workspaceJid||group.created_by!==actor.accountId||group.is_home||group.executionMode!=='container'||!group.folder||!profile||profile.id!==approved.profileId||profile.owner_user_id!==actor.accountId||profile.status!=='active'||source.getWorkspaceAgentProfileId(group.folder)!==approved.profileId)throw Error('ROLE_WORKSPACE_RESOURCE_CHANGED');
+ };
+ async function adopt(input){
+  if(policy.isPaused())return unknown;
+  const ticket=policy.beginWrite();if(!ticket)return unknown;
+  try{
+   const actor=frozen(input),resourceKey=input.idempotencyKey,scope=Object.freeze({...input.scope}),assertCurrent=input.assertCurrent,withCurrent=input.withCurrent;
+   const approved=catalog.find(item=>fields.filter(field=>field!=='profileId'&&field!=='workspaceJid').every(field=>item[field]===actor[field]));
+   if(!approved||!within(scope))return unknown;
+   const assert=async()=>{await assertCurrent();await trusted(actor,scope);if(!within(scope)||policy.isPaused())throw Error('ROLE_WORKSPACE_BUDGET_EXPIRED');};
+   await assert();
+   // Recheck immediately before entering the current grant's synchronous commit.
+   await assert();
+   const result=await withCurrent(()=>source.withOwnedRoleWorkspaceTransaction(()=>{
+    if(!within(scope)||policy.isPaused())throw Error('ROLE_WORKSPACE_BUDGET_EXPIRED');
+    checkResources(actor,approved);
+    const owned=source.getOwnedRoleWorkspaceClaimsForOwner(actor.accountId);
+    if(!Array.isArray(owned)||owned.some(claim=>claim.resourceKey!==resourceKey&&(claim.profileId===approved.profileId||claim.workspaceJid===approved.workspaceJid)))throw Error('ROLE_WORKSPACE_PROVENANCE_INVALID');
+    const claimed=source.claimOwnedRoleWorkspace({tenantId:actor.tenantId,ownerId:actor.accountId,storeId:actor.storeId,role:actor.role,resourceKey,corpId:actor.corpId,botId:actor.botId,memberId:actor.memberId,bindingVersion:actor.bindingVersion,grantVersion:actor.grantVersion});
+    if(claimed.state==='existing'){
+     const claim=binding(actor,claimed.claim);
+     if(claim.state!=='ready'||claim.profileId!==approved.profileId||claim.workspaceJid!==approved.workspaceJid)throw Error('ROLE_WORKSPACE_CLAIM_CHANGED');
+    }else if(claimed.state!=='claimed'||!source.resolveOwnedRoleWorkspace(claimed.claim,approved.profileId,approved.workspaceJid))throw Error('ROLE_WORKSPACE_CLAIM_CHANGED');
+    return {state:'ready',workspaceJid:approved.workspaceJid,profileId:approved.profileId,ownerAccountId:actor.accountId,storeId:actor.storeId,role:actor.role};
+   }));
+   await assert();owner(actor);
+   return result;
+  }catch{return unknown;}finally{policy.finishWrite(ticket);}
+ }
+ return Object.freeze({adopt});
 }
