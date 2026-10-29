@@ -2,7 +2,7 @@
 
 2026-10-25。目标：沿用原 Frontagent Claw、已有管理员和原数据，将 D1–D5 接回产品；员工在企微提出需求、追问、取消、收到答案并查回。本文取代“新空库 setup → 新建管理员 → 导入员工”的步骤。
 
-架构仍是原 Web/业务服务、原 Native main/队列/Pi、原 SQLite，以及现有企微适配；技术栈和依赖不变。本轮只核实和编制计划，未实施下述重接、数据迁移或服务启动，不动生产、不调用模型、不发送真实消息。
+架构仍是原 Web/业务服务、原 Native main/队列/Pi、原 SQLite，以及现有企微适配；技术栈和依赖不变。2026-10-29 R1 已完成原状态一致性副本、原产品只读装配及不同主进程重启查回，代码独立审查通过。用户已授权从原测试宿主只读导出必要员工状态，R2 正核实来源；R3 尚未在本轮原数据组合验收。不动生产、不调用模型、不发送真实消息。
 
 ## 1. 锁定的输入与不能混用的环境
 
@@ -19,7 +19,7 @@
 
 原本地 Native 数据与 `manager/reports.sqlite`（含存在的 WAL/SHM）检查前后哈希未变。管理员密码只在内存比对，不输出、不复制到新库。完整路径、数据哈希及审计结果保存在被 Git 忽略的 `.local/frontagent-baseline-20261025/baseline-lock.private.json`，不提交私有数据库、账号配置、会话或私有备份。
 
-**锁定的是正确源码、制品和原数据来源；“最新版 Web + 原数据 + D1–D5 + 完整宿主”这一组合尚未启动验收。** 原本地构建脚本有初始化、保存设置及岗位安装行为，启动脚本会登录并写会话；本轮均未运行。不要通过执行旧 build/launcher 来做只读核实。
+**R1 采用与原本地数据匹配的 `runtime/web`，已启动原完整 main；最新 HR Web 仅保留来源校验，未搬入运行。** HR 页面要求另一套授权准备，直接搭配原本地账号会卡住，不能以制品较新替代兼容核实。原本地构建脚本有初始化、保存设置及岗位安装行为，未运行；只有隔离副本上的原登录和原 Native 增量初始化获准执行。不要对原数据运行旧 build/launcher。
 
 ## 2. 实际缺口
 
@@ -44,7 +44,7 @@
 
 ## 4. 最小修正顺序
 
-以下是后续实施计划，本轮不执行。每步只跑受影响测试；不追加通用迁移器、诊断平台、权限框架或新 Agent。
+以下按依赖实施，每步只跑受影响测试；不追加通用迁移器、诊断平台、权限框架或新 Agent。
 
 | 步骤 | 具体接点与最小工作 | 完成条件 | 预计投入 |
 | --- | --- | --- | --- |
@@ -54,9 +54,9 @@
 
 预估合计 2–4 人日是这次装配修正，不是重新开发 D1–D5，也不是承诺真实上线日期。R1 如发现必须修改业务语义或数据布局，先列具体差异再重估，不把重构混入启动修正。R2 缺可信员工状态、R3 缺原恢复事实时直接列出所缺材料；不靠追加局部证明拖延产品验收。
 
-侵入度：本轮仅文档和只读审计；后续 R1 主要影响启动/路径，R2 涉及身份与绑定，R3 涉及原库增量表及恢复，后两项风险中等。所有写入先限制在一致性副本，回退为停止该候选并重新使用未修改的原制品/原数据，保留候选证据，不在原数据上做破坏性回滚。真实渠道/模型联调须在上述组合通过后按原指定成员授权执行；生产部署不在本计划内。
+侵入度：R1 修改本仓本地启动器，新增副本制作和原业务只读接线；不修改原仓业务实现、队列、权限模型或 Pi 循环。R2 涉及身份与绑定，R3 涉及原库增量表及恢复，后两项风险中等。所有写入先限制在一致性副本，回退为停止该候选并重新使用未修改的原制品/原数据，保留候选证据，不在原数据上做破坏性回滚。真实渠道/模型联调须在上述组合通过后按原指定成员授权执行；生产部署不在本计划内。
 
-## 5. 本轮验证
+## 5. 基线核实记录（2026-10-25，实施前）
 
 环境：本地 Windows，Node v24.18.0；原仓源码 `b4dffb6`，本仓代码 `f476ddb`。没有运行产品服务或容器，没有 schema 写入/新建账号。
 
@@ -69,3 +69,28 @@
 | 企微选择/结果/绑定 | 本仓运行 `E:/node.exe node_modules/vitest/vitest.mjs run tests/role-eval/wecom-bot-conversations.test.ts tests/role-eval/wecom-bot-conversation-results.test.ts tests/role-eval/wecom-bot-real-bind.test.ts` | 3 文件、26 用例通过。 |
 
 审计脚本初次因把原 Web index 路径误写为 web/dist/index.html 而失败；按实际文件改为 web/index.html 后重跑通过，没有将失败算作业务失败或通过。文档 diff/链接检查及独立审查随本轮交付记录保存。无运行代码改动，因此不重复全量测试、typecheck、lint 或构建；没有声称真实员工可用或 GitHub CI 通过。
+
+## 6. R1 实施与交付边界（2026-10-29）
+
+`integrations/native/local-pilot-host.mjs` 现在要求显式提供受控 Native 源码副本、原产品源码和原 job 状态目录。首次启动制作独立副本，之后只重开该副本；缺原库、缺启用管理员或路径指回原目录时拒绝，不能退回空库。副本包含原持久目录和 6 个 SQLite 库；已知两处依赖 junction 不复制，不代表 runner 依赖已经恢复。原账号、岗位和空间均沿用原 ID。
+
+容器使用 `network=none`，不发布端口，不挂原状态目录或 Docker socket，也不注入渠道和模型密钥。执行门禁保持 `paused`，只补原管理员登录、原岗位/空间及四项产品 GET 读取；业务写入与 Agent 执行继续拒绝。浏览器验收使用本次临时、仅监听 `127.0.0.1` 的 Docker exec 转发，不作为产品网络入口发布。
+
+实际原管理员登录已通过；七岗、5 份已有草稿、4 条原报数、11 份培训资料可以读取。四个原页面均显示对应原数据，无 setup 或重新开通要求。账号/Profile/工作间维持 1/8/8，原 Native DB/WAL/SHM 文件哈希未变。原库本身含合成业务资料，以上不代表真实 B 店经营记录或指定员工恢复。
+
+范围限制：预约开放状态、经营知识/历史样例等尚未在本候选装配，页面明确显示无法核实；培训只读取原资料，不开放检索写路由或生成。相关原功能与文件保留，不能把四页可读写成全部 Web 功能或 D1–D5 员工闭环已恢复。
+
+本轮增量命令（仓库根目录，Node 24）：
+
+```powershell
+node --test integrations/native/local-pilot-host.test.mjs integrations/native/frontagent-product-state.test.mts integrations/native/frontagent-product-web.test.mts
+node node_modules/typescript/bin/tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --allowImportingTsExtensions integrations/native/frontagent-product-state.ts integrations/native/frontagent-product-web.ts integrations/native/frontagent-product-state.test.mts integrations/native/frontagent-product-web.test.mts
+```
+
+结果：39/39 通过；新增 TypeScript 源码和测试严格检查通过。实际容器启动还验证了原业务模块的最小依赖编译与挂载；未重复全量回归、全仓构建或声称 CI 通过。上轮 Windows esbuild 平台不匹配、合法 `memory-extension` 相对依赖未包含等启动失败已定位修正，中间副本保留，未计作通过。
+
+R1 重启查回通过：同一 runId 与运行代码哈希，两个实际主进程 PID 分别为 62666、3784，启动时间不同；草稿、报数、培训资料与七岗配置的持久内容摘要完全一致，第二进程未重写业务 fixture。重启后原管理员登录与上述读取、拒绝场景重新通过，数量仍为 1/8/8。独立审查对六个代码/测试文件给出规格与质量 PASS、39/39 通过；不以该结果代表业务恢复门禁已放行。
+
+脱敏汇总与执行脚本存于 Git 忽略的 `.local/frontagent-baseline-20261025`、`.local/frontagent-product-host-r1-final`；不提交数据库、会话、管理员配置或业务正文。
+
+R2 下一步只补可信现有员工状态：已核实的本地原库和完整备份只有管理员；远端七岗安装回执是线索，不能充当现有账号库或当前授权。2026-10-29 用户已授权从原测试宿主只读导出必要状态，当前进行原账号、门店及岗位来源核对；完成导出与验证前保留 R2/R3 未完成，不新建同名账号或借管理员替代。

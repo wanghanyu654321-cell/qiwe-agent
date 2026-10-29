@@ -4,20 +4,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 import {sealControlledLinuxCopy} from './linux-runtime.mjs';
 let api={};try{api=await import('./local-pilot-host.mjs');}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
 const need=name=>{assert.equal(typeof api[name],'function',`${name} must implement explicit local initialization`);return api[name];};
 const runId='11111111-1111-4111-8111-111111111111',root=path.resolve('.local/local-pilot-host-test'),copy=path.resolve('.local/controlled-copy');
 test('requires explicit command and controlled copy only for first start',()=>{
- const parse=need('parseLocalPilotArguments');assert.deepEqual(parse(['start','--copy-root',copy]),{command:'start',copyRoot:copy});
+ const parse=need('parseLocalPilotArguments');assert.deepEqual(parse(['start','--copy-root',copy,'--product-root',root,'--state-source',copy+'-state']),{command:'start',copyRoot:copy,productRoot:root,stateSource:copy+'-state'});assert.throws(()=>parse(['start','--copy-root',copy]),/local pilot arguments/);
  assert.deepEqual(parse(['status']),{command:'status'});assert.deepEqual(parse(['stop']),{command:'stop'});
  for(const args of [[],['start'],['start','--copy-root','relative'],['status','--copy-root',copy],['start','--image','other'],['stop','foreign'],['start','--copy-root',copy,'--copy-root',copy]])assert.throws(()=>parse(args),/local pilot arguments/);
 });
-test('publishes only loopback and mounts only readonly code/copy plus task data',()=>{
+test('uses network none without publishing ports and mounts readonly code/copy plus isolated product state',()=>{
  const args=need('localPilotContainerArguments')({root,copyRoot:copy,runId});
- assert.ok(args.includes('--publish=127.0.0.1:39130:3000'));assert.ok(args.includes('--network=qiwe-local-pilot-'+runId+'-web'));
+ assert.ok(args.includes('--network=none'));assert.ok(!args.some(v=>v.startsWith('--publish=')));
  for(const flag of ['--pull=never','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges'])assert.ok(args.includes(flag));
- assert.deepEqual(args.filter(v=>v.startsWith('--mount=')),[`--mount=type=bind,source=${copy},target=/input,readonly`,`--mount=type=bind,source=${path.join(root,'code')},target=/source,readonly`,`--mount=type=bind,source=${path.join(root,'data')},target=/pilot/data`]);
+ assert.deepEqual(args.filter(v=>v.startsWith('--mount=')),[`--mount=type=bind,source=${copy},target=/input,readonly`,`--mount=type=bind,source=${path.join(root,'code')},target=/source,readonly`,`--mount=type=bind,source=${path.join(root,'state')},target=/product-state`]);
  const env=args.filter(v=>v.startsWith('--env='));assert.ok(env.includes('--env=MINICLAW_EXECUTION_BOUNDARY=member-container-only'));assert.ok(env.includes('--env=PLUGIN_AUTO_SCAN=false'));assert.ok(!env.some(v=>/SECRET|TOKEN|API_KEY|BOT|ANTHROPIC|FEISHU/.test(v)));assert.ok(!args.some(v=>/docker.sock|--privileged|--volume/.test(v)));
  for(const bad of ['',path.parse(root).root,copy+',readonly=false'])assert.throws(()=>need('localPilotContainerArguments')({root:bad,copyRoot:copy,runId}),/pilot path/);
 });
@@ -38,37 +39,73 @@ test('foreign container or remote daemon never receives stop',async()=>{
  for(const remote of [true,false]){const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'pilot-foreign-'));try{const m=manifest(tmp),calls=[];const execute=(_bin,args)=>{calls.push(args);return args[0]==='context'?{status:0,stdout:remote?'tcp://remote:2375':'npipe:////./pipe/dockerDesktopLinuxEngine'}:{status:0,stdout:JSON.stringify({name:'/'+m.name,running:true,labels:{'qiwe.local.pilot':'foreign'}})};};await assert.rejects(need('localPilotCommand')({command:'stop'},{root:tmp,execute}),/local Docker|ownership/);assert.ok(!calls.some(a=>a.includes('stop')));}finally{fs.rmSync(tmp,{recursive:true,force:true});}}
 });
 
-test('creates only the missing target network; daemon and permission failures stop before creation',async()=>{
- const name='qiwe-local-pilot-'+runId,network=name+'-web';
- for(const [stderr,missing,existing] of [
-  ['Error response from daemon: network '+network+' not found',true],
-  ['Error: No such network: '+network,true],
-  ['Error response from daemon: network other-network not found',false],
-  ['permission denied while trying to connect to the Docker daemon socket',false],
-  ['Cannot connect to the Docker daemon',false],
-  ['',true,{internal:false,labels:{'qiwe.local.pilot':runId}}],
-  ['',false,{internal:true,labels:{'qiwe.local.pilot':runId}}],
-  ['',false,{internal:false,labels:{'qiwe.local.pilot':'foreign'}}],
- ]){
-  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'pilot-network-'));
-  try{
-   const task=path.join(tmp,'task'),controlled=path.join(tmp,'copy');fs.mkdirSync(task);fs.mkdirSync(controlled);fs.mkdirSync(path.join(task,'code'));sealControlledLinuxCopy(controlled);
-   fs.writeFileSync(path.join(task,'host.json'),JSON.stringify({version:1,runId,name,copyRoot:controlled,codeHash:createHash('sha256').update('').digest('hex')}));
-   const calls=[];let running=false;
-   const execute=(_bin,args)=>{
-    calls.push(args);
-    if(args[0]==='context')return {status:0,stdout:'npipe:////./pipe/dockerDesktopLinuxEngine'};
-    if(args.includes('--type=container'))return running?{status:0,stdout:JSON.stringify({name:'/'+name,id:'c'.repeat(64),running:true,labels:{'qiwe.local.pilot':runId}})}:{status:1,stderr:'Error: No such object: '+name};
-    if(args.includes('network')&&args.includes('inspect')){assert.equal(args.at(-1),network);return existing?{status:0,stdout:JSON.stringify(existing)}:{status:1,stderr};}
-    if(args.includes('run'))running=true;
-    return {status:0,stdout:''};
-   };
-   const starting=need('localPilotCommand')({command:'start',copyRoot:controlled},{root:task,execute});
-   if(missing)assert.equal((await starting).state,'running');else await assert.rejects(starting,/network (state unknown|ownership mismatch)/);
-   const creations=calls.filter(args=>args.includes('network')&&args.includes('create'));
-   assert.equal(creations.length,missing&&!existing?1:0);
-   for(const args of creations){assert.equal(args.at(-1),network);assert.ok(!args.includes('--internal'));}
-   assert.equal(calls.filter(args=>args.includes('run')).length,missing?1:0);
-  }finally{fs.rmSync(tmp,{recursive:true,force:true});}
- }
+test('refuses restarting the retired empty-state manifest without creating any network',async()=>{
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'pilot-legacy-'));try{
+  manifest(tmp);const calls=[];
+  const execute=(_bin,args)=>{calls.push(args);return {status:0,stdout:'npipe:////./pipe/dockerDesktopLinuxEngine'};};
+  await assert.rejects(need('localPilotCommand')({command:'start',copyRoot:copy,productRoot:root,stateSource:copy+'-state'},{root:tmp,execute}),/original product state/);
+  assert.ok(!calls.some(a=>a.includes('start')||a.includes('run')||a.includes('network')));
+ }finally{fs.rmSync(tmp,{recursive:true,force:true});}
+});
+test('missing original product input is rejected before staging empty data',async()=>{
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'pilot-input-'));try{
+  await assert.rejects(need('stageLocalPilot')({root:tmp,copyRoot:copy}),/original product/);
+  assert.equal(fs.existsSync(path.join(tmp,'data')),false);assert.equal(fs.existsSync(path.join(tmp,'host.json')),false);
+ }finally{fs.rmSync(tmp,{recursive:true,force:true});}
+});
+test('maintenance read permission is exact and never admits business writes or execution',()=>{
+ const allowed=need('frontagentMaintenanceRead');
+ for(const p of ['/api/groups','/api/agent-profiles','/api/local-product/config','/api/local-product/drafts','/api/local-product/manager','/api/local-product/training']){assert.equal(allowed('GET',p),true);assert.equal(allowed('POST',p),false);}
+ for(const p of ['/api/messages','/api/tasks','/api/local-product/manager/confirm','/api/local-product/config/extra','/api/config','/api/auth/setup'])assert.equal(allowed('GET',p),false);
+});
+
+function originalStateFixture(t){
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'pilot-original-state-'));
+ const root=path.join(directory,'host'),stateSource=path.join(directory,'original'),copyRoot=path.join(directory,'copy'),productRoot=path.join(directory,'product');
+ for(const p of [root,copyRoot,productRoot,path.join(stateSource,'runtime/data/db')])fs.mkdirSync(p,{recursive:true});
+ const originalDatabase=path.join(stateSource,'runtime/data/db/messages.db'),db=new DatabaseSync(originalDatabase);
+ try{db.exec("CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT,status TEXT); INSERT INTO users VALUES('synthetic-original-admin','admin','active')");}finally{db.close();}
+ const originalHash=createHash('sha256').update(fs.readFileSync(originalDatabase)).digest('hex');
+ const m={version:2,runId,name:'qiwe-local-pilot-'+runId,copyRoot,productRoot,stateSource,codeHash:'a'.repeat(64),snapshot:{sourceRoot:stateSource,targetRoot:path.join(root,'state')}};
+ fs.writeFileSync(path.join(root,'host.json'),JSON.stringify(m));
+ const calls=[],execute=(_bin,args)=>{calls.push(args);if(args[0]==='context')return {status:0,stdout:'npipe:////./pipe/dockerDesktopLinuxEngine'};return {status:0,stdout:JSON.stringify({name:'/'+m.name,id:'c'.repeat(64),running:false,labels:{'qiwe.local.pilot':runId}})};};
+ t.after(()=>{
+  const resolved=fs.realpathSync(directory);
+  assert.equal(path.dirname(resolved),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(resolved).startsWith('pilot-original-state-'));
+  fs.rmSync(resolved,{recursive:true,force:true});
+ });
+ return {root,stateSource,copyRoot,productRoot,calls,execute,input:{command:'start',copyRoot,productRoot,stateSource},assertNoStartOrSourceChange(){
+  assert.ok(!calls.some(args=>args.includes('start')||args.includes('run')),'rejected input must never reach Docker start/run');
+  assert.equal(createHash('sha256').update(fs.readFileSync(originalDatabase)).digest('hex'),originalHash);
+ }};
+}
+
+test('v2 start refuses a state-root junction back to the original before Docker start or run',async t=>{
+ const f=originalStateFixture(t);
+ fs.symlinkSync(f.stateSource,path.join(f.root,'state'),'junction');
+ await assert.rejects(need('localPilotCommand')(f.input,{root:f.root,execute:f.execute}),/link|junction/i);
+ f.assertNoStartOrSourceChange();
+});
+
+test('v2 start refuses an internal database junction back to the original before Docker start or run',async t=>{
+ const f=originalStateFixture(t);
+ fs.mkdirSync(path.join(f.root,'state/runtime/data'),{recursive:true});
+ fs.symlinkSync(path.join(f.stateSource,'runtime/data/db'),path.join(f.root,'state/runtime/data/db'),'junction');
+ await assert.rejects(need('localPilotCommand')(f.input,{root:f.root,execute:f.execute}),/link|junction/i);
+ f.assertNoStartOrSourceChange();
+});
+
+test('v2 start refuses missing original messages.db without creating an empty database or starting Docker',async t=>{
+ const f=originalStateFixture(t),database=path.join(f.root,'state/runtime/data/db/messages.db');
+ fs.mkdirSync(path.dirname(database),{recursive:true});
+ await assert.rejects(need('localPilotCommand')(f.input,{root:f.root,execute:f.execute}),/state database missing/i);
+ assert.equal(fs.existsSync(database),false);
+ f.assertNoStartOrSourceChange();
+});
+
+test('stage rejects a target inside the source before copy validation or creating a target directory',async t=>{
+ const f=originalStateFixture(t),nested=path.join(f.stateSource,'new-host');
+ await assert.rejects(need('stageLocalPilot')({root:nested,copyRoot:f.copyRoot,productRoot:f.productRoot,stateSource:f.stateSource}),/overlap/i);
+ assert.equal(fs.existsSync(nested),false);
+ f.assertNoStartOrSourceChange();
 });
