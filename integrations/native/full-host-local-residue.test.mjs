@@ -51,3 +51,29 @@ test('only original rebuilt skill links are passive; unknown or changed targets 
  for(const target of ['/etc','/workspace/effective-skills/../private','/workspace/effective-skills/vendor-copywriting'])assert.equal(classifyLocalRunnerLink(key,target,context),undefined);
  assert.equal(classifyLocalRunnerLink(key,'/workspace/effective-skills/beauty-local-content',[]),undefined);
 });
+
+test('explicit restored folder reuses exact D5 session and residue protocol without cross-folder admission',()=>{
+ const restored='restored-marketing-123',other=[{...context[0],folder:restored}],file=name.replace(folder,restored);
+ assert.equal(classifyLocalRunnerFile(file,encode(entries()),other),'settled_pi_session_exact_d5');
+ assert.equal(classifyLocalRunnerFile(file,encode(entries()),context),undefined);
+ assert.equal(classifyLocalRunnerFile(name,encode(entries()),other),undefined);
+ assert.equal(classifyLocalRunnerFile(file,encode(entries()),[...context,...other]),undefined);
+ assert.equal(classifyLocalRunnerFile(file,encode(entries()),[{...other[0],folder:'../escape'}]),undefined);
+ const link=`sessions/${restored}/.claude/skills/beauty-local-content`;
+ assert.equal(classifyLocalRunnerLink(link,'/workspace/effective-skills/beauty-local-content',other),'original_rebuilt_skill_link');
+ assert.equal(classifyLocalRunnerLink(link,'/workspace/effective-skills/vendor-copywriting',other),undefined);
+ const row={session_id:id,content:context[0].content,receipt_id:'receipt',query_id:'query',turn_id:'input-one'};
+ const rows=new Map([['wecom_conversation_execution',[{receipt_id:'receipt',state:'completed',session_id:id,query_id:'query',turn_id:'input-one',workspace_jid:'workspace',input_json:'["input-one"]',message_id:'input-one'}]],['registered_groups',[{jid:'workspace',folder:restored,execution_mode:'container'}]],['sessions',[{group_folder:restored,session_id:id}]],['messages',[{chat_jid:'workspace',id:'input-one',is_from_me:0,content:'request'}]]]);
+ const records=[{table:'wecom_conversation_results',row,record:{evidence:['d5_frozen_result_verified']}}];
+ assert.deepEqual(settledLocalSessions(rows,records),[]);
+ assert.deepEqual(settledLocalSessions(rows,records,restored),other);
+ for(const approved of ['',folder,'../escape'])assert.deepEqual(settledLocalSessions(rows,records,approved),[]);
+ assert.deepEqual(settledLocalSessions(rows,[{...records[0],record:{evidence:[]}}],restored),[]);
+});
+
+test('original explicitly disabled MCP env is retained without accepting runnable env extensions',()=>{
+ const file=`env/${folder}/default/main/env`,official="MINICLAW_CLAUDE_ENDPOINT_KIND='official'\n";
+ assert.equal(classifyLocalRunnerFile(file,official+"MINICLAW_AGENT_MCP_POLICY='disabled'\n",context),'fixed_official_endpoint_disabled_mcp_env');
+ for(const raw of [official+"MINICLAW_AGENT_MCP_POLICY='custom'\n",official+"MINICLAW_AGENT_MCP_POLICY='inherit'\n",official+"MINICLAW_AGENT_MCP_POLICY='disabled';bad\n",official+"MINICLAW_AGENT_MCP_POLICY='disabled'\nPATH='/bad'\n",official+"MINICLAW_AGENT_MCP_POLICY='disabled'\nMINICLAW_AGENT_MCP_POLICY='custom'\n"])
+  assert.equal(classifyLocalRunnerFile(file,raw,context),undefined);
+});

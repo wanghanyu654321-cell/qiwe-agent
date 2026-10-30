@@ -77,15 +77,16 @@ function codeHash(root){return hash(treeFiles(root).map(([name,bytes])=>name+'\0
 export function frontagentMaintenanceRead(method,pathname){
  return method==='GET'&&['/api/groups','/api/agent-profiles','/api/local-product/config','/api/local-product/drafts','/api/local-product/manager','/api/local-product/training'].includes(pathname);
 }
-function originalProductWeb(source,ownerId){
+export function originalProductWeb(source,ownerId,{codeRoot='/source',jobRoot='/product-state'}={}){
+ for(const root of [codeRoot,jobRoot])if(typeof root!=='string'||root==='/'||!path.posix.isAbsolute(root)||path.posix.normalize(root)!==root||/[\r\n\\]/.test(root))throw Error('Invalid original product runtime root');
  const marker='// --- Route Mounting ---';
  if(source.split(marker).length!==2||source.split('const initializationRead=').length!==2)throw Error('Original product Web anchor changed');
  source=source.replace('const initializationRead=',`const initializationRead=frontagentMaintenanceRead(c.req.method,c.req.path)||`);
- return `import {installFrontagentProductReadRoutes} from '/source/product-web.mjs';
+ return `import {installFrontagentProductReadRoutes} from ${JSON.stringify(codeRoot+'/product-web.mjs')};
 import * as frontagentDb from './db.js';
-import * as frontagentModules from '/source/product-modules.mjs';
-const frontagentMaintenanceRead=${frontagentMaintenanceRead.toString()};
-`+source.replace(marker,`installFrontagentProductReadRoutes(app,{origin:'http://127.0.0.1:${port}',job:'/product-state',ownerId:${JSON.stringify(ownerId)},db:frontagentDb,authMiddleware,productModules:frontagentModules});
+import * as frontagentModules from ${JSON.stringify(codeRoot+'/product-modules.mjs')};
+const frontagentMaintenanceRead: (method: string, pathname: string) => boolean=${frontagentMaintenanceRead.toString()};
+`+source.replace(marker,`installFrontagentProductReadRoutes(app,{origin:'http://127.0.0.1:${port}',job:${JSON.stringify(jobRoot)},ownerId:${JSON.stringify(ownerId)},db:frontagentDb,authMiddleware,productModules:frontagentModules});
 `+marker);
 }
 export async function stageLocalPilot({root=defaultRoot,copyRoot,productRoot,stateSource}){

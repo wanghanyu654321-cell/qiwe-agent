@@ -20,10 +20,14 @@ export function runLocalVerification(command,args,{cwd,env,timeout,log}){
  });
 }
 
-export function cleanupOwnedContainers({docker,endpoint,manifest,runId}){
+export function cleanupOwnedContainers({docker,endpoint,manifest,runId,ownedContainerPrefix}){
  if(!/^[a-f0-9-]{36}$/.test(runId))throw Error('REAL_CONTAINER_CLEANUP_RUN_ID');
+ if(ownedContainerPrefix!==undefined&&!/^miniclaw-[A-Za-z0-9][A-Za-z0-9_.-]{0,127}-$/.test(ownedContainerPrefix))throw Error('REAL_CONTAINER_CLEANUP_PREFIX');
+ const namesAllowed=ownedContainerPrefix===undefined?/^miniclaw-synthetic-[a-z0-9-]+$/:new RegExp('^'+ownedContainerPrefix.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'[a-z0-9-]+$');
  const names=fs.existsSync(manifest)?[...new Set(fs.readFileSync(manifest,'utf8').split(/\r?\n/).filter(Boolean))]:[];
- if(names.some(name=>!/^miniclaw-synthetic-[a-z0-9-]+$/.test(name)))throw Error('REAL_CONTAINER_UNSAFE_OWNED_MANIFEST');
+ // The unchanged original-shell preflight records its exact per-run probe as
+ // well as runner containers. It is normally already removed by --rm.
+ if(names.some(name=>!namesAllowed.test(name)&&name!=='miniclaw-synthetic-image-'+runId))throw Error('REAL_CONTAINER_UNSAFE_OWNED_MANIFEST');
  const results=[];
  for(const name of names){
   const inspected=spawnSync(docker,['--host',endpoint,'inspect',name,'--format','{{json .Config.Labels}}'],{encoding:'utf8',timeout:15000,windowsHide:true});

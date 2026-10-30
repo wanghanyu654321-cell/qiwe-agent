@@ -6,6 +6,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {sealControlledLinuxCopy} from './linux-runtime.mjs';
+import ts from 'typescript';
 let api={};try{api=await import('./local-pilot-host.mjs');}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND')throw e;}
 const need=name=>{assert.equal(typeof api[name],'function',`${name} must implement explicit local initialization`);return api[name];};
 const runId='11111111-1111-4111-8111-111111111111',root=path.resolve('.local/local-pilot-host-test'),copy=path.resolve('.local/controlled-copy');
@@ -57,6 +58,25 @@ test('maintenance read permission is exact and never admits business writes or e
  const allowed=need('frontagentMaintenanceRead');
  for(const p of ['/api/groups','/api/agent-profiles','/api/local-product/config','/api/local-product/drafts','/api/local-product/manager','/api/local-product/training']){assert.equal(allowed('GET',p),true);assert.equal(allowed('POST',p),false);}
  for(const p of ['/api/messages','/api/tasks','/api/local-product/manager/confirm','/api/local-product/config/extra','/api/config','/api/auth/setup'])assert.equal(allowed('GET',p),false);
+});
+
+test('the same original Web seam binds product modules and state to the selected isolated host',()=>{
+ const patch=need('originalProductWeb'),source='// --- Route Mounting ---\nconst ignored=()=>{const initializationRead=false;};';
+ for(const options of [undefined,{codeRoot:'/tmp/qiwe-full-host-example/frontagent-product',jobRoot:'/tmp/qiwe-full-host-example'}]){
+  const result=patch(source,'retained-owner',options),calls=[],native={},modules={},app={},auth=()=>{};
+  const body=ts.transpileModule(result.replace(/^import .*;\n/gm,''),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+  new Function('installFrontagentProductReadRoutes','frontagentDb','frontagentModules','app','authMiddleware',body)((a,o)=>calls.push({a,o}),native,modules,app,auth);
+  assert.equal(calls.length,1);assert.equal(calls[0].a,app);assert.equal(calls[0].o.db,native);assert.equal(calls[0].o.productModules,modules);assert.equal(calls[0].o.authMiddleware,auth);assert.equal(calls[0].o.job,options?.jobRoot??'/product-state');assert.equal(calls[0].o.ownerId,'retained-owner');
+  assert.ok(result.includes(JSON.stringify((options?.codeRoot??'/source')+'/product-modules.mjs')));
+ }
+ for(const jobRoot of ['relative','/','/tmp/../outside','/tmp\\aliased','/tmp\nother'])assert.throws(()=>patch(source,'retained-owner',{jobRoot}),/runtime root/);
+});
+
+test('the generated maintenance read helper passes the original strict TypeScript host check',()=>{
+ const result=need('originalProductWeb')('// --- Route Mounting ---\nconst ignored=()=>{const initializationRead=false;};','retained-owner');
+ const helper=result.split('\n').find(line=>line.startsWith('const frontagentMaintenanceRead'))+'\n'+result.split('\n').find(line=>line.startsWith(' return method'))+'\n};';
+ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'pilot-web-types-')),file=path.join(tmp,'helper.ts');
+ try{fs.writeFileSync(file,helper);const program=ts.createProgram([file],{strict:true,noEmit:true,skipLibCheck:true,types:[],target:ts.ScriptTarget.ES2022});assert.deepEqual(ts.getPreEmitDiagnostics(program).map(d=>ts.flattenDiagnosticMessageText(d.messageText,'\n')),[]);}finally{fs.rmSync(tmp,{recursive:true,force:true});}
 });
 
 function originalStateFixture(t){

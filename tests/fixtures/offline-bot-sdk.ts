@@ -3,8 +3,8 @@ import {vi} from 'vitest';
 import type {BotSdkPort, BotFileSdkPort} from '../../src/role-eval/wecom-bot-sender.js';
 
 /** Network replacement exists only here. Inputs still run the installed MessageHandler. */
-export function offlineBotSdk() {
-  const client = new WSClient({botId: 'bot', secret: 'synthetic-placeholder', logger: {debug() {}, info() {}, warn() {}, error() {}}});
+export function offlineBotSdk(botId = 'bot') {
+  const client = new WSClient({botId, secret: 'synthetic-placeholder', logger: {debug() {}, info() {}, warn() {}, error() {}}});
   const connect = vi.spyOn(client, 'connect').mockImplementation(() => {throw Error('network_forbidden');});
   const disconnect = vi.spyOn(client, 'disconnect').mockImplementation(() => {throw Error('shared_sdk_must_not_close');});
   const manager = Reflect.get(client, 'wsManager') as {

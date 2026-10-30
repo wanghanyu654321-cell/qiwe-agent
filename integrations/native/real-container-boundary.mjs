@@ -18,30 +18,35 @@ export function validateOriginalShellImage(inspection,probe,{image,files}){
  return Object.freeze({verified:true,image,entrypoint:[...inspection.Config.Entrypoint],piVersion:probe.piVersion,piAiVersions:{...probe.piAiVersions},files:{...probe.files}});
 }
 
-export function admitDockerControl(command,args,owned){
+function admittedName(name,ownedContainerPrefix,defaultPattern){
+ if(ownedContainerPrefix===undefined)return defaultPattern.test(name??'');
+ return typeof ownedContainerPrefix==='string'&&/^miniclaw-[a-z0-9][a-z0-9_-]{0,127}-$/.test(ownedContainerPrefix)&&
+  typeof name==='string'&&name.startsWith(ownedContainerPrefix)&&/^\d+$/.test(name.slice(ownedContainerPrefix.length));
+}
+export function admitDockerControl(command,args,owned,ownedContainerPrefix){
  if(command!=='docker')throw Error('REAL_CONTAINER_CONTROL_COMMAND');
  if(args.length===3&&args[0]==='info'&&args[1]==='--format'&&args[2]==='{{json .SecurityOptions}}')return [...args];
- if(args.length===2&&args[0]==='stop'&&/^miniclaw-synthetic-[a-z0-9-]+$/.test(args[1])&&owned.has(args[1]))return [...args];
+ if(args.length===2&&args[0]==='stop'&&admittedName(args[1],ownedContainerPrefix,/^miniclaw-synthetic-[a-z0-9-]+$/)&&owned.has(args[1]))return [...args];
  throw Error('REAL_CONTAINER_CONTROL_ARGUMENT');
 }
-export function admitDockerShell(command,owned){
- const match=/^docker stop (miniclaw-synthetic-[a-z0-9-]+)$/.exec(command);
+export function admitDockerShell(command,owned,ownedContainerPrefix){
+ const match=/^docker stop ([a-z0-9_-]+)$/.exec(command);
  if(!match)throw Error('REAL_CONTAINER_CONTROL_SHELL');
- return admitDockerControl('docker',['stop',match[1]],owned);
+ return admitDockerControl('docker',['stop',match[1]],owned,ownedContainerPrefix);
 }
 
-export function admitLocalDockerSpawn(command,args,options,{ready,alreadyStarted}){
- if(!ready||alreadyStarted||command!=='docker'||!/^miniclaw-synthetic-restoration-role-[a-z0-9-]+$/.test(args?.[4]??'')||
+export function admitLocalDockerSpawn(command,args,options,{ready,alreadyStarted,ownedContainerPrefix}){
+ if(!ready||alreadyStarted||command!=='docker'||!admittedName(args?.[4],ownedContainerPrefix,/^miniclaw-synthetic-restoration-role-[a-z0-9-]+$/)||
   !options||Object.keys(options).join(',')!=='stdio'||JSON.stringify(options.stdio)!=='["pipe","pipe","pipe"]')throw Error('LOCAL_DOCKER_SPAWN_FORBIDDEN');
 }
 
 // The only admitted command is the original runner's docker run. No daemon
 // socket or executable is exposed to the child; callers retain real pipes.
-export function admitDockerRun(args,{root,runner,deps,provider,image,expectedMounts,runId,originalShell,startupFailure=false,expectedIdentity='virtualized',expectedUid,expectedGid}){
+export function admitDockerRun(args,{root,runner,deps,provider,image,expectedMounts,runId,originalShell,startupFailure=false,expectedIdentity='virtualized',expectedUid,expectedGid,ownedContainerPrefix}){
  if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(runId??''))throw Error('REAL_CONTAINER_RUN_ID');
  if(!expectedMounts||typeof expectedMounts!=='object')throw Error('REAL_CONTAINER_EXPECTED_MOUNTS');
  if(!/^(?:node@)?sha256:[a-f0-9]{64}$/.test(image)||args.at(-1)!==image)throw Error('REAL_CONTAINER_IMAGE');
- if(args[0]!=='run'||args[1]!=='-i'||args[2]!=='--rm'||args[3]!=='--name'||!/^miniclaw-synthetic-[a-z0-9-]+$/.test(args[4]??''))throw Error('REAL_CONTAINER_ARGUMENT');
+ if(args[0]!=='run'||args[1]!=='-i'||args[2]!=='--rm'||args[3]!=='--name'||!admittedName(args[4],ownedContainerPrefix,/^miniclaw-synthetic-[a-z0-9-]+$/))throw Error('REAL_CONTAINER_ARGUMENT');
  const canonicalRoot=fs.realpathSync(root),mounts=[],destinations=new Set();
  for(let i=5;i<args.length-1;i+=2){
   const [flag,value]=args.slice(i,i+2);
