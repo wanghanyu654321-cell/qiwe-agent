@@ -90,15 +90,19 @@ test('symlink, extra link, loose mode and bad shape are refused without echoing 
 
 const digestOf=text=>createHash('sha256').update(text).digest('hex');
 function containerExec(file,text,onCp){
- const calls=[],digest=digestOf(text);
+ const calls=[];let received=Buffer.alloc(0);
  const execFileSync=(command,args,options)=>{
   calls.push([command,...args]);
-  if(args.some(item=>String(item).includes('cat >'))){onCp?.(command,args,options);return '';}
-  if(args.includes('sha256sum'))return `${digest}  /tmp/qiwe-live-pilot.private.json\n`;
-  if(args.includes('stat'))return `1000 1000 600 1 ${Buffer.byteLength(text)}\n`;
+  if(args.some(item=>String(item).includes('cat >'))){
+   received=options?.stdio?.[0]==='pipe'?Buffer.from(options?.input??''):Buffer.alloc(0);
+   onCp?.(command,args,options);
+   return '';
+  }
+  if(args.includes('sha256sum'))return `${createHash('sha256').update(received).digest('hex')}  ${args.at(-1)}\n`;
+  if(args.includes('stat'))return `1000 1000 600 1 ${received.length}\n`;
   return '';
  };
- return {calls,execFileSync};
+ return {calls,execFileSync,stdinBytes:()=>received.length};
 }
 test('container install copies the verified snapshot and checks the in-container hash',()=>{
  const f=scratch();try{
@@ -141,6 +145,25 @@ test('container install keeps the snapshot when the host file is swapped for the
   });
   const installed=runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync});
   assert.equal(installed.bytes,Buffer.byteLength(text));
+ }finally{f.cleanup();}
+});
+test('container install mock checks the stdin byte count',()=>{
+ const f=scratch();try{
+  const file=writeHost(f.root),text=body();
+  let stdinBytes=-1;
+  const execFileSync=(command,args,options)=>{
+   if(args.some(item=>String(item).includes('cat >'))){
+    stdinBytes=options?.stdio?.[0]==='pipe'?Buffer.byteLength(options?.input??''):0;
+    if(stdinBytes!==Buffer.byteLength(text))throw Error('stdin byte count '+stdinBytes);
+    return '';
+   }
+   if(args.includes('sha256sum'))return `${digestOf(text)}  ${args.at(-1)}\n`;
+   if(args.includes('stat'))return `1000 1000 600 1 ${Buffer.byteLength(text)}\n`;
+   return '';
+  };
+  try{runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync});}
+  catch(error){assert.equal(stdinBytes,Buffer.byteLength(text),error.message);throw error;}
+  assert.equal(stdinBytes,Buffer.byteLength(text));
  }finally{f.cleanup();}
 });
 test('container install removes the destination after chown, stat, or post-copy snapshot failure',()=>{

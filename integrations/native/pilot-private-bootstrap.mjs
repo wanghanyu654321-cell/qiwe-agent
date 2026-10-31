@@ -266,7 +266,8 @@ function writeSnapshotCopy(raw){
  finally{if(fd!==undefined)try{fs.closeSync(fd);}catch{}}
 }
 function invoke(execFileSync,command,args,input){
- try{return execFileSync(command,args,{encoding:'utf8',timeout:20000,env:{PATH:process.env.PATH??''},stdio:['ignore','pipe','pipe'],...(input===undefined?{}:{input})});}
+ const stdio=[input===undefined?'ignore':'pipe','pipe','pipe'];
+ try{return execFileSync(command,args,{encoding:'utf8',timeout:20000,env:{PATH:process.env.PATH??''},stdio,...(input===undefined?{}:{input})});}
  catch{fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');}
 }
 export function containerPrivateInstallPlan({docker,container,containerTemp,destination}={}){
