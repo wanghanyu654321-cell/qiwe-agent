@@ -40,6 +40,10 @@ test('preflight refuses to mix isolated-synthetic with a private file or a real 
   assert.equal(token.status,1);
   assert.equal(token.stderr.trim(),'ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
   assert.equal(token.stderr.includes(modelKey)||token.stdout.includes(modelKey),false);
+  const deepseek=run(['--isolated-synthetic'],{...cleanEnv,DEEPSEEK_API_KEY:'cc-switch-key-not-for-logs',ANTHROPIC_BASE_URL:'https://api.deepseek.com/anthropic'});
+  assert.equal(deepseek.status,1);
+  assert.equal(deepseek.stderr.trim(),'ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
+  assert.equal(`${deepseek.stdout}${deepseek.stderr}`.includes('cc-switch-key-not-for-logs'),false);
  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 

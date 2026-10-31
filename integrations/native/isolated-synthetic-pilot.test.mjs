@@ -14,7 +14,7 @@ function scratch(){const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-synthet
 test('worker order writes the placeholder env from the runner and disposes it after exit',async()=>{
  const f=scratch();try{
   let spawnEnv;
-  const result=await runIsolatedSyntheticWorker({dataDir:f.data,folder:'marketing',privateConfigPath:f.privateConfig,env:{...cleanEnv,OTHER_SECRET:'should-not-forward'},spawnImpl(command,args,options){
+  const result=await runIsolatedSyntheticWorker({dataDir:f.data,folder:'marketing',privateConfigPath:f.privateConfig,env:{...cleanEnv,OTHER_MARKER:'should-not-forward'},spawnImpl(command,args,options){
    spawnEnv=options.env;
    assert.equal(path.basename(args[0]),'isolated-synthetic-runner.mjs');
    assert.equal(args.length,2);
@@ -62,6 +62,8 @@ test('formal path fails closed when real pilot mode, a private file, or a token 
   await refuse({args:['--isolated-synthetic','--controlled-real-pilot'],env:cleanEnv,privateConfigPath:f.privateConfig});
   await refuse({args:['--isolated-synthetic'],env:{...cleanEnv,QIWE_CONTROLLED_REAL_PILOT:'1'},privateConfigPath:f.privateConfig});
   await refuse({args:['--isolated-synthetic'],env:{...cleanEnv,ANTHROPIC_API_KEY:token},privateConfigPath:f.privateConfig});
+  await refuse({args:['--isolated-synthetic'],env:{...cleanEnv,DEEPSEEK_API_KEY:token},privateConfigPath:f.privateConfig});
+  await refuse({args:['--isolated-synthetic'],env:{...cleanEnv,ANTHROPIC_BASE_URL:'https://api.deepseek.com/anthropic'},privateConfigPath:f.privateConfig});
   fs.writeFileSync(f.privateConfig,'{}',{mode:0o600});
   await refuse({args:['--isolated-synthetic'],env:cleanEnv,privateConfigPath:f.privateConfig});
   assert.equal(started,0);

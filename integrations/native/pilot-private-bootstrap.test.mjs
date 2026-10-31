@@ -158,6 +158,14 @@ test('install rejects a symlink in an ancestor and does not write the target',()
   assert.equal(fs.existsSync(path.join(target,'secret.json')),false);
  }finally{f.cleanup();}
 });
+test('model provider env names refuse isolated-synthetic without echoing values',()=>{
+ const absent=path.join(os.tmpdir(),'qiwe-missing-private.json'),token='deepseek-key-not-for-logs';
+ const refused=['DEEPSEEK_API_KEY','DEEPSEEK_MODEL','ANTHROPIC_BASE_URL','OPENAI_BASE_URL','DEEPSEEK_BASE_URL','OPENAI_API_KEY','VENDOR_API_KEY','VENDOR_AUTH_TOKEN','VENDOR_SECRET','QIWE_PRIVATE_API_KEY'];
+ for(const name of refused){
+  assert.throws(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin',[name]:token},absent,{root:os.tmpdir()}),error=>error.message==='ISOLATED_SYNTHETIC_REAL_CREDENTIAL'&&!error.message.includes(token)&&!error.message.includes(name));
+ }
+ assert.doesNotThrow(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin',DEEPSEEK_API_KEY:'',ANTHROPIC_MODEL:'deepseek-flash',QIWE_PILOT_ENTRY_MODE:'isolated-synthetic',QIWE_SYNTHETIC_DATA_DIR:'/tmp/qiwe-synthetic'},absent,{root:os.tmpdir()}));
+});
 test('documented live model and channel env files refuse isolated-synthetic without being read aloud',()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-live-env-'));
  try{

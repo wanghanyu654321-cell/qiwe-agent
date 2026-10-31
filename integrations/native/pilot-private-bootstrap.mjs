@@ -10,6 +10,14 @@ const liveRelative=Object.freeze(['.local/live-model/.env','.local/live-channel/
 export const PILOT_PRIVATE_CONFIG_PATH='/tmp/qiwe-live-pilot.private.json';
 export const LIVE_CREDENTIAL_FILES=Object.freeze(liveRelative.map(relative=>path.join(projectRoot,relative)));
 export const REAL_CREDENTIAL_ENV_NAMES=Object.freeze(['ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','WECOM_BOT_ID','WECOM_BOT_SECRET','WECOM_CORP_ID']);
+const providerBaseUrls=new Set(['ANTHROPIC_BASE_URL','OPENAI_BASE_URL','DEEPSEEK_BASE_URL']);
+const credentialSuffix=/(?:API_KEY|AUTH_TOKEN|SECRET)$/;
+const syntheticQiweAllowlist=new Set(['QIWE_PILOT_ENTRY_MODE','QIWE_SYNTHETIC_DATA_DIR','QIWE_SYNTHETIC_FOLDER']);
+function credentialEnvName(name){
+ if(syntheticQiweAllowlist.has(name))return false;
+ if(name.startsWith('DEEPSEEK_')||providerBaseUrls.has(name)||REAL_CREDENTIAL_ENV_NAMES.includes(name)||name==='OPENAI_API_KEY')return true;
+ return credentialSuffix.test(name);
+}
 const containerUser=1000,privateMode=0o600,maxBytes=16384;
 const fail=code=>{throw Error(code);};
 function freeze(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){for(const item of Object.values(value))freeze(item);Object.freeze(value);}return value;}
@@ -19,7 +27,7 @@ function present(file){
 }
 /** Real pilot credentials and the isolated-synthetic entry cannot be combined. */
 export function assertIsolatedSyntheticClosed(env,privateConfigPath,options){
- if(!env||env.QIWE_CONTROLLED_REAL_PILOT==='1'||REAL_CREDENTIAL_ENV_NAMES.some(name=>typeof env[name]==='string'&&env[name].length>0))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
+ if(!env||env.QIWE_CONTROLLED_REAL_PILOT==='1'||Object.entries(env).some(([name,value])=>typeof value==='string'&&value.length>0&&credentialEnvName(name)))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
  const root=options?.root??projectRoot;
  if(options?.root!==undefined&&(typeof root!=='string'||!path.isAbsolute(root)))fail('ISOLATED_SYNTHETIC_INPUT_INVALID');
  const files=new Set([PILOT_PRIVATE_CONFIG_PATH,privateConfigPath,...liveRelative.map(relative=>path.join(root,relative))]);
