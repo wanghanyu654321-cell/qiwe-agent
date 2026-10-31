@@ -11,6 +11,7 @@ function reportFullHostExit(error){
  const matched=/^([A-Z0-9_]{1,80})(?:[:\s]+([\s\S]*))?$/.exec(message);
  const code=matched?matched[1]:'FULL_HOST_FAILED';
  console.error(code);
+ if(typeof error?.step==='string'&&/^[a-z0-9-]{1,40}$/.test(error.step))console.error(error.step);
  const detail=(matched?matched[2]:message).replace(/[\r\n]+/g,' ').slice(0,300).replace(/(?:api[_-]?key|token|secret|password|adminCookie|miniclaw_session)\s*[:=]\s*\S+/gi,'[redacted]');
  if(detail&&detail!==code)console.error(detail);
  else if(!matched)console.error(/^[A-Za-z][A-Za-z0-9_]*$/.test(error?.name??'')?error.name:'Error');
@@ -77,13 +78,21 @@ let candidate,directory,ownedManifest,frontagentExistingState;
 const writeAudit=value=>fs.writeFileSync(path.join(evidenceRoot,'full-host-audit.json'),JSON.stringify({runId,...value,...(frontagentExistingState?{frontagentExistingState:frontagentExistingState.audit}:{})},null,2));
 writeAudit({status:'preparing',events:[]});
 console.log('FULL_HOST_RUN',JSON.stringify({runId,evidenceRoot,status:'preparing'}));
+const mark=(step,phase)=>console.log('FULL_HOST_STEP',JSON.stringify({step,phase}));
 try{
 if(!overlay||options.unpatched)throw Error('FULL_HOST_EXPLICIT_OVERLAY_REQUIRED');
+mark('sqlite','start');
 if(driver){const {verifyPreparedNativeSqlite}=await import('./prepare-native-sqlite.mjs');verifyPreparedNativeSqlite(source,driver);}
 else{const {verifyOriginalLinuxSqlite}=await import('./linux-runtime.mjs');verifyOriginalLinuxSqlite(source);}
+mark('sqlite','done');
+mark('candidate','start');
 candidate=await createFullHostCandidate(source,overlay,options.fullHostConversations?{conversationIntake:true,fullHostConversationExecution:true}:undefined);
+mark('candidate','done');
+mark('retained-volume','start');
 directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
+mark('retained-volume','done');
  if(options.frontagentExistingInput){
+  mark('existing-state','start');
   frontagentExistingState=prepareExistingFrontagentState({inputRoot:options.frontagentExistingInput,hostRoot:directory});
   frontagentExistingState.audit.localSessionKeyMode=restrictExistingPilotSessionKey(directory);
   writeAudit({status:'preparing',events:['local_session_key_permissions']});
@@ -94,15 +103,20 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   let web=originalProductWeb(candidate.files.get('web.ts'),frontagentExistingState.ownerId,{codeRoot:frontagentExistingState.codeRoot,jobRoot:frontagentExistingState.jobRoot});
   if(options.controlledRealPilot)web=restrictPilotWebLoopback(web);
   candidate.files.set('web.ts',web);candidate.audit.composedHashes['web.ts']=createHash('sha256').update(web).digest('hex');
+  mark('existing-state','done');
  }
+ mark('pi-runner','start');
  const piRunner=options.restorationPiScenario||options.restorationRealContainer?prepareOriginalPiRunner({source,root:directory,skillRoot,trueMain:options.restorationRealContainer}):undefined;
  if(piRunner)fs.writeFileSync(piRunner.entryFile,applyFullHostPiDrain(fs.readFileSync(piRunner.entryFile,'utf8')));
  if(piRunner){const runtimeFile=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runner.ts');fs.writeFileSync(runtimeFile,applyFullHostPiAbort(fs.readFileSync(runtimeFile,'utf8')));}
  if(options.controlledRealPilot){const runtime=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runtime.ts');fs.writeFileSync(runtime,disableControlledRealPiRetries(fs.readFileSync(runtime,'utf8')));}
+ mark('pi-runner','done');
  let originalShell;
  if(options.restorationRealContainer){
   ownedManifest=path.join(directory,'owned-containers.txt');
-  originalShell=verifyOriginalShellImage({source,buildInput:'/qiwe-control/build-input.json',image:process.env.QIWE_LOCAL_DOCKER_IMAGE,docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,manifest:ownedManifest,runnerHashes:piRunner.runnerSourceHashes});
+  mark('docker-preflight','start');
+  originalShell=await verifyOriginalShellImage({source,buildInput:'/qiwe-control/build-input.json',image:process.env.QIWE_LOCAL_DOCKER_IMAGE,docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,manifest:ownedManifest,runnerHashes:piRunner.runnerSourceHashes});
+  mark('docker-preflight','done');
   if(options.controlledRealPilot){
    fs.writeFileSync(piRunner.entryFile,"await (await import('/verification/controlled-real-preload.mjs' as string)).installControlledRealModelFetch();\n"+fs.readFileSync(piRunner.entryFile,'utf8'));
    for(const name of ['controlled-real-preload.mjs','controlled-real-model.ts'])fs.copyFileSync(path.join(here,name),path.join(directory,name));

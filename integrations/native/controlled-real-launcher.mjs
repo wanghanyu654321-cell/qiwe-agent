@@ -344,7 +344,10 @@ export function runSupervisedPilot(options={}){
   if(tagged(wrapped(docker,['logs',hostName])).length!==0)fail('PILOT_LAUNCH_NOT_READY');
   runContainerPrivateInstall({execFileSync:wrapped,docker,container:hostName,hostFile:privateFile,destination:PILOT_PRIVATE_CONFIG_PATH,platform:options.platform,homedir:options.homedir,acl:options.acl,user:options.user,realpath:options.realpath,aces:options.aces,currentSid:options.currentSid,reparsePoint:options.reparsePoint,aclExec:options.aclExec});
   wrapped(docker,['exec','--user','0:0',hostName,'sh','-c','umask 077; printf %s "$1" > /tmp/qiwe-ready/nonce && chmod 400 /tmp/qiwe-ready/nonce; umask 022; printf %s "$1" > /tmp/qiwe-ready/flag && chmod 644 /tmp/qiwe-ready/flag','sh',nonce]);
-  const attempts=options.logAttempts??Math.max(1,Math.ceil((Number(environment.QIWE_PILOT_EXPIRES_AT)-Date.now())/100));let ready='';
+  const attempts=options.logAttempts??Math.max(1,Math.ceil((Number(environment.QIWE_PILOT_EXPIRES_AT)-Date.now())/100));let ready='',lastLog=null,lastChange=(options.now??Date.now)();
+  const stallMs=options.stallMs??120000;
+  const clock=()=>(options.now??Date.now)();
+  const redactTail=text=>String(text??'').split(/\r?\n/).slice(-50).map(sanitizeMessage).filter(Boolean).join('\n');
   const containerStatus=()=>String(wrapped(docker,['inspect','-f','{{.State.Status}}',hostName])??'');
   const stoppedHost=status=>/\b(?:exited|dead)\b/.test(status);
   const captureHostExit=()=>{
@@ -359,13 +362,17 @@ export function runSupervisedPilot(options={}){
   for(let index=0;index<attempts;index++){
    const status=containerStatus();
    if(stoppedHost(status))captureHostExit();
+   const logged=String(wrapped(docker,['logs',hostName])??'');
+   const tick=clock();
+   if(logged!==lastLog){lastLog=logged;lastChange=tick;}
+   else if(tick-lastChange>=stallMs){const error=Error('PILOT_LAUNCH_HOST_STALLED');error.logTail=redactTail(logged);throw error;}
    if(mode==='rehearsal'){
-    const phase=rehearsalPhase(wrapped(docker,['logs',hostName]));
+    const phase=rehearsalPhase(logged);
     let evidence=false;
     if(phase){try{evidence=String(wrapped(docker,['exec','--user','1000:1000',hostName,'sh','-c',evidenceProbe])??'').includes('QIWE_EVIDENCE_WRITTEN');}catch(error){if(coded(error))throw error;}}
     if(phase&&evidence){ready=phase;break;}
    }else{
-    const lines=tagged(wrapped(docker,['logs',hostName]));
+    const lines=tagged(logged);
     if(lines.length===1){ready=lines[0];break;}
     if(lines.length>1)fail('PILOT_LAUNCH_NOT_READY');
    }
@@ -435,9 +442,9 @@ function main(){
   if(plan.mode==='synthetic')result.stop();
   else result.wait();
  }catch(error){
-  if(error?.message==='PILOT_LAUNCH_HOST_EXITED'){
-   console.error('PILOT_LAUNCH_HOST_EXITED');
-   console.error(String(error.exitCode??''));
+  if(error?.message==='PILOT_LAUNCH_HOST_EXITED'||error?.message==='PILOT_LAUNCH_HOST_STALLED'){
+   console.error(error.message);
+   if(error.message==='PILOT_LAUNCH_HOST_EXITED')console.error(String(error.exitCode??''));
    if(typeof error.logTail==='string'&&error.logTail)console.error(error.logTail);
    process.exitCode=1;
    return;

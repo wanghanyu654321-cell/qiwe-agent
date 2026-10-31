@@ -9,6 +9,7 @@ import {createHash} from 'node:crypto';
 import net from 'node:net';
 import {execFileSync as realExec} from 'node:child_process';
 import {assertRecordedHostBoundary,launcherPlan,prepareSealedStage,runSupervisedPilot} from './controlled-real-launcher.mjs';
+import {probeDockerSocket,runBoundedCommand} from './original-shell.mjs';
 import {createPilotScratch} from './pilot-private-bootstrap.mjs';
 import {windowsEpermCase} from '../../docs/handoff-20261031/verify.mjs';
 
@@ -419,6 +420,33 @@ test('prepare-stage reads a worktree from the main checkout and does not copy th
   try{assert.throws(()=>prepareSealedStage(wt,{sourceRoot:wrong,env:{QIWE_PILOT_SOURCE_ROOT:main}}),error=>error.message==='PILOT_LAUNCH_SOURCE_MISSING'&&error.reason==='docker'&&error.paths.some(file=>file.startsWith(wrong))&&!error.paths.some(file=>file.startsWith(main))&&!JSON.stringify(error.paths).includes(cookie));}
   finally{fs.rmSync(wrong,{recursive:true,force:true});}
  }finally{git(['worktree','remove','--force',wt],main);fs.rmSync(parent,{recursive:true,force:true});}
+});
+test('a quiet host is reported as stalled with the last log lines',()=>{
+ let clock=0;
+ const exec=trackingDocker({logs:'FULL_HOST_RUN {"status":"preparing"}\nsecret=should-not-appear\n'});
+ assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,stallMs:120000,logAttempts:6,now:()=>clock,sleep(){clock+=60000;},setTimeout:()=>({unref(){}})}),error=>error.message==='PILOT_LAUNCH_HOST_STALLED'&&error.logTail.includes('FULL_HOST_RUN')&&error.logTail.includes('[redacted]')&&!error.logTail.includes('should-not-appear'));
+ assert.equal(exec.calls.some(argv=>argv.includes('rm')&&argv.includes('-f')),true);
+});
+test('docker preflight does not wait on a client or proxy that never answers',async()=>{
+ const started=Date.now();
+ const hung=await runBoundedCommand(process.execPath,['-e','setInterval(()=>{},1000)'],{timeoutMs:400,step:'docker-preflight'});
+ assert.equal(hung.timedOut,true);
+ assert.equal(hung.step,'docker-preflight');
+ assert.ok(Date.now()-started<3000);
+ if(process.platform==='win32')return;
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-docker-sock-'));
+ const sock=path.join(dir,'docker.sock');
+ const silent=net.createServer(socket=>{socket.on('error',()=>{});});
+ const ready=net.createServer(socket=>{socket.end('HTTP/1.1 200 OK\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{"ApiVersion":"1.41"}');});
+ const readySock=path.join(dir,'ready.sock');
+ try{
+  await new Promise((resolve,reject)=>{silent.once('error',reject);silent.listen(sock,resolve);});
+  const quiet=Date.now();
+  await assert.rejects(probeDockerSocket(sock,400),error=>error.message==='FULL_HOST_STEP_TIMEOUT'&&error.step==='docker-socket');
+  assert.ok(Date.now()-quiet<3000);
+  await new Promise((resolve,reject)=>{ready.once('error',reject);ready.listen(readySock,resolve);});
+  assert.equal((await probeDockerSocket(readySock,2000)).ApiVersion,'1.41');
+ }finally{silent.close();ready.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('an uncoded launch error prints its name and message without secrets',()=>{
  const execFileSync=(command,args)=>{if(args.includes('create'))throw Error('listen EACCES token=supersecretvalue');return '';};
