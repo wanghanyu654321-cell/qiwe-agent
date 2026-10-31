@@ -4,7 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {assertIsolatedSyntheticClosed,installVerifiedPilotPrivateConfig,parseWindowsAclProbe,readHostPilotPrivateFile,runContainerPrivateInstall,stageWindowsPrivateFile,windowsAclProbeArgs,windowsAclProbeScript,windowsAllowAces} from './pilot-private-bootstrap.mjs';
+import {assertIsolatedSyntheticClosed,installVerifiedPilotPrivateConfig,parseWindowsAclProbe,readHostPilotPrivateFile as readHostRaw,runContainerPrivateInstall as installRaw,stageWindowsPrivateFile,windowsAclProbeArgs,windowsAclProbeScript,windowsAllowAces} from './pilot-private-bootstrap.mjs';
+const linuxOnly={skip:process.platform!=='linux'&&'Linux /proc uid and mode 0600'};
+function winFile(file){
+ if(process.platform!=='win32'||typeof file!=='string')return {};
+ const sid='S-1-5-21-1-2-3-1001';
+ return {platform:'win32',homedir:path.dirname(file),realpath:()=>file,currentSid:sid,reparsePoint:false,aces:[{sid,type:'Allow',inherited:false}]};
+}
+function readHostPilotPrivateFile(file,options){return readHostRaw(file,{...winFile(file),...options});}
+function runContainerPrivateInstall(options){return installRaw({...winFile(options?.hostFile),...options});}
 
 const secret='host-file-secret-value';
 const modelKey='host-file-model-key';
@@ -25,7 +33,7 @@ test('host file read returns an independent frozen copy and ignores a later rewr
  }finally{f.cleanup();}
 });
 
-test('install writes uid 1000 mode 0600 from the host file and drops a late host rewrite',()=>{
+test('install writes uid 1000 mode 0600 from the host file and drops a late host rewrite',linuxOnly,()=>{
  const f=scratch();try{
   const file=writeHost(f.root),destination=path.join(f.root,'container','qiwe-live-pilot.private.json');
   fs.mkdirSync(path.dirname(destination));
@@ -64,7 +72,7 @@ test('windows mode 0666 is accepted only for explicit allow SIDs, not a name ins
   assert.equal(JSON.stringify(accepted).includes('Müller')||JSON.stringify(accepted).includes('张伟'),false);
  }finally{f.cleanup();}
 });
-test('symlink, extra link, loose mode and bad shape are refused without echoing secrets',()=>{
+test('symlink, extra link, loose mode and bad shape are refused without echoing secrets',linuxOnly,()=>{
  const f=scratch();try{
   const file=writeHost(f.root),destination=path.join(f.root,'dest.json'),link=path.join(f.root,'link.json');
   fs.symlinkSync(file,link);
@@ -213,7 +221,7 @@ test('a failed docker cp does not remove a container path',()=>{
   assert.equal(removed,0);
  }finally{f.cleanup();}
 });
-test('install does not replace or delete a final name that appears after the absence check',()=>{
+test('install does not replace or delete a final name that appears after the absence check',linuxOnly,()=>{
  const f=scratch();try{
   const destination=path.join(f.root,'container','secret.json'),occupant='OCCUPANT_NOT_OURS\n';
   fs.mkdirSync(path.dirname(destination));
@@ -222,7 +230,7 @@ test('install does not replace or delete a final name that appears after the abs
   assert.deepEqual(fs.readdirSync(path.dirname(destination)),['secret.json']);
  }finally{f.cleanup();}
 });
-test('install rejects a symlink in an ancestor and does not write the target',()=>{
+test('install rejects a symlink in an ancestor and does not write the target',linuxOnly,()=>{
  const f=scratch();try{
   const target=path.join(f.root,'evil-target','sub');
   fs.mkdirSync(target,{recursive:true});

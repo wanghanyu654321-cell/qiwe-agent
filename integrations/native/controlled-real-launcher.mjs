@@ -8,6 +8,8 @@ import {validatePilotPrivateInput} from './frontagent-controlled-live-entry.mjs'
 import {PILOT_PRIVATE_CONFIG_PATH,assertIsolatedSyntheticClosed,createPilotScratch,runContainerPrivateInstall,sealWindowsPlaceholder,stageWindowsPrivateFile} from './pilot-private-bootstrap.mjs';
 
 export const PILOT_MAX_REQUESTS=8,PILOT_MAX_OUTPUT_TOKENS=1024,PILOT_MAX_DURATION_MS=30*60*1000;
+export const RUNNER_IMAGE='sha256:092853e7a053fc50f84b8a6b6f7cabf4f1d52673718be4c3df10672a2f4fc187';
+const sealedStage='.local/frontagent-r3-20261029';
 const noCredentialImage='node:22.19.0-alpine';
 const fail=code=>{throw Error(code);};
 const runIdOk=value=>/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value??'');
@@ -29,6 +31,12 @@ function assertEntry(entryArgs){
 const readyDir='/run/qiwe-ready',readyFlag=readyDir+'/flag';
 function waiterLoop(){
  return `while true; do if [ -f ${readyFlag} ]; then owner=$(stat -c %u ${readyFlag}); body=$(cat ${readyFlag}); if [ "$owner" = 0 ] && [ "$body" = "$QIWE_PILOT_READY_NONCE" ]; then break; fi; fi; sleep 0.1; done`;
+}
+function realHostEntry(given){
+ const extra=Array.isArray(given)?given.filter(item=>item!=='verify-full-host.mjs'):[];
+ const base=['/input/integrations/native/verify-full-host.mjs','/input/.local/full-instance/stage/app/src','--host-overlay','/input/.local/core-fix/appointment-identity-candidate/src','--skill-root','/input/.local/skills','--full-host-conversations','--restoration-scenario','--restoration-real-container','--typecheck','--controlled-real-pilot'];
+ for(const item of extra)if(!base.includes(item))base.push(item);
+ return base;
 }
 function waiterScript(entryArgs){
  return `${waiterLoop()}; exec node ${entryArgs.join(' ')}`;
@@ -62,30 +70,37 @@ export function runSupervisedPilot(options={}){
  const exec=options.execFileSync??defaultExec,docker='docker',prefix=context?['--context',context]:[];
  const wrapped=(command,args,opts)=>exec(command,[...prefix,...args],opts);
  const environment=pilotEnv(runId,network,expiresAt,nonce);
+ const volume=mode==='real'?'qiwe-tmp-'+runId:undefined;
+ if(mode==='real')Object.assign(environment,{QIWE_LOCAL_DOCKER_VOLUME:volume,QIWE_LOCAL_DOCKER_HOST:hostName,QIWE_LOCAL_DOCKER_IMAGE:image,QIWE_LOCAL_DOCKER_DRIVER_IMAGE:RUNNER_IMAGE,QIWE_RESTORATION_RECEIPT:'/proc/1/fd/3',QIWE_RESTORATION_REAL_CONTAINER:'1'});
+ const stage=path.resolve(options.cwd??process.cwd(),sealedStage);
+ const realMounts=mode==='real'?[`${stage}:/input:ro`,`${volume}:/tmp`,`${options.dockerSocket??'/var/run/docker.sock'}:/qiwe-control/docker.sock`,`${options.dockerBin??'/usr/bin/docker'}:/qiwe-control/docker:ro`]:[];
  const envArgs=Object.entries(environment).flatMap(([key,value])=>['-e',key+'='+value]);
  const publishArgs=options.publishWeb?['-p','127.0.0.1:39130:39130']:[];
- const script=mode==='no-credential'?placeholderScript:waiterScript(entryArgs);
+ const script=mode==='no-credential'?placeholderScript:waiterScript(mode==='real'?realHostEntry(options.entryArgs):entryArgs);
  const tagged=output=>String(output??'').split(/\r?\n/).filter(line=>line===`CONTROLLED_REAL_READY ${nonce}`);
  const dockerBin=context?`docker --context ${context}`:'docker';
- const stopCommand=mode==='real'?`${dockerBin} rm -f ${hostName} && ${dockerBin} network rm ${network}`:`${dockerBin} rm -f ${hostName}`;
+ const stopCommand=mode==='real'?`${dockerBin} rm -f ${hostName} && ${dockerBin} volume rm ${volume} && ${dockerBin} network rm ${network}`:`${dockerBin} rm -f ${hostName}`;
  let stopped=false,timer;
  const detach=()=>{process.off('SIGINT',onSigInt);process.off('SIGTERM',onSigTerm);if(timer!==undefined)clearTimeout(timer);};
  const removeOnce=(args)=>{let failed=false;for(let attempt=0;attempt<3;attempt++){try{wrapped(docker,args);return;}catch{failed=true;}}if(failed){const error=Error('PILOT_LAUNCH_CLEANUP_FAILED');error.stopCommand=stopCommand;throw error;}};
- const cleanup=()=>{if(stopped)return;stopped=true;detach();let failure;try{removeOnce(['rm','-f',hostName]);if(mode==='real')removeOnce(['network','rm',network]);}catch(error){failure=error;}fs.rmSync(scratch,{recursive:true,force:true});if(failure)throw failure;};
+ const cleanup=()=>{if(stopped)return;stopped=true;detach();let failure;try{removeOnce(['rm','-f',hostName]);if(mode==='real'){removeOnce(['volume','rm',volume]);removeOnce(['network','rm',network]);}}catch(error){failure=error;}fs.rmSync(scratch,{recursive:true,force:true});if(failure)throw failure;};
  const reportFailure=error=>{const text=`${error.message}\n${error.stopCommand??stopCommand}`;if(typeof options.report==='function')options.report(text);else console.error(text);};
  const finish=(code)=>{try{cleanup();(options.exit??process.exit)(code);}catch(error){reportFailure(error);(options.exit??process.exit)(1);}};
  const onSigInt=()=>finish(130);
  const onSigTerm=()=>finish(143);
  process.on('SIGINT',onSigInt);process.on('SIGTERM',onSigTerm);
  try{
-  if(mode==='real')wrapped(docker,['network','create','--driver','bridge','--label','qiwe.verification-run='+runId,'--label','qiwe.controlled-real-pilot=local-test','--opt','com.docker.network.enable_ipv6=false',network]);
-  wrapped(docker,['create','--name',hostName,'--network',network,'--user','1000:1000',...(options.mounts??[]).flatMap(item=>['-v',item]),...publishArgs,...envArgs,'--entrypoint','/bin/sh',image,'-c',script]);
+  if(mode==='real'){
+   wrapped(docker,['network','create','--driver','bridge','--label','qiwe.verification-run='+runId,'--label','qiwe.controlled-real-pilot=local-test','--opt','com.docker.network.enable_ipv6=false',network]);
+   wrapped(docker,['volume','create','--label','qiwe.verification-run='+runId,volume]);
+  }
+  wrapped(docker,['create','--name',hostName,'--network',network,'--user','1000:1000',...(mode==='real'?['--read-only','--workdir','/tmp']:[]),...[...realMounts,...(options.mounts??[])].flatMap(item=>['-v',item]),...publishArgs,...envArgs,'--entrypoint','/bin/sh',image,'-c',script]);
   try{wrapped(docker,['start',hostName]);}catch(error){if(coded(error))throw error;fail('PILOT_LAUNCH_FAILED');}
   try{wrapped(docker,['exec','--user','0:0',hostName,'sh','-c','if [ -e /run/qiwe-ready ]; then echo EXISTS; exit 1; fi']);}catch{fail('PILOT_LAUNCH_READY_FLAG_EXISTS');}
   wrapped(docker,['exec','--user','0:0',hostName,'mkdir','-m','755',readyDir]);
   wrapped(docker,['exec','--user','0:0',hostName,'chown','0:0',readyDir]);
   if(tagged(wrapped(docker,['logs',hostName])).length!==0)fail('PILOT_LAUNCH_NOT_READY');
-  runContainerPrivateInstall({execFileSync:wrapped,docker,container:hostName,hostFile:privateFile,destination:PILOT_PRIVATE_CONFIG_PATH,platform:options.platform,homedir:options.homedir,acl:options.acl,user:options.user,realpath:options.realpath});
+  runContainerPrivateInstall({execFileSync:wrapped,docker,container:hostName,hostFile:privateFile,destination:PILOT_PRIVATE_CONFIG_PATH,platform:options.platform,homedir:options.homedir,acl:options.acl,user:options.user,realpath:options.realpath,aces:options.aces,currentSid:options.currentSid,reparsePoint:options.reparsePoint,aclExec:options.aclExec});
   wrapped(docker,['exec','--user','0:0',hostName,'sh','-c',`umask 022; printf %s "$QIWE_PILOT_READY_NONCE" > ${readyFlag} && chown 0:0 ${readyFlag} && chmod 644 ${readyFlag}`]);
   const attempts=options.logAttempts??Math.max(1,Math.ceil((Number(environment.QIWE_PILOT_EXPIRES_AT)-Date.now())/100));let ready='';
   for(let index=0;index<attempts;index++){

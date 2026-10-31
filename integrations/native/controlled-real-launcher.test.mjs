@@ -4,12 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {launcherPlan,runSupervisedPilot} from './controlled-real-launcher.mjs';
 import {createPilotScratch} from './pilot-private-bootstrap.mjs';
 import {windowsEpermCase} from '../../docs/handoff-20261031/verify.mjs';
 
-const launcher=new URL('./controlled-real-launcher.mjs',import.meta.url).pathname;
+const launcher=fileURLToPath(new URL('./controlled-real-launcher.mjs',import.meta.url));
 const clean={PATH:process.env.PATH??''};
 function callsOf(exec){return exec.calls;}
 test('synthetic launcher creates the container, installs a fake private file, then starts, with no network',()=>{
@@ -70,7 +71,18 @@ test('real launcher opens a private bridge, installs the file, then starts, and 
   const network=sub.indexOf('network'),created=sub.indexOf('create'),started=sub.indexOf('start'),copied=sub.indexOf('cp');
   assert.ok(network!==-1&&network<created&&created<started&&started<copied);
   const create=exec.calls.find(argv=>argv.includes('create')&&argv.includes('--name'));
-  assert.equal(create.some(item=>item.includes('exec node verify-full-host.mjs --controlled-real-pilot --full-host-conversations')),true);
+  assert.equal(create.some(item=>item.includes('exec node /input/integrations/native/verify-full-host.mjs /input/.local/full-instance/stage/app/src --host-overlay /input/.local/core-fix/appointment-identity-candidate/src --skill-root /input/.local/skills')),true);
+  assert.equal(create.includes('--workdir')&&create.includes('/tmp'),true);
+  assert.equal(create.some(item=>item.includes(`${path.sep}.local${path.sep}frontagent-r3-20261029:/input:ro`)||item.includes('.local/frontagent-r3-20261029:/input:ro')),true);
+  assert.equal(create.some(item=>/^qiwe-tmp-.+:\/tmp$/.test(item)),true);
+  assert.equal(create.includes('/var/run/docker.sock:/qiwe-control/docker.sock'),true);
+  assert.equal(create.includes('/usr/bin/docker:/qiwe-control/docker:ro'),true);
+  assert.equal(create.some(item=>item.startsWith('QIWE_RESTORATION_RECEIPT=/proc/1/fd/')),true);
+  assert.equal(create.some(item=>item.startsWith('QIWE_LOCAL_DOCKER_DRIVER_IMAGE=sha256:092853e7')),true);
+  assert.equal(create.some(item=>item.startsWith('QIWE_LOCAL_DOCKER_IMAGE=sha256:')),true);
+  assert.equal(create.some(item=>item.startsWith('QIWE_LOCAL_DOCKER_VOLUME=qiwe-tmp-')),true);
+  assert.equal(create.some(item=>item.startsWith('QIWE_LOCAL_DOCKER_HOST=qiwe-pilot-host-')),true);
+  assert.equal(exec.calls.some(argv=>argv.includes('volume')&&argv.includes('create')),true);
   assert.equal(create.includes('-p')||create.includes('--publish'),false);
   assert.equal(create.some(item=>item.includes('127.0.0.1')),true);
   assert.match(result.report.network,/^qiwe-pilot-/);
@@ -100,6 +112,11 @@ test('windows verify skips only an EPERM fsync or symlink failure and still runs
  assert.equal(windowsEpermCase(fsync),true);
  assert.equal(windowsEpermCase(assertion),false);
  assert.equal(windowsEpermCase(eperm+assertion),false);
+ const spec='✖ fsync parent (1.2ms)\n  Error: EPERM: operation not permitted, fsync\n✖ symlink (0.4ms)\n  Error: EPERM: operation not permitted, symlink \'D:\\\\tmp\'\n';
+ const tap='TAP version 13\nnot ok 1 - fsync parent\n  ---\n  failureType: \'testCodeFailure\'\n  error: \'EPERM: operation not permitted, fsync\'\n  code: \'EPERM\'\n  ...\nnot ok 2 - symlink\n  ---\n  failureType: \'testCodeFailure\'\n  error: |-\n    EPERM: operation not permitted, symlink \'D:\\\\tmp\'\n  code: \'EPERM\'\n  ...\n';
+ assert.equal(windowsEpermCase(spec),true);
+ assert.equal(windowsEpermCase(tap),true);
+ assert.equal(windowsEpermCase('not ok 1 - scope\n  error: CONTROLLED_REAL_TRANSPORT_SCOPE\n'),false);
  const plan=launcherPlan('win32');
  assert.equal(plan.incremental,'per-file');
  assert.equal(launcherPlan('linux').incremental,'suite');
@@ -196,7 +213,7 @@ test('windows no-credential scratch is created inside the profile and granted by
  try{
   const scratch=createPilotScratch({platform:'win32',homedir:profile});
   assert.ok(scratch.startsWith(profile+path.sep));
-  const result=runSupervisedPilot({mode:'no-credential',env:clean,execFileSync:exec.execFileSync,platform:'win32',homedir:profile,currentSid:sid,aclExec:(command,args)=>{acl.push([command,...args]);},setTimeout:()=>({unref(){}})});
+  const result=runSupervisedPilot({mode:'no-credential',env:clean,execFileSync:exec.execFileSync,platform:'win32',homedir:profile,currentSid:sid,aces:[{sid,type:'Allow',inherited:false}],reparsePoint:false,aclExec:(command,args)=>{acl.push([command,...args]);},setTimeout:()=>({unref(){}})});
   assert.ok(result.privateFile.startsWith(profile+path.sep));
   const grant=acl.find(argv=>argv[0]==='icacls'&&argv[1]===result.privateFile);
   assert.equal(grant.at(-1),`*${sid}:(R)`);

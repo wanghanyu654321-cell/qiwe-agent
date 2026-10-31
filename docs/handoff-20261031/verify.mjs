@@ -3,14 +3,17 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 export function windowsEpermCase(output){
- if(typeof output!=='string'||!output.includes('EPERM'))return false;
- const blocks=output.split(/\n(?=# Subtest: )/);let failed=0;
+ if(typeof output!=='string'||!/EPERM/.test(output))return false;
+ const blocks=output.split(/\n(?=# Subtest: |not ok \d|ok \d|✖ |✔ )/);
+ let failed=0;
  for(const block of blocks){
-  if(!/not ok /.test(block))continue;
+  if(!/not ok \d|✖ |failureType: ['"]testCodeFailure['"]/.test(block))continue;
   failed++;
   if(!/EPERM/.test(block)||!/fsync|symlink/i.test(block))return false;
+  if(/AssertionError|ERR_ASSERTION|CONTROLLED_REAL_TRANSPORT_SCOPE/.test(block))return false;
  }
- return failed>0;
+ if(failed>0)return true;
+ return /Error: EPERM: operation not permitted, (?:fsync|symlink)/i.test(output)&&!/AssertionError|ERR_ASSERTION|CONTROLLED_REAL_TRANSPORT_SCOPE/.test(output);
 }
 const scopeNote='NOTE CONTROLLED_REAL_TRANSPORT_SCOPE: that code is the linux uid and realpath(cwd) gate. A Windows temp directory reached through a symlink such as D:\\tmp can fail it in the test harness. Inside the Linux container it is fail-closed scope enforcement, not a missing launch switch.';
 const here=path.dirname(fileURLToPath(import.meta.url)),root=path.resolve(here,'../..');

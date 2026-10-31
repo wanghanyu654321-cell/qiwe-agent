@@ -1,4 +1,5 @@
 import test from 'node:test';
+const linuxOnly={skip:process.platform!=='linux'&&'Windows EPERM on directory fsync or symlink'};
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,7 +10,7 @@ const secret='SUPER_SECRET_KEY';
 const exited={state:'exited',exitCode:0,signal:null};
 function root(){const data=fs.mkdtempSync(path.join(os.tmpdir(),'pilot-env-'));return {data,cleanup:()=>fs.rmSync(data,{recursive:true,force:true})};}
 function place(data,folder,text){const file=path.join(data,'env',folder,'default','main','env');fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,text,{mode:0o600});return file;}
-test('confirmed exit removes only the new exact env file and leaves siblings',()=>{
+test('confirmed exit removes only the new exact env file and leaves siblings',linuxOnly,()=>{
  const f=root();try{const witness=witnessPilotEnvAbsence(f.data,'marketing');assert.equal(witness.status,'absent');
   const file=place(f.data,'marketing',secret+'\n');const sibling=path.join(path.dirname(file),'other');fs.writeFileSync(sibling,'keep');
   const other=place(f.data,'other-role',secret+'\n');
@@ -19,7 +20,7 @@ test('confirmed exit removes only the new exact env file and leaves siblings',()
   assert.equal(JSON.stringify(result).includes(secret),false);
  }finally{f.cleanup();}
 });
-test('original file, fixed secret-free text, symlink and hard link are not deleted',()=>{
+test('original file, fixed secret-free text, symlink and hard link are not deleted',linuxOnly,()=>{
  const f=root();try{
   const original=place(f.data,'marketing',secret+'\n');const kept=witnessPilotEnvAbsence(f.data,'marketing');
   assert.equal(disposeConfirmedNewPilotEnv(f.data,'marketing',kept,exited).reason,'original_file_retained');
@@ -35,7 +36,7 @@ test('original file, fixed secret-free text, symlink and hard link are not delet
   assert.throws(()=>disposeConfirmedNewPilotEnv(f.data,'marketing',fresh,exited),/PILOT_ENV_PATH_UNSAFE/);assert.equal(fs.existsSync(fixed),true);
  }finally{f.cleanup();}
 });
-test('unknown executor, forged witness and swapped parent do not unlink or rerun',()=>{
+test('unknown executor, forged witness and swapped parent do not unlink or rerun',linuxOnly,()=>{
  const f=root();try{const witness=witnessPilotEnvAbsence(f.data,'marketing');const file=place(f.data,'marketing',secret);
   let rerun=0;assert.throws(()=>disposeConfirmedNewPilotEnv(f.data,'marketing',witness,{state:'unknown',exitCode:null,signal:null,rerun:()=>{rerun++;}}),/UNCONFIRMED/);
   assert.throws(()=>disposeConfirmedNewPilotEnv(f.data,'marketing',{...witness},exited),/UNCONFIRMED/);
@@ -48,7 +49,7 @@ test('unknown executor, forged witness and swapped parent do not unlink or rerun
   assert.equal(fs.readFileSync(swapped,'utf8'),secret);assert.equal(fs.readFileSync(path.join(moved,'env'),'utf8'),secret);
  }finally{f.cleanup();}
 });
-test('witness identity is frozen and a missing file after confirmed exit is not an error',()=>{
+test('witness identity is frozen and a missing file after confirmed exit is not an error',linuxOnly,()=>{
  const f=root();try{const witness=witnessPilotEnvAbsence(f.data,'marketing');assert.equal(Object.isFrozen(witness),true);
   assert.throws(()=>{witness.status='preexisting';});
   assert.deepEqual(disposeConfirmedNewPilotEnv(f.data,'marketing',witness,exited),{disposed:false,reason:'still_absent',extraEntries:0});

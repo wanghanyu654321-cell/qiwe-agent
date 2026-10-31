@@ -1,4 +1,5 @@
 import test from 'node:test';
+const linuxOnly={skip:process.platform!=='linux'&&'Windows EPERM on directory fsync'};
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,7 +10,7 @@ import {createPilotRunLedger,openPilotRunLedger,openRestartLookup,reservePilotMo
 
 const runId='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 function fixture(maxRequests=2){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'pilot-budget-'));const file=path.join(dir,'ledger.json');const expiresAt=Date.now()+60000;createPilotRunLedger(file,{runId,maxRequests,expiresAt});return {dir,file,expiresAt,expected:{runId,maxRequests,expiresAt},cleanup:()=>fs.rmSync(dir,{recursive:true,force:true})};}
-test('a second opener sees a spent call and cannot reset or refund it',()=>{
+test('a second opener sees a spent call and cannot reset or refund it',linuxOnly,()=>{
  const f=fixture();try{
   assert.equal(reservePilotModelCall(f.file,f.expected).reserved,1);
   assert.equal(openPilotRunLedger(f.file,f.expected).reserved,1);
@@ -19,14 +20,14 @@ test('a second opener sees a spent call and cannot reset or refund it',()=>{
   fs.writeFileSync(f.file,'{"version":1,"reserved":0}');assert.throws(()=>openPilotRunLedger(f.file,f.expected),/UNREADABLE/);assert.equal(fs.readFileSync(f.file,'utf8').includes('"reserved":0'),true);
  }finally{f.cleanup();}
 });
-test('restart lookup reads the counter and cannot start a runner or spend budget',()=>{
+test('restart lookup reads the counter and cannot start a runner or spend budget',linuxOnly,()=>{
  const f=fixture();try{reservePilotModelCall(f.file,f.expected);const lookup=openRestartLookup(f.file,runId);let started=0,seen;
   assert.equal(lookup.read(()=>{seen=lookup.reserved;return 'persisted';}),'persisted');assert.equal(seen,1);
   assert.throws(()=>lookup.reserve(),/FORBIDDEN/);assert.throws(()=>lookup.startRunner(()=>{started++;}),/FORBIDDEN/);assert.equal(started,0);
   assert.equal(openPilotRunLedger(f.file,f.expected).reserved,1);
  }finally{f.cleanup();}
 });
-test('held lock and mismatched cap fail closed without granting another allowance',()=>{
+test('held lock and mismatched cap fail closed without granting another allowance',linuxOnly,()=>{
  const f=fixture();try{ fs.writeFileSync(f.file+'.lock','held');assert.throws(()=>reservePilotModelCall(f.file,f.expected),/LOCK_HELD/);assert.equal(openPilotRunLedger(f.file,f.expected).reserved,0);
   fs.unlinkSync(f.file+'.lock');assert.throws(()=>reservePilotModelCall(f.file,{...f.expected,maxRequests:8}),/MISMATCH/);assert.equal(openPilotRunLedger(f.file,f.expected).reserved,0);
  }finally{f.cleanup();}
