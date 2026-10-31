@@ -32,14 +32,49 @@ function controlFile(file,socket){
 }
 function regularFile(file){try{const listed=fs.lstatSync(file);return listed.isFile()&&!listed.isSymbolicLink();}catch{return false;}}
 function stageReason(code,reason){const error=Error(code);error.reason=reason;return error;}
-function controlSources(cwd,stageRoot,name){
- return [path.join(stageRoot,name),path.join(cwd,'.local','t7-runner-shell-20261024',name),path.join(cwd,'.local','frontagent-r3-20261029','rebuilt-runner',name)];
+function missingSource(kind,searched){
+ const error=Error('PILOT_LAUNCH_SOURCE_MISSING');
+ error.reason=kind;
+ error.paths=[...new Set(searched.map(file=>path.resolve(file)))];
+ return error;
 }
-function ensureStageFile(cwd,stageRoot,name){
+function mainCheckout(cwd){
+ const read=args=>{try{return defaultExec('git',args,{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();}catch{return '';}};
+ let common=read(['-C',cwd,'rev-parse','--path-format=absolute','--git-common-dir']);
+ if(!common){const relative=read(['-C',cwd,'rev-parse','--git-common-dir']);if(relative)common=path.resolve(cwd,relative);}
+ if(!common)return undefined;
+ return path.resolve(path.dirname(common));
+}
+export function pilotSourceRoots(cwd=process.cwd(),options={}){
+ const env=options.env??process.env;
+ const explicit=options.sourceRoot??env.QIWE_PILOT_SOURCE_ROOT;
+ if(typeof explicit==='string'&&explicit.trim()){
+  const root=path.resolve(explicit);
+  if(!fs.existsSync(root)||!fs.statSync(root).isDirectory())throw missingSource('source-root',[root]);
+  return [root];
+ }
+ const here=path.resolve(cwd),roots=[here];
+ const main=mainCheckout(here);
+ if(main&&path.resolve(main)!==here)roots.push(path.resolve(main));
+ return roots;
+}
+function controlSources(roots,stageRoot,name){
+ const found=[];
+ const add=file=>{const resolved=path.resolve(file);if(!found.includes(resolved))found.push(resolved);};
+ add(path.join(stageRoot,name));
+ for(const root of roots){
+  add(path.join(root,'.local','t7-runner-shell-20261024',name));
+  add(path.join(root,'.local','frontagent-r3-20261029',name));
+  add(path.join(root,'.local','frontagent-r3-20261029','rebuilt-runner',name));
+ }
+ return found;
+}
+function ensureStageFile(roots,stageRoot,name){
  const dest=path.join(stageRoot,name);
  if(regularFile(dest))return dest;
- const source=controlSources(cwd,stageRoot,name).find(file=>regularFile(file)&&path.resolve(file)!==path.resolve(dest));
- if(!source)throw stageReason('PILOT_LAUNCH_CONTROL_UNSAFE',name==='docker'?'docker':'build-input');
+ const searched=controlSources(roots,stageRoot,name);
+ const source=searched.find(file=>regularFile(file)&&path.resolve(file)!==path.resolve(dest));
+ if(!source)throw missingSource(name==='docker'?'docker':'build-input',searched);
  fs.copyFileSync(source,dest);
  if(name==='docker')try{fs.chmodSync(dest,0o755);}catch{}
  return dest;
@@ -78,64 +113,84 @@ function listTreeFiles(dir,prefix=''){
  }
  return files;
 }
-/** Host-side mirror of the existing-input preparation: copy state and code, write the two declaration files, and check every descriptor hash. */
-export function buildFrontagentExistingInput(cwd,dest){
- const product=path.join(cwd,'.local','frontagent-product-host-r1-final');
- const bootstrapFile=path.join(cwd,'.local','frontagent-r3-20261029','bootstrap-input.private.json');
- if(!regularFile(bootstrapFile))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
- requireStageDir(path.join(product,'state'),'existing-input');
- requireStageDir(path.join(product,'code'),'existing-input');
+function locateExistingSources(roots){
+ const products=[],bootstraps=[];
+ for(const root of roots){
+  products.push(path.join(root,'.local','frontagent-product-host-r1-final'));
+  bootstraps.push(path.join(root,'.local','frontagent-r3-20261029','bootstrap-input.private.json'));
+ }
+ return {product:products.find(dir=>fs.existsSync(path.join(dir,'state'))&&fs.existsSync(path.join(dir,'code'))),bootstrap:bootstraps.find(regularFile),products,bootstraps};
+}
+function publishTree(dest,fill){
+ const parent=path.dirname(dest);
+ fs.mkdirSync(parent,{recursive:true});
+ const tmp=path.join(parent,`.${path.basename(dest)}.${randomBytes(4).toString('hex')}.tmp`);
+ try{
+  fill(tmp);
+  if(fs.existsSync(dest)){
+   const backup=path.join(parent,`.${path.basename(dest)}.${randomBytes(4).toString('hex')}.old`);
+   fs.renameSync(dest,backup);
+   try{fs.renameSync(tmp,dest);}catch(error){try{fs.renameSync(backup,dest);}catch{}throw error;}
+   fs.rmSync(backup,{recursive:true,force:true});
+  }else fs.renameSync(tmp,dest);
+ }catch(error){fs.rmSync(tmp,{recursive:true,force:true});throw error;}
+}
+/** Read the product tree and bootstrap JSON in place. The private file is not copied; only descriptor.json is written. */
+export function buildFrontagentExistingInput(product,bootstrapFile,dest){
+ if(!regularFile(bootstrapFile))throw missingSource('bootstrap',[bootstrapFile]);
+ requireStageDir(path.join(product,'state'),'product-host');
+ requireStageDir(path.join(product,'code'),'product-host');
  let parsed;try{parsed=JSON.parse(fs.readFileSync(bootstrapFile,'utf8'));}catch{throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');}
  const descriptor=parsed?.descriptor??parsed,typeFiles=parsed?.typeFiles??descriptor?.typeFiles;
  if(!descriptor||typeof descriptor!=='object'||Array.isArray(descriptor)||!Array.isArray(descriptor.files))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
  for(const name of ['product-web.d.mts','product-modules.d.mts'])if(typeof typeFiles?.[name]!=='string')throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
- readableTree(path.join(product,'state'));readableTree(path.join(product,'code'));
- fs.rmSync(dest,{recursive:true,force:true});fs.mkdirSync(dest,{recursive:true});
- fs.cpSync(path.join(product,'state'),path.join(dest,'state'),{recursive:true});
- fs.cpSync(path.join(product,'code'),path.join(dest,'code'),{recursive:true});
- for(const name of ['product-web.d.mts','product-modules.d.mts'])fs.writeFileSync(path.join(dest,'code',name),typeFiles[name],{mode:0o644});
- readableTree(dest);
- const expected=new Map(descriptor.files.map(entry=>[entry?.path,entry?.sha256]));
- const copied=listTreeFiles(path.join(dest,'state'),'state').concat(listTreeFiles(path.join(dest,'code'),'code'));
- if(copied.length!==expected.size||copied.some(file=>!expected.has(file)))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
- for(const [relative,sha] of expected){
-  if(typeof relative!=='string'||typeof sha!=='string')throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
-  const copy=path.join(dest,...relative.split('/'));
-  const source=relative==='code/product-web.d.mts'||relative==='code/product-modules.d.mts'?null:path.join(product,...relative.split('/'));
-  let sourceHash=sha;
-  if(source){if(!regularFile(source))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');sourceHash=fileSha256(source);}
-  else sourceHash=createHash('sha256').update(typeFiles[relative.slice('code/'.length)]).digest('hex');
-  if(sourceHash!==sha||fileSha256(copy)!==sha)throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
- }
- const published={...descriptor};delete published.typeFiles;
- const body=JSON.stringify(published,null,2)+'\n';
- const descriptorFile=path.join(dest,'descriptor.json');
- fs.writeFileSync(descriptorFile,body,{mode:0o600});try{fs.chmodSync(descriptorFile,0o600);}catch{}
- if(fs.readdirSync(dest).sort().join('\0')!==['code','descriptor.json','state'].join('\0'))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ publishTree(dest,directory=>{
+  fs.mkdirSync(directory,{recursive:true});
+  fs.cpSync(path.join(product,'state'),path.join(directory,'state'),{recursive:true});
+  fs.cpSync(path.join(product,'code'),path.join(directory,'code'),{recursive:true});
+  for(const name of ['product-web.d.mts','product-modules.d.mts'])fs.writeFileSync(path.join(directory,'code',name),typeFiles[name],{mode:0o644});
+  readableTree(directory);
+  const expected=new Map(descriptor.files.map(entry=>[entry?.path,entry?.sha256]));
+  const copied=listTreeFiles(path.join(directory,'state'),'state').concat(listTreeFiles(path.join(directory,'code'),'code'));
+  if(copied.length!==expected.size||copied.some(file=>!expected.has(file)))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+  for(const [relative,sha] of expected){
+   if(typeof relative!=='string'||typeof sha!=='string')throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+   const copy=path.join(directory,...relative.split('/'));
+   const source=relative==='code/product-web.d.mts'||relative==='code/product-modules.d.mts'?null:path.join(product,...relative.split('/'));
+   let sourceHash=sha;
+   if(source){if(!regularFile(source))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');sourceHash=fileSha256(source);}
+   else sourceHash=createHash('sha256').update(typeFiles[relative.slice('code/'.length)]).digest('hex');
+   if(sourceHash!==sha||fileSha256(copy)!==sha)throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+  }
+  const published={...descriptor};delete published.typeFiles;
+  const descriptorFile=path.join(directory,'descriptor.json');
+  fs.writeFileSync(descriptorFile,JSON.stringify(published,null,2)+'\n',{mode:0o600});try{fs.chmodSync(descriptorFile,0o600);}catch{}
+  if(fs.readdirSync(directory).sort().join('\0')!==['code','descriptor.json','state'].join('\0'))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ });
  return dest;
 }
 /** Copy the Linux docker client and build-input-linux.json from the same local sources the sealed stage uses. */
-export function prepareSealedStage(cwd=process.cwd()){
- const input=resolveSealedStage(cwd),stageRoot=path.dirname(input);
- const docker=ensureStageFile(cwd,stageRoot,'docker'),buildInput=ensureStageFile(cwd,stageRoot,'build-input-linux.json');
+export function prepareSealedStage(cwd=process.cwd(),options={}){
+ const input=resolveSealedStage(cwd),stageRoot=path.dirname(input),roots=pilotSourceRoots(cwd,options);
+ const docker=ensureStageFile(roots,stageRoot,'docker'),buildInput=ensureStageFile(roots,stageRoot,'build-input-linux.json');
  requireStageDir(path.join(input,'.local','full-instance','stage','app','src'),'full-instance');
  requireStageDir(path.join(input,'.local','core-fix','appointment-identity-candidate','src'),'core-fix');
  requireStageDir(path.join(input,'.local','d4-skills'),'d4-skills');
  const existing=path.join(input,'.local','frontagent-existing-input');
- const bootstrapFile=path.join(stageRoot,'bootstrap-input.private.json');
- if(regularFile(bootstrapFile))buildFrontagentExistingInput(cwd,existing);
+ const located=locateExistingSources(roots);
+ if(located.bootstrap&&located.product)buildFrontagentExistingInput(located.product,located.bootstrap,existing);
  else if(!existingLayout(existing)){
-  const source=path.join(stageRoot,'frontagent-existing-input');
-  if(!existingLayout(source))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
-  fs.mkdirSync(path.dirname(existing),{recursive:true});fs.cpSync(source,existing,{recursive:true});
+  const premade=path.join(stageRoot,'frontagent-existing-input');
+  if(existingLayout(premade))fs.cpSync(premade,existing,{recursive:true});
+  else throw missingSource(located.product?'bootstrap':'product-host',[...located.products,...located.bootstraps]);
  }
  return {docker,buildInput,existing};
 }
 function resolveHostControls(stageInput,options){
- const stageRoot=path.dirname(stageInput),cwd=options.cwd??process.cwd(),remote=(options.platform??process.platform)==='win32'||Boolean(options.dockerContext);
+ const stageRoot=path.dirname(stageInput),cwd=options.cwd??process.cwd(),roots=pilotSourceRoots(cwd,options),remote=(options.platform??process.platform)==='win32'||Boolean(options.dockerContext);
  const socket=options.dockerSocket??'/var/run/docker.sock';
- const docker=options.dockerBin??ensureStageFile(cwd,stageRoot,'docker');
- const buildInput=options.buildInput??ensureStageFile(cwd,stageRoot,'build-input-linux.json');
+ const docker=options.dockerBin??ensureStageFile(roots,stageRoot,'docker');
+ const buildInput=options.buildInput??ensureStageFile(roots,stageRoot,'build-input-linux.json');
  return {socket:remote&&options.dockerSocket===undefined?socket:controlFile(socket,true),docker:controlFile(docker,false),buildInput:controlFile(buildInput,false)};
 }
 export function assertRecordedHostBoundary(args){
@@ -349,16 +404,18 @@ export function createRecordingDocker(){
 // node integrations/native/controlled-real-launcher.mjs --stage-private-file C:\path\to\source.json
 // Optional --destination must stay inside the user profile.
 // Prepare the sealed stage's docker client and build-input-linux.json, then rehearse:
-// node integrations/native/controlled-real-launcher.mjs --prepare-stage
+// node integrations/native/controlled-real-launcher.mjs --prepare-stage --source-root <main-checkout>
+// QIWE_PILOT_SOURCE_ROOT is the same override. Otherwise the main checkout is dirname of `git rev-parse --git-common-dir`.
 // $env:DOCKER_CONTEXT='desktop-linux'
 // node integrations/native/controlled-real-launcher.mjs --rehearsal --docker-context desktop-linux --image sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9
 function main(){
  const args=process.argv.slice(2),plan=launcherPlan(process.platform,args),dash=args.indexOf('--'),cli=dash>=0?args.slice(0,dash):args;
- const fileAt=cli.indexOf('--private-file'),imageAt=cli.indexOf('--image'),contextAt=cli.indexOf('--docker-context'),stageAt=cli.indexOf('--stage-private-file'),destAt=cli.indexOf('--destination');
+ const fileAt=cli.indexOf('--private-file'),imageAt=cli.indexOf('--image'),contextAt=cli.indexOf('--docker-context'),stageAt=cli.indexOf('--stage-private-file'),destAt=cli.indexOf('--destination'),sourceAt=cli.indexOf('--source-root');
  const value=index=>cli[index+1];
+ const sourceRoot=sourceAt>=0?path.resolve(value(sourceAt)):undefined;
  try{
   if(cli.includes('--prepare-stage')){
-   const prepared=prepareSealedStage(process.cwd());
+   const prepared=prepareSealedStage(process.cwd(),{sourceRoot,env:process.env});
    console.log(prepared.docker);
    console.log(prepared.buildInput);
    console.log(prepared.existing);
@@ -372,7 +429,7 @@ function main(){
   if(plan.mode==='synthetic'&&(fileAt>=0||imageAt>=0))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
   if(plan.mode==='no-credential'&&(fileAt>=0||imageAt>=0||dash>=0))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
   if(plan.mode==='rehearsal'&&fileAt>=0)fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
-  const result=runSupervisedPilot({mode:plan.mode,env:process.env,privateFile:fileAt>=0?path.resolve(value(fileAt)):undefined,image:imageAt>=0?value(imageAt):undefined,dockerContext:contextAt>=0?value(contextAt):undefined,entryArgs:dash>=0?args.slice(dash+1):undefined,publishWeb:cli.includes('--publish-web')?true:undefined,keepAlive:plan.mode!=='synthetic',...(plan.useRecordingDocker?{execFileSync:createRecordingDocker().execFileSync}:{})});
+  const result=runSupervisedPilot({mode:plan.mode,env:process.env,sourceRoot,privateFile:fileAt>=0?path.resolve(value(fileAt)):undefined,image:imageAt>=0?value(imageAt):undefined,dockerContext:contextAt>=0?value(contextAt):undefined,entryArgs:dash>=0?args.slice(dash+1):undefined,publishWeb:cli.includes('--publish-web')?true:undefined,keepAlive:plan.mode!=='synthetic',...(plan.useRecordingDocker?{execFileSync:createRecordingDocker().execFileSync}:{})});
   console.log(result.report.ready);
   console.log(JSON.stringify(result.report));
   if(plan.mode==='synthetic')result.stop();
@@ -391,6 +448,7 @@ function main(){
   else if(!coded(error)){console.error(/^[A-Za-z][A-Za-z0-9_]*$/.test(error?.name??'')?error.name:'Error');const message=failureText(error);if(message)console.error(message);}
   if(Array.isArray(error?.envNames))for(const name of error.envNames)if(/^[A-Za-z0-9_]+$/.test(name))console.error(name);
   if(typeof error?.reason==='string'&&/^[a-z0-9-]{1,40}$/.test(error.reason))console.error(error.reason);
+  if(Array.isArray(error?.paths))for(const item of error.paths)if(typeof item==='string'&&item.startsWith(path.parse(item).root)&&!/[\r\n]/.test(item))console.error(item);
   if(error?.stopCommand)console.error(error.stopCommand);
   process.exitCode=1;
  }

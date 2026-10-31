@@ -280,7 +280,7 @@ test('rehearsal resolves host controls and succeeds only after the receipt and e
  try{
   const missingControls=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-launch-empty-'));
   fs.mkdirSync(path.join(missingControls,'.local','frontagent-r3-20261029','input'),{recursive:true});
-  try{assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:trackingDocker().execFileSync,cwd:missingControls,dockerContext:'desktop-linux',setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_CONTROL_UNSAFE'&&error.reason==='docker');}
+  try{assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:trackingDocker().execFileSync,cwd:missingControls,dockerContext:'desktop-linux',setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_SOURCE_MISSING'&&error.reason==='docker'&&error.paths.some(file=>file.endsWith(path.join('docker'))));}
   finally{fs.rmSync(missingControls,{recursive:true,force:true});}
   const early=trackingDocker();
   assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:early.execFileSync,cwd:root,dockerContext:'desktop-linux',logAttempts:1,sleep(){},setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_NOT_READY');
@@ -344,7 +344,9 @@ test('prepare-stage builds frontagent-existing-input from the product host and c
   assert.equal(JSON.stringify(prepared).includes(cookie),false);
   descriptor.files[0].sha256='0'.repeat(64);
   fs.writeFileSync(path.join(stage,'bootstrap-input.private.json'),JSON.stringify({descriptor,typeFiles:{'product-web.d.mts':typeWeb,'product-modules.d.mts':typeModules}}));
-  assert.throws(()=>prepareSealedStage(root),error=>error.message==='PILOT_LAUNCH_STAGE_INPUT_MISSING'&&error.reason==='existing-input'&&!String(error).includes(cookie));
+  assert.throws(()=>prepareSealedStage(root),error=>error.message==='PILOT_LAUNCH_STAGE_INPUT_MISSING'&&error.reason==='existing-input'&&!String(error).includes(cookie)&&!JSON.stringify(error.paths??[]).includes(cookie));
+  assert.equal(createHash('sha256').update(fs.readFileSync(path.join(prepared.existing,'state','runtime','messages.db'))).digest('hex'),sha(db));
+  assert.equal(fs.readdirSync(path.dirname(prepared.existing)).some(name=>name.includes('.tmp')||name.includes('.old')),false);
  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 test('prepare-stage copies docker and build-input from the local runner source',()=>{
@@ -373,8 +375,50 @@ test('prepare-stage copies docker and build-input from the local runner source',
  }finally{fs.rmSync(root,{recursive:true,force:true});}
  const bare=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-prepare-missing-'));
  fs.mkdirSync(path.join(bare,'.local','frontagent-r3-20261029','input'),{recursive:true});
- try{assert.throws(()=>prepareSealedStage(bare),error=>error.message==='PILOT_LAUNCH_CONTROL_UNSAFE'&&error.reason==='docker'&&!String(error.causeMessage??'').includes('secret'));}
+ try{assert.throws(()=>prepareSealedStage(bare),error=>error.message==='PILOT_LAUNCH_SOURCE_MISSING'&&error.reason==='docker'&&error.paths.length>1&&error.paths.every(file=>!file.includes('miniclaw_session'))&&!String(error.causeMessage??'').includes('secret'));}
  finally{fs.rmSync(bare,{recursive:true,force:true});}
+});
+test('prepare-stage reads a worktree from the main checkout and does not copy the private file',()=>{
+ const parent=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-worktree-'));
+ const main=path.join(parent,'main'),wt=path.join(parent,'wt');
+ fs.mkdirSync(main);
+ const git=(args,cwd)=>realExec('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe'],env:{...process.env,GIT_AUTHOR_NAME:'qiwe',GIT_AUTHOR_EMAIL:'qiwe@example.com',GIT_COMMITTER_NAME:'qiwe',GIT_COMMITTER_EMAIL:'qiwe@example.com'}});
+ git(['init'],main);
+ fs.writeFileSync(path.join(main,'README'),'main\n');
+ git(['add','README'],main);
+ git(['commit','-m','init'],main);
+ git(['worktree','add','--detach',wt],main);
+ const runner=path.join(main,'.local','t7-runner-shell-20261024');
+ fs.mkdirSync(runner,{recursive:true});
+ fs.writeFileSync(path.join(runner,'docker'),'from-main-docker');
+ fs.writeFileSync(path.join(runner,'build-input-linux.json'),'{"from":"main"}\n');
+ const product=path.join(main,'.local','frontagent-product-host-r1-final');
+ fs.mkdirSync(path.join(product,'state'),{recursive:true});
+ fs.mkdirSync(path.join(product,'code'),{recursive:true});
+ fs.writeFileSync(path.join(product,'state','note.txt'),'state-bytes');
+ fs.writeFileSync(path.join(product,'code','product-web.mjs'),'web-bytes');
+ const typeWeb='export declare const routes: boolean;\n',typeModules='export declare const modules: boolean;\n';
+ const sha=value=>createHash('sha256').update(value).digest('hex');
+ const cookie='miniclaw_session=synthetic-private-session';
+ const descriptor={format:'frontagent-existing-state-v1',accountId:'existing-member',homeJid:'web:existing-member-0',role:'marketing',profileId:'p',workspaceJid:'web:existing-member-1',folder:'folder',tenantId:'t',storeId:'s',instanceId:'i',employee:{employeeId:'e',employeeName:'Existing'},adminCookie:cookie,expectedCounts:{users:2,profiles:16,groups:16},files:[{path:'state/note.txt',sha256:sha('state-bytes')},{path:'code/product-web.mjs',sha256:sha('web-bytes')},{path:'code/product-web.d.mts',sha256:sha(typeWeb)},{path:'code/product-modules.d.mts',sha256:sha(typeModules)}]};
+ fs.mkdirSync(path.join(main,'.local','frontagent-r3-20261029'),{recursive:true});
+ fs.writeFileSync(path.join(main,'.local','frontagent-r3-20261029','bootstrap-input.private.json'),JSON.stringify({descriptor,typeFiles:{'product-web.d.mts':typeWeb,'product-modules.d.mts':typeModules}}));
+ const input=path.join(wt,'.local','frontagent-r3-20261029','input');
+ fs.mkdirSync(path.join(input,'.local','full-instance','stage','app','src'),{recursive:true});
+ fs.mkdirSync(path.join(input,'.local','core-fix','appointment-identity-candidate','src'),{recursive:true});
+ fs.mkdirSync(path.join(input,'.local','d4-skills'),{recursive:true});
+ try{
+  const prepared=prepareSealedStage(wt,{env:{}});
+  assert.equal(fs.readFileSync(prepared.docker,'utf8'),'from-main-docker');
+  assert.equal(fs.readFileSync(prepared.buildInput,'utf8'),'{"from":"main"}\n');
+  assert.equal(fs.existsSync(path.join(wt,'.local','frontagent-r3-20261029','bootstrap-input.private.json')),false);
+  assert.equal(fs.readFileSync(path.join(prepared.existing,'code','product-web.d.mts'),'utf8'),typeWeb);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(prepared.existing,'descriptor.json'),'utf8')).adminCookie,cookie);
+  fs.rmSync(prepared.docker);fs.rmSync(prepared.buildInput);
+  const wrong=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-source-root-'));
+  try{assert.throws(()=>prepareSealedStage(wt,{sourceRoot:wrong,env:{QIWE_PILOT_SOURCE_ROOT:main}}),error=>error.message==='PILOT_LAUNCH_SOURCE_MISSING'&&error.reason==='docker'&&error.paths.some(file=>file.startsWith(wrong))&&!error.paths.some(file=>file.startsWith(main))&&!JSON.stringify(error.paths).includes(cookie));}
+  finally{fs.rmSync(wrong,{recursive:true,force:true});}
+ }finally{git(['worktree','remove','--force',wt],main);fs.rmSync(parent,{recursive:true,force:true});}
 });
 test('an uncoded launch error prints its name and message without secrets',()=>{
  const execFileSync=(command,args)=>{if(args.includes('create'))throw Error('listen EACCES token=supersecretvalue');return '';};
