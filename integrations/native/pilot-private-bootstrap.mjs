@@ -150,7 +150,12 @@ export function containerPrivateInstallPlan({docker,container,snapshotFile,conta
  if(docker!=='docker'&&(typeof docker!=='string'||!path.isAbsolute(docker)))fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
  if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(container??'')||destination!==PILOT_PRIVATE_CONFIG_PATH)fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
  if(!/^\/tmp\/qiwe-private-[a-f0-9]{16}$/.test(containerTemp??'')||typeof snapshotFile!=='string'||!path.isAbsolute(snapshotFile))fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
- return [[docker,'cp','--',snapshotFile,container+':'+containerTemp],[docker,'exec','--user','0:0',container,'chown','1000:1000',containerTemp],[docker,'exec','--user','0:0',container,'chmod','600',containerTemp],[docker,'exec','--user','1000:1000',container,'sha256sum',containerTemp],[docker,'exec','--user','1000:1000',container,'stat','-c','%u %g %a %h %s',containerTemp],[docker,'exec','--user','0:0',container,'mv',containerTemp,destination]];
+ return [[docker,'cp','--',snapshotFile,container+':'+containerTemp],[docker,'exec','--user','0:0',container,'chown','1000:1000',containerTemp],[docker,'exec','--user','0:0',container,'chmod','600',containerTemp],[docker,'exec','--user','1000:1000',container,'sha256sum',containerTemp],[docker,'exec','--user','1000:1000',container,'stat','-c','%u %g %a %h %s',containerTemp]];
+}
+function linkContainerFile(execFileSync,docker,container,containerTemp,destination){
+ const options={encoding:'utf8',timeout:20000,env:{PATH:process.env.PATH??''},stdio:['ignore','pipe','pipe']};
+ try{execFileSync(docker,['exec','--user','0:0',container,'ln',containerTemp,destination],options);}
+ catch(error){if(error?.status===1)fail('PILOT_PRIVATE_DESTINATION_INVALID');fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');}
 }
 export function runContainerPrivateInstall(options){
  const opened=snapshotHostFile(options?.hostFile);
@@ -162,11 +167,10 @@ export function runContainerPrivateInstall(options){
   const commands=containerPrivateInstallPlan({docker:options?.docker,container:options?.container,snapshotFile:snapshot.file,containerTemp,destination:options?.destination});
   const execFileSync=options?.execFileSync;if(typeof execFileSync!=='function')fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
   const hash=createHash('sha256').update(opened.raw).digest('hex');
-  const prepare=commands.filter(argv=>!argv.includes('mv')),move=commands.find(argv=>argv.includes('mv'));
   let copied=false;
   try{
    let statText='',hashText='';
-   for(const [command,...args] of prepare){
+   for(const [command,...args] of commands){
     const output=invoke(execFileSync,command,args);
     if(args.includes('cp'))copied=true;
     if(args.includes('sha256sum'))hashText=String(output??'');
@@ -177,7 +181,8 @@ export function runContainerPrivateInstall(options){
    const again=snapshotHostFile(options.hostFile);
    try{if(!again.raw.equals(opened.raw))fail('PILOT_PRIVATE_INPUT_CHANGED');}
    finally{fs.closeSync(again.fd);}
-   invoke(execFileSync,move[0],move.slice(1));
+   linkContainerFile(execFileSync,commands[0][0],options.container,containerTemp,options.destination);
+   invoke(execFileSync,commands[0][0],['exec','--user','0:0',options.container,'rm','-f',containerTemp]);
    return freeze({uid:containerUser,gid:containerUser,mode:privateMode,nlink:1,bytes:opened.raw.length});
   }catch(error){
    if(copied)invoke(execFileSync,commands[0][0],['exec','--user','0:0',options.container,'rm','-f',containerTemp]);

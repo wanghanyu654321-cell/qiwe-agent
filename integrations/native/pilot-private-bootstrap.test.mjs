@@ -86,8 +86,10 @@ test('container install copies the verified snapshot and checks the in-container
   assert.match(copied.at(-1),/^qiwe-pilot-host:\/tmp\/qiwe-private-[a-f0-9]{16}$/);
   const temp=copied.at(-1).slice('qiwe-pilot-host:'.length);
   assert.equal(calls.some(argv=>argv.includes('sha256sum')&&argv.includes(temp)),true);
-  assert.equal(calls.some(argv=>argv.includes('mv')&&argv.includes(temp)&&argv.includes('/tmp/qiwe-live-pilot.private.json')),true);
-  assert.equal(calls.some(argv=>argv.includes('rm')||argv.includes('qiwe-pilot-host:/tmp/qiwe-live-pilot.private.json')),false);
+  assert.equal(calls.some(argv=>argv.includes('ln')&&argv.includes(temp)&&argv.includes('/tmp/qiwe-live-pilot.private.json')),true);
+  assert.equal(calls.some(argv=>argv.includes('mv')),false);
+  assert.equal(calls.some(argv=>argv.includes('rm')&&argv.includes(temp)),true);
+  assert.equal(calls.some(argv=>argv.includes('rm')&&argv.includes('/tmp/qiwe-live-pilot.private.json')),false);
   assert.equal(calls.some(argv=>['sh','bash','node'].includes(argv[0])||argv.includes(text)),false);
  }finally{f.cleanup();}
 });
@@ -125,6 +127,28 @@ test('container install removes the destination after chown, stat, or post-copy 
    assert.notEqual(removedPath,'/tmp/qiwe-live-pilot.private.json');
    fs.chmodSync(file,0o600);
   }
+ }finally{f.cleanup();}
+});
+test('a second container install refuses an existing destination without replacing it',()=>{
+ const f=scratch();try{
+  const file=writeHost(f.root),text=body(),finalPath='/tmp/qiwe-live-pilot.private.json';
+  let installedBytes=null;
+  const execFileSync=(command,args)=>{
+   if(args.includes('sha256sum'))return `${digestOf(text)}  temp\n`;
+   if(args.includes('stat'))return `1000 1000 600 1 ${Buffer.byteLength(text)}\n`;
+   if(args.includes('ln')){
+    if(installedBytes!==null){const error=Error('File exists');error.status=1;throw error;}
+    installedBytes=text;return '';
+   }
+   if(args.includes('mv')){installedBytes='replaced';return '';}
+   if(args.includes('rm')&&args.includes(finalPath))throw Error('removed '+secret);
+   return '';
+  };
+  const options={docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:finalPath,execFileSync};
+  assert.equal(runContainerPrivateInstall(options).bytes,Buffer.byteLength(text));
+  assert.equal(installedBytes,text);
+  assert.throws(()=>runContainerPrivateInstall(options),error=>error.message==='PILOT_PRIVATE_DESTINATION_INVALID'&&!error.message.includes(secret)&&!error.message.includes(text));
+  assert.equal(installedBytes,text);
  }finally{f.cleanup();}
 });
 test('a failed docker cp does not remove a container path',()=>{
