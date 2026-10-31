@@ -34,7 +34,20 @@ app.use('/api/*',async(c,next)=>{
  // Existing administrators still need to log in before requesting recovery.
  // Login writes participate in review invalidation just like all other writes.
  const recoveryLogin=c.req.path==='/api/auth/login'&&c.req.method==='POST';
- if(!gate||gate.isPaused()&&!recoveryLogin)return c.json(appointmentBootMaintenanceResponse,503);
+ const initializationSetup=c.req.path==='/api/auth/setup'&&c.req.method==='POST';
+ const initializationRead=c.req.method==='GET'&&['/api/auth/status','/api/auth/register/status','/api/auth/me'].includes(c.req.path);
+ // Only the original empty-users setup may create the local administrator.
+ // A missing/foreign Origin cannot use this unauthenticated initialization path.
+ if(initializationSetup){
+  const setupOrigins=CORS_ALLOWED_ORIGINS.split(',').map(value=>value.trim()).filter(Boolean);
+  const explicitOrigins=setupOrigins.length>0&&!setupOrigins.includes('*');
+  let sameOrigin=false;try{
+   const origin=c.req.header('origin');
+   sameOrigin=origin===new URL(c.req.url).origin&&(!explicitOrigins||setupOrigins.includes(origin));
+  }catch{}
+  if(!sameOrigin)return c.json({error:'invalid_origin'},403);
+ }
+ if(!gate||gate.isPaused()&&!recoveryLogin&&!initializationSetup&&!initializationRead)return c.json(appointmentBootMaintenanceResponse,503);
  const fullHostHttpTicket=gate.beginWrite();
  if(!fullHostHttpTicket){gate.noteArrival();return c.json(appointmentBootMaintenanceResponse,503);}
  try {await next();} finally {gate.finishWrite(fullHostHttpTicket);}

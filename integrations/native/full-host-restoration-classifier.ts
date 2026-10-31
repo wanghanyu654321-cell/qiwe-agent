@@ -27,6 +27,20 @@ const defaultPolicy=(value:unknown)=>{
   context&&Object.keys(context).sort().join(',')==='auto_compact_percentage,auto_compact_window,source'&&context.source==='managed'&&context.auto_compact_window===0&&context.auto_compact_percentage===0&&
   [skills,mcp].every(section=>section&&Object.keys(section).sort().join(',')==='ids,mode'&&section.mode==='inherit'&&Array.isArray(section.ids)&&section.ids.length===0);
 };
+const existingRolePolicy=(value:unknown)=>{
+ const policy=object(value);if(!policy)return false;
+ const reasoning=object(policy.reasoning),skills=object(policy.skills),mcp=object(policy.mcp);
+ const host=skills?.host&&typeof skills.host==='object'&&!Array.isArray(skills.host)?skills.host as Record<string,unknown>:undefined;
+ // Original normalization can persist an explicitly disabled host layer.
+ // Retain that inert setting; enabled or unknown host policy stays unsupported.
+ const skillShape=skills&&(Object.keys(skills).sort().join(',')==='ids,mode'||
+  Object.keys(skills).sort().join(',')==='host,ids,mode'&&host&&Object.keys(host).sort().join(',')==='ids,mode'&&host.mode==='disabled'&&Array.isArray(host.ids)&&host.ids.length===0);
+ return reasoning&&Object.keys(reasoning).join(',')==='effort'&&oneOf(reasoning.effort,['inherit','low','medium','high','xhigh','max'])&&
+  skills&&skillShape&&oneOf(skills.mode,['custom','disabled'])&&Array.isArray(skills.ids)&&
+  skills.ids.every(id=>typeof id==='string'&&/^[\w-]+$/.test(id))&&new Set(skills.ids).size===skills.ids.length&&(skills.mode!=='disabled'||skills.ids.length===0)&&
+  mcp&&Object.keys(mcp).sort().join(',')==='ids,mode'&&mcp.mode==='disabled'&&Array.isArray(mcp.ids)&&mcp.ids.length===0&&
+  defaultPolicy({...policy,reasoning:{effort:'inherit'},skills:{mode:'inherit',ids:[]},mcp:{mode:'inherit',ids:[]}});
+};
 
 export function classifyRestorationRow(table:string,row:RestorationRow,facts:RestorationFacts):RestorationDecision {
  const all=(name:string)=>facts.rows.get(name)??[];
@@ -107,6 +121,24 @@ export function classifyRestorationRow(table:string,row:RestorationRow,facts:Res
   // Memory items and outbox rows are classified independently; this row does
   // not schedule their execution or claim that their contents are verified.
   case 'workspace_memory_stores':return text(row.id)&&linked('workspaces','jid',row.workspace_jid)&&integer(row.revision)?resource():closed();
+  // An existing memory item is data, not an acknowledgement of its outbox.
+  // Admit only the original current version in the same workspace and store.
+  case 'workspace_memory_items':return text(row.id)&&text(row.store_id)&&typeof row.content==='string'&&integer(row.revision)&&Number(row.revision)>0&&
+   oneOf(row.kind,['fact','decision','lesson','open_loop'])&&oneOf(row.status,['active','proposed','conflicted','superseded','deleted'])&&
+   linked('workspaces','jid',row.workspace_jid)&&all('workspace_memory_stores').some(store=>store.id===row.store_id&&store.workspace_jid===row.workspace_jid&&integer(store.revision)&&Number(store.revision)>=Number(row.revision))&&
+   all('workspace_memory_versions').some(version=>version.item_id===row.id&&version.revision===row.revision&&version.workspace_jid===row.workspace_jid&&['kind','status','content','title','canonical_key','importance','confidence','valid_from','valid_until','expires_at'].every(field=>version[field]===row[field]))?resource():closed();
+  case 'workspace_memory_outbox':{
+   if(!facts.evidence.includes('existing_memory_event_no_consumer')||!text(row.id)||row.status!=='pending'||row.attempt!==0||row.event_type!=='memory.created'||
+    !['available_at','error','delivered_at'].every(field=>row[field]===null)||!text(row.created_at)||row.updated_at!==row.created_at)return closed();
+   const payload=object(row.payload_json),item=all('workspace_memory_items').find(value=>value.id===row.item_id&&value.store_id===row.store_id&&value.workspace_jid===row.workspace_jid&&value.revision===row.item_revision);
+   if(!payload||Object.keys(payload).sort().join(',')!=='itemId,itemRevision,status,storeRevision,workspaceJid'||!item||classifyRestorationRow('workspace_memory_items',item,facts).disposition!=='eligible'||
+    payload.workspaceJid!==row.workspace_jid||payload.itemId!==row.item_id||payload.itemRevision!==row.item_revision||payload.status!==item.status||!integer(payload.storeRevision))return closed();
+   if(row.item_revision!==1||item.created_at!==row.created_at||Number(payload.storeRevision)<1||
+    !all('workspace_memory_stores').some(store=>store.id===row.store_id&&store.workspace_jid===row.workspace_jid&&Number(store.revision)>=Number(payload.storeRevision))||
+    !all('workspace_memory_versions').some(version=>version.item_id===row.item_id&&version.revision===1&&version.workspace_jid===row.workspace_jid&&version.change_type==='create'&&version.created_at===row.created_at))return closed();
+   return all('workspace_memory_audit_events').some(audit=>audit.workspace_jid===row.workspace_jid&&audit.store_id===row.store_id&&audit.item_id===row.item_id&&audit.item_revision===row.item_revision&&audit.store_revision===payload.storeRevision&&audit.action==='create'&&audit.created_at===row.created_at)?
+    decision('stopped','retained_pending_memory_event_no_automatic_consumer'):closed();
+  }
   // The owner-profile schema creates this untouched initial Home state. Claim
   // happens only through an authenticated live owner-turn IPC request, not a
   // pending-row startup scan. Previously claimed/released states stay closed.
@@ -115,7 +147,7 @@ export function classifyRestorationRow(table:string,row:RestorationRow,facts:Res
    all('workspaces').some(item=>item.jid===row.workspace_jid&&item.is_home===1&&item.status==='active')?
    decision('eligible','original_initial_onboarding_no_prior_claim'):closed();
   case 'agent_profiles':return linked('users','id',row.owner_user_id)&&oneOf(row.status,['active','archived'])&&oneOf(row.prompt_mode,['append','replace'])&&
-   integer(row.version)&&(row.version as number)>0&&defaultPolicy(row.runtime_policy)&&row.model_config_id===null?resource():closed();
+   integer(row.version)&&(row.version as number)>0&&(defaultPolicy(row.runtime_policy)||facts.evidence.includes('existing_profile_context_verified')&&existingRolePolicy(row.runtime_policy))&&row.model_config_id===null?resource():closed();
   case 'workspace_agent_profiles':return linked('registered_groups','folder',row.group_folder)&&linked('agent_profiles','id',row.agent_profile_id)&&oneOf(row.interaction_mode,['assistant','proactive'])?resource():closed();
   case 'sessions':case 'workspace_runtime_sessions':return linked('registered_groups','folder',row.group_folder)&&
    optionalLink('agent_profiles','id',row.agent_profile_id)&&typeof (table==='sessions'?row.session_id:row.sdk_session_id)==='string'?passive():closed();
@@ -182,6 +214,8 @@ export function classifyRestorationResidue(kind:string,evidence:readonly string[
   return decision('eligible','passive_snapshot_no_automatic_consumer');
  if(kind==='residue/config/opaque'&&evidence.includes('original_im_migration_presence_marker'))
   return decision('eligible','passive_migration_presence_marker');
+ if(kind==='residue/config/opaque'&&['original_loaded_session_secret','original_disabled_plugin_autoscan'].some(reason=>evidence.includes('verified_existing_config:'+reason)))
+  return decision('eligible','original_configuration_verified_in_memory');
  // Regular files require a content/protocol verifier; metadata is never an ACK.
  return decision('blocked','unsupported_residue_protocol:'+kind);
 }

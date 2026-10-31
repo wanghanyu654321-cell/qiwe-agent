@@ -13,7 +13,15 @@ export interface WecomBotContextOptions extends WorkbenchAuthorityCatalog {
 }
 /** In-process authority. Only synchronous business work may run under the grant lock. */
 export function createWecomBotContext(options:WecomBotContextOptions){
- if(options.mode!=='isolated-synthetic'||!options.botId||!options.corpId)throw Error('invalid_bot_catalog');
+ if(options.mode!=='isolated-synthetic')throw Error('invalid_bot_catalog');
+ return createContext(options);
+}
+export function createControlledRealWecomBotContext(options:Omit<WecomBotContextOptions,'mode'>&{mode:'controlled-real-pilot'}){
+ if(options.mode!=='controlled-real-pilot')throw Error('invalid_bot_catalog');
+ return createContext(options);
+}
+function createContext(options:Omit<WecomBotContextOptions,'mode'>&{mode:'isolated-synthetic' | 'controlled-real-pilot'}){
+ if(!options.botId||!options.corpId)throw Error('invalid_bot_catalog');
  const catalog={tenantId:options.tenantId,stores:structuredClone(options.stores),roles:[...options.roles],store:options.store};catalog.store.bindTenant(catalog.tenantId);
  const {botId,corpId,readSubject,readBinding,readNative}=options,closing=new AbortController();
  type Snapshot={subject:WecomBotSubject;binding:WecomBotBinding;native:{user:unknown;workspaceJid:string};authority:ReturnType<typeof resolveWorkbenchAuthority>};

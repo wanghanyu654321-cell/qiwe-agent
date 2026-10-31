@@ -77,6 +77,13 @@ test('directory enumeration is not proof that an executable file is settled',()=
  assert.equal(classifyRestorationResidue('residue/ipc/snapshot',['filesystem_metadata_only','passive_original_runner_snapshot']).disposition,'eligible');
  assert.equal(classifyRestorationResidue('residue/ipc/input',['passive_original_runner_snapshot']).disposition,'blocked');
 });
+test('only explicitly verified original configuration is eligible',()=>{
+ for(const reason of ['original_loaded_session_secret','original_disabled_plugin_autoscan']){
+  assert.equal(classifyRestorationResidue('residue/config/opaque',['verified_existing_config:'+reason]).disposition,'eligible');
+  assert.equal(classifyRestorationResidue('residue/ipc/input',['verified_existing_config:'+reason]).disposition,'blocked');
+ }
+ assert.equal(classifyRestorationResidue('residue/config/opaque',['verified_existing_config:unknown']).disposition,'blocked');
+});
 test('original normalized default profile is admissible but custom host/tool policy is not',()=>{
  const policy={reasoning:{effort:'inherit'},context:{source:'managed',auto_compact_window:0,auto_compact_percentage:0},skills:{mode:'inherit',ids:[]},mcp:{mode:'inherit',ids:[]}};
  const row={owner_user_id:'owner',status:'active',prompt_mode:'append',version:1,model_config_id:null,runtime_policy:JSON.stringify(policy)};
@@ -89,6 +96,25 @@ test('idle agents are executable recovery candidates, not passive history',()=>{
  const facts={rows:new Map([['registered_groups',[{folder:'one'}]]])};
  assert.equal(classify('agents',{group_folder:'one',status:'idle'},facts).disposition,'blocked');
  assert.equal(classify('agents',{group_folder:'one',status:'completed'},facts).disposition,'eligible');
+});
+test('existing custom role stays static and requires verified local capability context',()=>{
+ const policy={reasoning:{effort:'low'},context:{source:'managed',auto_compact_window:0,auto_compact_percentage:0},skills:{mode:'custom',ids:['beauty-local-content']},mcp:{mode:'disabled',ids:[]}};
+ const row={owner_user_id:'owner',status:'active',prompt_mode:'append',version:1,model_config_id:null,runtime_policy:JSON.stringify(policy)};
+ const facts={rows:new Map([['users',[{id:'owner'}]]]),evidence:['existing_profile_context_verified']};
+ assert.equal(classify('agent_profiles',row,facts).disposition,'eligible');
+ assert.equal(classify('agent_profiles',row,{...facts,evidence:[]}).disposition,'blocked');
+ for(const change of [{context:{...policy.context,source:'host_claude'}},{skills:{mode:'custom',ids:['../escape']}},{mcp:{mode:'custom',ids:['server']}},{skills:{mode:'custom',ids:['same','same']}}])
+  assert.equal(classify('agent_profiles',{...row,runtime_policy:JSON.stringify({...policy,...change})},facts).disposition,'blocked');
+});
+
+test('original normalized disabled host skills remain static without enabling host capability',()=>{
+ const policy={reasoning:{effort:'low'},context:{source:'managed',auto_compact_window:0,auto_compact_percentage:0},skills:{mode:'custom',ids:['beauty-local-content'],host:{mode:'disabled',ids:[]}},mcp:{mode:'disabled',ids:[]}};
+ const row={owner_user_id:'owner',status:'active',prompt_mode:'append',version:1,model_config_id:null,runtime_policy:JSON.stringify(policy)};
+ const facts={rows:new Map([['users',[{id:'owner'}]]]),evidence:['existing_profile_context_verified']};
+ assert.equal(classify('agent_profiles',row,facts).disposition,'eligible');
+ assert.equal(classify('agent_profiles',row,{...facts,evidence:[]}).disposition,'blocked');
+ for(const host of [{mode:'inherit',ids:[]},{mode:'custom',ids:[]},{mode:'disabled',ids:['skill']},{mode:'disabled',ids:[],extra:true},JSON.stringify({mode:'disabled',ids:[]}),null])
+  assert.equal(classify('agent_profiles',{...row,runtime_policy:JSON.stringify({...policy,skills:{...policy.skills,host}})},facts).disposition,'blocked');
 });
 test('D1 ready role binding must retain original owner and profile relationships',()=>{
  const claim={tenantId:'tenant',ownerId:'member',storeId:'store',role:'marketing',resourceKey:'',state:'ready',token:'token',profileId:'profile',workspaceJid:'web:role',corpId:'corp',botId:'bot',memberId:'external-member',bindingVersion:1,grantVersion:1};
@@ -144,4 +170,35 @@ test('memory store identity and revision are passive resources while memory exec
  for(const changed of [{revision:-1},{revision:0.5},{workspace_jid:'missing'},{id:''}])
   assert.equal(classify('workspace_memory_stores',{id:'wms_synthetic',workspace_jid:'web:owned',revision:0,...changed},{rows}).disposition,'blocked');
  assert.equal(classify('workspace_memory_outbox',{id:'unknown',workspace_jid:'web:owned',state:'pending'},{rows}).disposition,'blocked');
+});
+test('original memory item is retained only when its workspace, store and current version agree',()=>{
+ const item={id:'item',store_id:'store',workspace_jid:'web:owned',kind:'fact',status:'active',revision:1,content:'retained',title:'title',canonical_key:null,importance:0.5,confidence:0.9,valid_from:null,valid_until:null,expires_at:null};
+ const rows=new Map<string,Record<string,unknown>[]>([
+  ['workspaces',[{jid:'web:owned'}]],['workspace_memory_stores',[{id:'store',workspace_jid:'web:owned',revision:1}]],
+  ['workspace_memory_versions',[{...item,item_id:'item'}]],
+ ]);
+ const before=JSON.stringify(item);assert.equal(classify('workspace_memory_items',item,{rows}).disposition,'eligible');assert.equal(JSON.stringify(item),before);
+ for(const changed of [{store_id:'other'},{workspace_jid:'web:other'},{revision:0},{status:'unknown'},{kind:'unknown'},{content:'different'},{title:'changed'},{confidence:0.3},{expires_at:'2020-01-01'}])
+  assert.equal(classify('workspace_memory_items',{...item,...changed},{rows}).disposition,'blocked');
+ rows.set('workspace_memory_stores',[{id:'store',workspace_jid:'web:owned',revision:0}]);assert.equal(classify('workspace_memory_items',item,{rows}).disposition,'blocked');
+ rows.set('workspace_memory_stores',[{id:'store',workspace_jid:'web:owned',revision:1}]);
+ rows.set('workspace_memory_stores',[{workspace_jid:'web:owned',revision:1}]);assert.equal(classify('workspace_memory_items',{...item,store_id:undefined},{rows}).disposition,'blocked');
+ rows.set('workspace_memory_stores',[{id:'store',workspace_jid:'web:owned',revision:1}]);
+ rows.set('workspace_memory_versions',[]);assert.equal(classify('workspace_memory_items',item,{rows}).disposition,'blocked');
+ assert.equal(classify('workspace_memory_outbox',{id:'unknown',status:'pending'},{rows}).disposition,'blocked');
+});
+test('untouched original memory event stays pending only in verified local no-consumer scope',()=>{
+ const item={id:'item',store_id:'store',workspace_jid:'web:owned',kind:'fact',status:'active',revision:1,content:'retained',created_at:'2026-10-30T00:00:00Z'};
+ const payload={workspaceJid:'web:owned',storeRevision:1,itemId:'item',itemRevision:1,status:'active'};
+ const row={id:'event',workspace_jid:'web:owned',store_id:'store',item_id:'item',item_revision:1,event_type:'memory.created',status:'pending',attempt:0,available_at:null,error:null,delivered_at:null,created_at:'2026-10-30T00:00:00Z',updated_at:'2026-10-30T00:00:00Z',payload_json:JSON.stringify(payload)};
+ const rows=new Map<string,Record<string,unknown>[]>([['workspaces',[{jid:'web:owned'}]],['workspace_memory_stores',[{id:'store',workspace_jid:'web:owned',revision:1}]],['workspace_memory_items',[item]],['workspace_memory_versions',[{...item,item_id:'item',change_type:'create'}]],['workspace_memory_audit_events',[{workspace_jid:'web:owned',store_id:'store',item_id:'item',item_revision:1,store_revision:1,action:'create',created_at:row.created_at}]]]);
+ const facts={rows,evidence:['existing_memory_event_no_consumer']},before=JSON.stringify(row);
+ assert.equal(classify('workspace_memory_outbox',row,facts).disposition,'stopped');assert.equal(JSON.stringify(row),before);
+ assert.equal(classify('workspace_memory_outbox',row,{rows,evidence:[]}).disposition,'blocked');
+ for(const change of [{status:'processing'},{attempt:1},{event_type:'unknown'},{delivered_at:row.created_at},{payload_json:JSON.stringify({...payload,itemId:'other'})},{store_id:'other'}])assert.equal(classify('workspace_memory_outbox',{...row,...change},facts).disposition,'blocked');
+ rows.set('workspace_memory_audit_events',[{workspace_jid:'web:owned',store_id:'store',item_id:'item',item_revision:1,store_revision:999,action:'create',created_at:row.created_at}]);
+ assert.equal(classify('workspace_memory_outbox',{...row,payload_json:JSON.stringify({...payload,storeRevision:999})},facts).disposition,'blocked');
+ rows.set('workspace_memory_audit_events',[{workspace_jid:'web:owned',store_id:'store',item_id:'item',item_revision:1,store_revision:1,action:'create',created_at:row.created_at}]);
+ rows.set('workspace_memory_versions',[{...item,item_id:'item',change_type:'update'}]);assert.equal(classify('workspace_memory_outbox',row,facts).disposition,'blocked');
+ rows.set('workspace_memory_audit_events',[]);assert.equal(classify('workspace_memory_outbox',row,facts).disposition,'blocked');
 });

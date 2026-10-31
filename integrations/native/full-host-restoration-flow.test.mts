@@ -61,6 +61,47 @@ it('restores the actual nonempty host through original HTTP before accepting any
    expect(host.preserveFullHostLegacyWork(who,selection,selected.version)).toMatchObject({state:'manual_review_required'});
   }
   expect(retainedSnapshot(sql)).toEqual(seed.retained);
+  // Synthetic-only coverage of the original descriptor scan and ticket recheck.
+  // The original full host and supervisor remain responsible for recovery.
+  if(!local&&process.env.QIWE_RESTORATION_PI!=='1'){
+   const directory=path.join(config.DATA_DIR,'config'),keyFile=path.join(directory,'session-secret.key'),settingsFile=path.join(directory,'system-settings.json');
+   fs.mkdirSync(directory,{recursive:true});expect(fs.existsSync(keyFile)).toBe(false);expect(fs.existsSync(settingsFile)).toBe(false);
+   const previous=process.env.QIWE_FRONTAGENT_EXISTING_INPUT;
+   const created:Array<{file:string;dev:bigint;ino:bigint}>=[];
+   const create=(file:string,content:string)=>{const fd=fs.openSync(file,'wx',0o600);try{const stat=fs.fstatSync(fd,{bigint:true});created.push({file,dev:stat.dev,ino:stat.ino});fs.writeFileSync(fd,content);}finally{fs.closeSync(fd);}};
+   try{
+    create(keyFile,config.WEB_SESSION_SECRET);create(settingsFile,'{"pluginAutoScan":false}');
+    process.env.QIWE_FRONTAGENT_EXISTING_INPUT='synthetic-config-check';
+    const tested=db.scanAppointmentBootInventory();expect(tested.complete).toBe(true);expect(tested.safe).toBe(true);
+    const reasons=tested.records.flatMap((record:any)=>record.evidence);
+    for(const reason of ['original_loaded_session_secret','original_disabled_plugin_autoscan'])expect(reasons).toContain('verified_existing_config:'+reason);
+    const secretRecord=(inventory:any)=>inventory.records.find((record:any)=>record.evidence.includes('verified_existing_config:original_loaded_session_secret'));
+    const beforeSecret=secretRecord(tested);expect(beforeSecret?.disposition).toBe('eligible');
+    const ticketResponse=await fetch(base+'/api/appointment/maintenance/review',{method:'POST',headers,body:'{}'}),ticketBody=await ticketResponse.json() as any;
+    expect(ticketResponse.status).toBe(200);expect(ticketBody.recoverable).toBe(true);
+    fs.appendFileSync(keyFile,'\n');
+    const changed=db.scanAppointmentBootInventory();expect(changed.complete).toBe(true);expect(changed.safe).toBe(true);
+    expect(secretRecord(changed)?.disposition).toBe('eligible');expect(secretRecord(changed)?.version).not.toBe(beforeSecret.version);
+    const stale=await fetch(base+'/api/appointment/maintenance/restore',{method:'POST',headers,body:JSON.stringify({confirmed:true,...ticketBody.ticket})});
+    expect(stale.status).toBe(409);expect(await stale.json()).toMatchObject({error:'stale_review'});expect(host.fullHostBootGate.phase()).toBe('paused');
+    expect(retainedSnapshot(sql)).toEqual(seed.retained);expect(transport.calls).toEqual([]);
+    fs.writeFileSync(keyFile,config.WEB_SESSION_SECRET);
+    const settingsRecord=(inventory:any)=>inventory.records.find((record:any)=>record.evidence.includes('verified_existing_config:original_disabled_plugin_autoscan'));
+    const beforeSettings=settingsRecord(db.scanAppointmentBootInventory());expect(beforeSettings?.disposition).toBe('eligible');
+    const settingsReview=await fetch(base+'/api/appointment/maintenance/review',{method:'POST',headers,body:'{}'}),settingsTicket=await settingsReview.json() as any;
+    expect(settingsReview.status).toBe(200);expect(settingsTicket.recoverable).toBe(true);
+    fs.appendFileSync(settingsFile,' ');const changedSettings=db.scanAppointmentBootInventory();
+    expect(changedSettings.complete).toBe(true);expect(changedSettings.safe).toBe(true);
+    expect(settingsRecord(changedSettings)?.disposition).toBe('eligible');expect(settingsRecord(changedSettings)?.version).not.toBe(beforeSettings.version);
+    const staleSettings=await fetch(base+'/api/appointment/maintenance/restore',{method:'POST',headers,body:JSON.stringify({confirmed:true,...settingsTicket.ticket})});
+    expect(staleSettings.status).toBe(409);expect(await staleSettings.json()).toMatchObject({error:'stale_review'});expect(host.fullHostBootGate.phase()).toBe('paused');
+    expect(retainedSnapshot(sql)).toEqual(seed.retained);expect(transport.calls).toEqual([]);
+    events.push('verified-original-config-descriptor-and-stale-ticket-rejected');
+   }finally{
+    if(previous===undefined)delete process.env.QIWE_FRONTAGENT_EXISTING_INPUT;else process.env.QIWE_FRONTAGENT_EXISTING_INPUT=previous;
+    for(const item of created){const current=fs.lstatSync(item.file,{bigint:true});if(current.dev!==item.dev||current.ino!==item.ino)throw Error('SYNTHETIC_CONFIG_OWNERSHIP_CHANGED');fs.unlinkSync(item.file);}
+   }
+  }
   const inventory=db.scanAppointmentBootInventory();
   if(inventory.blockers.length)console.log('RESTORATION_SYNTHETIC_CONFIG_FILES',JSON.stringify(fs.existsSync(path.join(config.DATA_DIR,'config'))?fs.readdirSync(path.join(config.DATA_DIR,'config')):[]));
   console.log('RESTORATION_INVENTORY',JSON.stringify({blockers:inventory.blockers,blocked:inventory.records.filter((record:any)=>record.disposition==='blocked').map((record:any)=>({kind:record.kind,evidence:record.evidence}))}));

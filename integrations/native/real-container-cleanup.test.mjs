@@ -8,6 +8,33 @@ import {execFileSync} from 'node:child_process';
 import {runLocalVerification,cleanupOwnedContainers} from './real-container-cleanup.mjs';
 import {linuxImage} from './linux-runtime.mjs';
 
+test('an existing role needs its exact explicit prefix while labelled ownership still limits cleanup',{
+ skip:process.platform!=='win32'||!process.env.QIWE_REAL_CONTAINER_DOCKER,
+},()=>{
+ const docker=process.env.QIWE_REAL_CONTAINER_DOCKER,endpoint='npipe:////./pipe/dockerDesktopLinuxEngine',runId=randomUUID();
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-existing-cleanup-')),manifest=path.join(root,'owned.txt');
+ const ownedContainerPrefix='miniclaw-existing-role-',name=ownedContainerPrefix+runId;
+ const command=args=>execFileSync(docker,['--host',endpoint,...args],{encoding:'utf8',timeout:15000,windowsHide:true});
+ try{
+  command(['run','--pull=never','-d','--name',name,'--label','qiwe.verification-run='+runId,'--network','none','--read-only',linuxImage,'node','-e','setInterval(()=>{},1000)']);
+  fs.writeFileSync(manifest,name+'\n');
+  assert.throws(()=>cleanupOwnedContainers({docker,endpoint,manifest,runId}),/UNSAFE_OWNED_MANIFEST/);
+  for(const prefix of ['miniclaw-','miniclaw-.*-','other-role-'])assert.throws(()=>cleanupOwnedContainers({docker,endpoint,manifest,runId,ownedContainerPrefix:prefix}),/PREFIX|UNSAFE/);
+  assert.throws(()=>cleanupOwnedContainers({docker,endpoint,manifest,runId,ownedContainerPrefix:'miniclaw-different-role-'}),/UNSAFE_OWNED_MANIFEST/);
+  assert.throws(()=>cleanupOwnedContainers({docker,endpoint,manifest,runId:randomUUID(),ownedContainerPrefix}),e=>e.cleanup?.[0]?.error==='ownership-mismatch');
+  assert.equal(command(['inspect',name,'--format','{{.State.Running}}']).trim(),'true');
+  const probe='miniclaw-synthetic-image-'+runId;
+  fs.appendFileSync(manifest,'miniclaw-synthetic-image-'+randomUUID()+'\n');
+  assert.throws(()=>cleanupOwnedContainers({docker,endpoint,manifest,runId,ownedContainerPrefix}),/UNSAFE_OWNED_MANIFEST/);
+  fs.writeFileSync(manifest,name+'\n'+probe+'\n');
+  assert.ok(cleanupOwnedContainers({docker,endpoint,manifest,runId,ownedContainerPrefix}).every(item=>item.absent));
+ }finally{
+  const listed=command(['ps','-a','--filter','name=^/'+name+'$','--format','{{.ID}}']).trim();
+  if(listed){const label=command(['inspect',listed,'--format','{{index .Config.Labels "qiwe.verification-run"}}']).trim();assert.equal(label,runId);command(['rm','-f',listed]);}
+  const resolved=fs.realpathSync(root);assert.equal(path.dirname(resolved),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(resolved).startsWith('qiwe-existing-cleanup-'));fs.rmSync(resolved,{recursive:true,force:true});
+ }
+});
+
 test('actual verifier timeout cleans only its labelled child, and refuses foreign ownership',{
  skip:process.platform!=='win32'||!process.env.QIWE_REAL_CONTAINER_DOCKER,
 },async()=>{

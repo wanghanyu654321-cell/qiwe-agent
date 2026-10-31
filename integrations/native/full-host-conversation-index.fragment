@@ -1,12 +1,25 @@
 // Full O main owns this queue and gate. Binding configures trusted callbacks;
 // it never resets interrupted rows, loads state again, or replays old work.
 let fullHostConversationBound=false;
+type FullHostConversationOptions={
+ mode:'isolated-synthetic'|'controlled-real-pilot';
+ authorize:(receipt:ReturnType<typeof readBotConversationReceipt>)=>boolean;
+ onCompleted?:(receiptIds:string[])=>Promise<void>|void;
+};
+export function initializeControlledRealFullHostConversationExecution(options:Omit<FullHostConversationOptions,'mode'>&{mode:'controlled-real-pilot'}) {
+ if(options.mode!=='controlled-real-pilot')throw Error('FULL_HOST_CONVERSATION_BINDING_INVALID');
+ return bindFullHostConversationExecution(options);
+}
 export function initializeFullHostConversationExecution(options:{
  mode:'isolated-synthetic';
  authorize:(receipt:ReturnType<typeof readBotConversationReceipt>)=>boolean;
  onCompleted?:(receiptIds:string[])=>Promise<void>|void;
 }) {
- if(fullHostConversationBound||options.mode!=='isolated-synthetic'||typeof options.authorize!=='function'||
+ if(options.mode!=='isolated-synthetic')throw Error('FULL_HOST_CONVERSATION_BINDING_INVALID');
+ return bindFullHostConversationExecution(options);
+}
+function bindFullHostConversationExecution(options:FullHostConversationOptions) {
+ if(fullHostConversationBound||typeof options.authorize!=='function'||
     options.onCompleted!==undefined&&typeof options.onCompleted!=='function'||'runner' in options)throw Error('FULL_HOST_CONVERSATION_BINDING_INVALID');
  bindConversationAuthority(options.authorize);
  fullHostConversationBound=true;d5OnCompleted=options.onCompleted;

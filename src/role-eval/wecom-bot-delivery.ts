@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {createBotReportHandler,type BotReportOptions,type BotReportResult} from './wecom-bot-handler.js';
+import {createBotReportHandler,createControlledRealBotReportHandler,type BotReportOptions,type BotReportResult} from './wecom-bot-handler.js';
 import type {BotContextRequest,BotReadScope} from './wecom-bot-context.js';
 import type {ReportDelivery} from './manager-store.js';
 import type {createBotSender} from './wecom-bot-sender.js';
@@ -7,7 +7,16 @@ import {parseManagerCommand} from './manager-commands.js';
 import {botDeliveryNotice} from './wecom-bot-notice.js';
 export {botDeliveryNotice} from './wecom-bot-notice.js';
 export interface BotDeliveryResult {result:BotReportResult;delivery:ReportDelivery|null;reportDelivery?:ReportDelivery;deferred?:boolean;suppressed?:boolean;}
+type DeliveryOptions=Omit<BotReportOptions,'mode'>&{mode:'isolated-synthetic' | 'controlled-real-pilot';sender:ReturnType<typeof createBotSender>};
 export function createBotDelivery(options:BotReportOptions&{sender:ReturnType<typeof createBotSender>}){
+ if(options.mode!=='isolated-synthetic')throw Error('invalid_report_catalog');
+ return createDelivery(options);
+}
+export function createControlledRealBotDelivery(options:Omit<DeliveryOptions,'mode'>&{mode:'controlled-real-pilot'}){
+ if(options.mode!=='controlled-real-pilot')throw Error('invalid_report_catalog');
+ return createDelivery(options);
+}
+function createDelivery(options:DeliveryOptions){
  const {ledger,authority,sender,artifacts}=options;let closed=false;
  const roster=structuredClone(options.employees).map(e=>({...options.scope,employeeId:e.employeeId,employeeName:e.employeeName}));
  const hash=(text:string)=>createHash('sha256').update(text).digest('hex');
@@ -19,7 +28,8 @@ export function createBotDelivery(options:BotReportOptions&{sender:ReturnType<ty
   const action=event.action.kind==='confirm'?{kind:'confirm',reportId:event.action.reportId,hash:event.action.hash}:event.action;
   return {id:hash(JSON.stringify([c.corpId,c.botId,c.memberId,event.messageId])),fingerprint:hash(JSON.stringify([event.botId,event.memberId,event.messageId,event.createTime??null,action])),target:{...c,accountId:i.accountId,workspaceJid:i.workspaceJid,storeId:i.storeId}};
  };
- const handler=createBotReportHandler({...options,beforeWork:(value,guard)=>{
+ const createHandler=(value:Omit<BotReportOptions,'mode'>)=>options.mode==='controlled-real-pilot'?createControlledRealBotReportHandler({...value,mode:'controlled-real-pilot'}):createBotReportHandler({...value,mode:'isolated-synthetic'});
+ const handler=createHandler({...options,beforeWork:(value,guard)=>{
   checkOpen();const seed=eventSeed(value),wasReserved=ledger.reserveBotReply({...value.actor},{...seed,reqId:value.event.reqId},guard);
   const previous=ledger.getBotReply(value.actor,seed.id);return {replayState:wasReserved?(previous?(previous.reportId?'completed-report' as const:'completed-nonreport' as const):'reserved' as const):'none' as const,...(previous?.attachment?{cached:{status:'file' as const,snapshotId:previous.attachment.snapshotHash,attachment:{...previous.attachment},reply:structuredClone(previous.reply)}}:{})};
  }});

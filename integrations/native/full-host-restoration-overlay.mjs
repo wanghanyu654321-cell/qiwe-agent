@@ -13,6 +13,11 @@ export function applyFullHostRestoration(files,{supervisorSourceHash,supervisorM
  const coverage=assertFullHostWriterCoverage(files);
  if(!coverage||typeof coverage!=='object'||Array.isArray(coverage)||Object.keys(coverage).length===0)throw Error('RESTORATION_COVERAGE_UNAVAILABLE');
  const result=new Map(files);
+ // This local recovery case retains an untouched producer event; it does not
+ // acknowledge delivery. The original producer and complete source trees are
+ // pinned, and no added runtime module may introduce another table consumer.
+ const existingMemoryProducerOnly=digest(files.get('memory-store.ts')??'')==='e7b38008921c50b05626f7b5c39acbdca86fdc25b0fa825c5eb988e90edc831f'&&
+  [...files].every(([name,code])=>!code.includes('workspace_memory_outbox')||['memory-store.ts','appointment-boot-inventory.ts','appointment-boot-inventory-schema.ts'].includes(name));
  result.set('full-host-restoration-context.ts',`import { DATA_DIR } from './config.js';
 import { inspectRestorationBoundary } from './full-host-restoration-boundary.js';
 export function verifyCurrentLocalBoundary(){
@@ -39,12 +44,17 @@ export function verifyCurrentLocalBoundary(){
  result.set('full-host-local-docker.mjs',dockerHelper);
  result.set('full-host-local-docker.d.mts',fs.readFileSync(new URL('./full-host-local-docker.d.mts',import.meta.url),'utf8'));
  for(const name of ['full-host-local-residue.mjs','full-host-local-residue.d.mts'])result.set(name,fs.readFileSync(new URL('./'+name,import.meta.url),'utf8'));
+ for(const name of ['full-host-existing-config.mjs','full-host-existing-config.d.mts'])result.set(name,fs.readFileSync(new URL('./'+name,import.meta.url),'utf8'));
+ for(const name of ['full-host-existing-profile.mjs','full-host-existing-profile.d.mts'])result.set(name,fs.readFileSync(new URL('./'+name,import.meta.url),'utf8'));
  result.set('full-host-restoration-boundary.ts',result.get('full-host-restoration-boundary.ts').replace('LOCAL_DOCKER_HELPER_HASH',digest(dockerHelper)));
  let source=files.get('appointment-boot-inventory.ts').replaceAll('\r\n','\n');
  source=`import { classifyRestorationRow, classifyRestorationResidue, isPassiveOriginalRunnerSnapshot, type RestorationRow } from './full-host-restoration-classifier.js';
 import { inspectRestorationBoundary } from './full-host-restoration-boundary.js';
 import { readLegacyWorkPreservationEvidence } from './legacy-work-preservation.js';
 import { getSystemSettings } from './runtime-config.js';
+import { WEB_SESSION_SECRET } from './config.js';
+import { inspectExistingConfig } from './full-host-existing-config.mjs';
+import { inspectExistingProfileContext } from './full-host-existing-profile.mjs';
 import { BUSINESS_EXECUTION_BOUNDARY } from './business-execution-policy.js';
 import { inspectLocalRunnerResidue, settledLocalSessions, type SettledLocalSession } from './full-host-local-residue.mjs';
 `+source;
@@ -88,21 +98,25 @@ const digest = (value: string) =>`);
       version:${JSON.stringify(digest(JSON.stringify(coverage)))},disposition:'eligible',evidence:['supported_source_fences','original_gate_write_obligations']});
   } catch { blockers.add('LOCAL_SUPERVISOR_BOUNDARY_UNVERIFIED'); }
   let rowsEstimated = 0,`);
- source=once(source,'  remainingBytes: number,\n): void {','  remainingBytes: number,\n  registeredFolders: ReadonlySet<string>,\n  localSessions: readonly SettledLocalSession[],\n): void {');
+ source=once(source,'  remainingBytes: number,\n): void {','  remainingBytes: number,\n  registeredFolders: ReadonlySet<string>,\n  localSessions: readonly SettledLocalSession[],\n  existingConfiguration: boolean,\n): void {');
  source=once(source,"  function add(relative: string, kind: string, stamp: string, evidence: string) {",`  const observedLocalSessions=new Set<string>();
   function add(relative: string, kind: string, stamp: string, evidence: string) {
     const passiveSnapshot=isPassiveOriginalRunnerSnapshot(relative,kind,registeredFolders);
     const migrationMarker=kind==='config/opaque'&&relative==='config/.im-config-migrated';`);
  source=once(source,"evidence: ['filesystem_metadata_only', evidence] });","evidence: ['filesystem_metadata_only', evidence, ...(passiveSnapshot?['passive_original_runner_snapshot']:[]), ...(migrationMarker?['original_im_migration_presence_marker']:[])] });");
  source=once(source,"            add(key, stat.isFile() ? fileKind(root, key) : root + '/unsafe', version(stat),\n              stat.isFile() ? 'file_unsettled' : 'unsafe_entry');\n            if (!stat.isFile()) blockers.add('RESIDUE:UNSAFE_ENTRY');",`            if(localSessions.length&&stat.isFile()&&stat.size<=131072n)remainingBytes-=Number(stat.size)*6;
+            const existingConfig=existingConfiguration&&root==='config'&&['config/session-secret.key','config/system-settings.json'].includes(key);
+            if(existingConfig&&!localSessions.length&&stat.isFile()&&stat.size<=131072n)remainingBytes-=Number(stat.size)*6;
             if(remainingBytes<0)blockers.add('RESIDUE:BUDGET');
             const verifiedLocal=localSessions.length&&remainingBytes>=0?inspectLocalRunnerResidue(name,key,stat,localSessions,observedLocalSessions):undefined;
+            const verifiedConfig=existingConfig&&stat.isFile()&&remainingBytes>=0?inspectExistingConfig(fd,key,stat,{webSessionSecret:WEB_SESSION_SECRET,pluginAutoScan:getSystemSettings().pluginAutoScan}):undefined;
             add(key, stat.isFile() ? fileKind(root, key) : root + (verifiedLocal?'/passive_link':'/unsafe'), version(stat),
-              verifiedLocal?'verified_local_runner_residue:'+verifiedLocal:stat.isFile()?'file_unsettled':'unsafe_entry');
+              verifiedConfig?'verified_existing_config:'+verifiedConfig:verifiedLocal?'verified_local_runner_residue:'+verifiedLocal:stat.isFile()?'file_unsettled':'unsafe_entry');
             if (!stat.isFile()&&!verifiedLocal) blockers.add('RESIDUE:UNSAFE_ENTRY');`);
  source=once(source,'    started + 5000, 100000 - rowsEstimated, 64 * 1024 * 1024 - estimatedBytes);',`    started + 5000, 100000 - rowsEstimated, 64 * 1024 * 1024 - estimatedBytes,
     new Set((restorationRows.get('registered_groups')??[]).map(row=>String(row.folder))),
-    boundaryVersion&&process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'?settledLocalSessions(restorationRows,restorationRecords):[]);`);
+    boundaryVersion&&process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'?settledLocalSessions(restorationRows,restorationRecords,process.env.QIWE_FRONTAGENT_EXISTING_INPUT?(process.env.QIWE_FRONTAGENT_EXISTING_FOLDER??''):undefined):[],
+    !!boundaryVersion&&!!process.env.QIWE_FRONTAGENT_EXISTING_INPUT);`);
  // Full row values remain private; hashes detect changes to opaque payloads.
  // Probe lengths and all existing budgets run before these values are read.
  source=once(source,`            columns = [
@@ -117,14 +131,25 @@ const digest = (value: string) =>`);
               restorationRecords.push({table,row,record,index:records.length-1});
               cursor = row;`);
  source=once(source,'        }\n      })\n      .deferred();',`        }
+        const existingLocal=!!boundaryVersion&&!!dataDir&&!!process.env.QIWE_FRONTAGENT_EXISTING_INPUT;
+        const foldersByOwner=new Map<string,string[]>(),contextCache=new Map<string,boolean>();
+        if(existingLocal)for(const group of restorationRows.get('registered_groups')??[]){if(!budget())return;if(typeof group.created_by==='string'){const folders=foldersByOwner.get(group.created_by)??[];folders.push(String(group.folder));foldersByOwner.set(group.created_by,folders);}}
+        const contextBudget=()=>{if(++rowsEstimated>100000){blockers.add('BUDGET:ROWS');return false;}return budget();};
+        const profileContext=(owner:unknown)=>{
+          if(!existingLocal||typeof owner!=='string')return false;
+          if(!contextCache.has(owner))contextCache.set(owner,inspectExistingProfileContext(dataDir!,owner,foldersByOwner.get(owner)??[],contextBudget));
+          return contextCache.get(owner)===true;
+        };
+        const memoryProducerRetained=existingLocal&&${JSON.stringify(existingMemoryProducerOnly)}&&(restorationRows.get('users')??[]).every(user=>profileContext(user.id));
         for (const item of restorationRecords) {
           if(!budget())return;
           const {table,row,record}=item;
           let preserved;
           try { preserved=readLegacyWorkPreservationEvidence(connection,table,row,restorationRows); }
           catch { blockers.add('PRESERVATION:UNVERIFIED'); }
-          const classified=classifyRestorationRow(table,row,{rows:restorationRows,preserved,evidence:record.evidence});
-          item.record={...record,disposition:classified.disposition,evidence:[...record.evidence,...classified.evidence]};
+          const localEvidence=[...record.evidence,...(existingLocal&&table==='agent_profiles'&&profileContext(row.owner_user_id)?['existing_profile_context_verified']:[]),...(memoryProducerRetained&&table==='workspace_memory_outbox'?['existing_memory_event_no_consumer']:[])];
+          const classified=classifyRestorationRow(table,row,{rows:restorationRows,preserved,evidence:localEvidence});
+          item.record={...record,disposition:classified.disposition,evidence:[...localEvidence,...classified.evidence]};
           records[item.index]=item.record;
         }
       })

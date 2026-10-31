@@ -1,0 +1,262 @@
+{
+  "date": "2026-10-31",
+  "redaction": "Complete selected logs; credential/account/workspace strings replaced and private payload lines explicitly redacted. Published text uses LF and trims trailing whitespace; raw originals and their hashes remain local only.",
+  "logs": [
+    {
+      "path": ".local/frontagent-r3-20261029/config-synthetic-ad787da8-d6c2-47f8-9f2f-a41fc4cd639a.log",
+      "bytes": 19245,
+      "sha256": "fe0255796160bd79760c7e62935efad727dbb171ce6ca21682b167bee7b3d943"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/config-synthetic-af947271-7965-4825-827b-5bcb635645b5.log",
+      "bytes": 846,
+      "sha256": "94207f9a138999a389539575dea1cb2dfd8273fbee08ec105f990df76400dc3a"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/current-run.private.log",
+      "bytes": 217,
+      "sha256": "11f286b0c36a15478bff66906f492163581d1799a88c80bb247d5f8930de1270"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/rebuilt-runner/build.log",
+      "bytes": 264245,
+      "sha256": "a4c3dd9685d75a70f321261f9e2f821486e0cdbcf663d039e50fc00d0feb8f5a",
+      "published": "docs/handoff-20261031/logs/01-frontagent-r3-20261029-rebuilt-runner-build.txt",
+      "redactedLines": 0,
+      "publishedSha256": "a9b56b1913a62feecc241f0f79ea970969d4992cbd598daeb89a168a59bca8c7"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/2b48da8a-26d0-4385-bd33-639a04130f8f/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/2b48da8a-26d0-4385-bd33-639a04130f8f/run.log",
+      "bytes": 6242,
+      "sha256": "52928b9a581d706377241bb6dd2685852019fccd87f2d6118a48f10771c7db0b",
+      "published": "docs/handoff-20261031/logs/02-runs-2b48da8a-26d0-4385-bd33-639a04130f8f-run.txt",
+      "redactedLines": 1,
+      "publishedSha256": "7e2ab4903713d9dfdb76ed631937596793cf76974674b28d6fb50951e07087ed"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/6fc7fbdf-ddfe-43c7-ab96-d1ab127446fe/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/6fc7fbdf-ddfe-43c7-ab96-d1ab127446fe/run.log",
+      "bytes": 864,
+      "sha256": "73f5538e6ce4ff7a61f996491b956822c5771b5476171697462194e8a3e6c815",
+      "published": "docs/handoff-20261031/logs/03-runs-6fc7fbdf-ddfe-43c7-ab96-d1ab127446fe-run.txt",
+      "redactedLines": 0,
+      "publishedSha256": "73f5538e6ce4ff7a61f996491b956822c5771b5476171697462194e8a3e6c815"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/73903555-eb5e-4c4d-b0c1-23536ad55b20/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/73903555-eb5e-4c4d-b0c1-23536ad55b20/run.log",
+      "bytes": 115102,
+      "sha256": "05ef76ef6dd118c993b49a822498c72c1912a2de9efa17d584e7e9fc862d9a4b",
+      "published": "docs/handoff-20261031/logs/04-runs-73903555-eb5e-4c4d-b0c1-23536ad55b20-run.txt",
+      "redactedLines": 1,
+      "publishedSha256": "0d0a76e8f43da18cab71a444cce78d287838f747082551a421541aea78c4862e"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/81906162-df54-485a-a76c-67c8e9c6c38c/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/81906162-df54-485a-a76c-67c8e9c6c38c/run.log",
+      "bytes": 5450,
+      "sha256": "23a7928d9472d7ff3a66782b92c0b749d589f410e03a31907b4fe10c58302742",
+      "published": "docs/handoff-20261031/logs/05-runs-81906162-df54-485a-a76c-67c8e9c6c38c-run.txt",
+      "redactedLines": 1,
+      "publishedSha256": "614cdda8179dc6bfeb72a58fc85288ad3d02292a027921767395a6d4e0900b81"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/a76bdd3d-ec5e-4fc2-94e7-7bdab7930624/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/a76bdd3d-ec5e-4fc2-94e7-7bdab7930624/run.log",
+      "bytes": 8190,
+      "sha256": "4d5fd000a1adc658eb862f3946523c5d95f1e8e9657f15b3ab2555c59fda95cf",
+      "published": "docs/handoff-20261031/logs/06-runs-a76bdd3d-ec5e-4fc2-94e7-7bdab7930624-run.txt",
+      "redactedLines": 1,
+      "publishedSha256": "d16c9bbd51fece45ad07308042d268e6e7ca990269ab8370609202e2ae6b7a31"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/bfcbc73d-588a-4385-b411-3a86a57aefd5/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/bfcbc73d-588a-4385-b411-3a86a57aefd5/run.log",
+      "bytes": 114274,
+      "sha256": "68c2ddc4cf5902ff77dff24ad50c2ce590479642a405fc11dcef2a27f4f064b3",
+      "published": "docs/handoff-20261031/logs/07-runs-bfcbc73d-588a-4385-b411-3a86a57aefd5-run.txt",
+      "redactedLines": 1,
+      "publishedSha256": "d8756966771ea2f5cb11e99689ae567bb620f8a71b1ea7a4d3530c03d9d85cee"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/cca9eb0f-4b41-4a32-8187-6a78c22de7d3/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/cca9eb0f-4b41-4a32-8187-6a78c22de7d3/run.log",
+      "bytes": 5128,
+      "sha256": "78d21fea6ce481bce862d10ce45a0d5330db8f398e45ec0ffb2753b21afe12de",
+      "published": "docs/handoff-20261031/logs/08-runs-cca9eb0f-4b41-4a32-8187-6a78c22de7d3-run.txt",
+      "redactedLines": 1,
+      "publishedSha256": "5145da60a30758ff2abfe4f89469898c5424fa871de71af9f6ba1e34a2be530a"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/d7372ac2-1a32-464a-9b1a-627ff8220333/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/d7372ac2-1a32-464a-9b1a-627ff8220333/run.log",
+      "bytes": 5854,
+      "sha256": "d16b1048fe887225b767268629def8c7e465afb3a69807c8a595f3ef43496986",
+      "published": "docs/handoff-20261031/logs/09-runs-d7372ac2-1a32-464a-9b1a-627ff8220333-run.txt",
+      "redactedLines": 0,
+      "publishedSha256": "b47e26f21468a2a7f94ebad1173ef3e6b8d7864256a064aa69637bc2c1809371"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/de844dbb-a720-42ec-a348-e41dab2efebd/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/de844dbb-a720-42ec-a348-e41dab2efebd/run.log",
+      "bytes": 5489,
+      "sha256": "ec450fe77a7ccd297ed4e2fee05e47d55b66150efacbae43b1091c9b694d9b7f",
+      "published": "docs/handoff-20261031/logs/10-runs-de844dbb-a720-42ec-a348-e41dab2efebd-run.txt",
+      "redactedLines": 1,
+      "publishedSha256": "eb2764ceda1a910efd97cc129771967b2fa8e375b560de30408dabc858b8f13d"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/fc0d0121-9ddd-4ab5-aeb6-033a9daa10f8/bootstrap.log",
+      "bytes": 63,
+      "sha256": "e807d3771413f02bb9841dca1f6ee97b7dc773a1c6d53421bc7c09b789c294c1"
+    },
+    {
+      "path": ".local/frontagent-r3-20261029/runs/fc0d0121-9ddd-4ab5-aeb6-033a9daa10f8/run.log",
+      "bytes": 5053,
+      "sha256": "175e2dfc09c3908ab348d4f87a3e8e7384c3967c71aa54e61833ae293541347f",
+      "published": "docs/handoff-20261031/logs/11-runs-fc0d0121-9ddd-4ab5-aeb6-033a9daa10f8-run.txt",
+      "redactedLines": 1,
+      "publishedSha256": "28b9f94744f609991b9b8c359422cdf1dde2ceb6d7e2a2537a638acb1f0cd4ea"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/build-dependency-probe.log",
+      "bytes": 6609,
+      "sha256": "6de4d5ffc3b2eabab4aa0f452379ef1abac9ae8a6f169ff9b2f08b72c8976c6d",
+      "published": "docs/handoff-20261031/logs/12-.local-t7-runner-shell-20261024-build-dependency-probe.txt",
+      "redactedLines": 0,
+      "publishedSha256": "bce578762705fe7c6854b618e84f49e548886932e1d6c18ad83ea8c1d9bc1915"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/build-install-retry.log",
+      "bytes": 284114,
+      "sha256": "1e54c1ca6982d1052f149ee3b759064eee0bbf1152bd709d32c92eb7c24524e2",
+      "published": "docs/handoff-20261031/logs/13-.local-t7-runner-shell-20261024-build-install-retry.txt",
+      "redactedLines": 0,
+      "publishedSha256": "49c67781e19341d4ed7c7bbb1602f7727e6fa661828e6838f8371ca69132b062"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/build-locked-retry.log",
+      "bytes": 34710,
+      "sha256": "54504c1f37e76e57cee2673a8b6e529cd57bb95d6ad8888b683a4c6ec49dfe91",
+      "published": "docs/handoff-20261031/logs/14-.local-t7-runner-shell-20261024-build-locked-retry.txt",
+      "redactedLines": 0,
+      "publishedSha256": "44a04eb2dbc0469c148848ddc9f06c210cc34d0712b75d19d850d0343923d329"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/build-network-retry.log",
+      "bytes": 82829,
+      "sha256": "6f054dd13efc7330144b9a80284192756da64124471ec3eba1ff03977a8b1887",
+      "published": "docs/handoff-20261031/logs/15-.local-t7-runner-shell-20261024-build-network-retry.txt",
+      "redactedLines": 0,
+      "publishedSha256": "c5820440e942a323507d3349fa1d69bba24696742b078017dc23e31c3cebd7c8"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/build-original-retry.log",
+      "bytes": 82328,
+      "sha256": "6615685e200383b8d5bb6953fcace2460afd84f04ba52da9150c46dba05b5a22",
+      "published": "docs/handoff-20261031/logs/16-.local-t7-runner-shell-20261024-build-original-retry.txt",
+      "redactedLines": 0,
+      "publishedSha256": "b952f913073b3d0b59d3233676a78e67e754c43ccfc62d53e3c3b70cb94711e1"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/build-original.log",
+      "bytes": 88714,
+      "sha256": "1528b31c6ec0d4e810f1c3a32a15081e143ecc4e5e44f63206f8934dde696a3d",
+      "published": "docs/handoff-20261031/logs/17-.local-t7-runner-shell-20261024-build-original.txt",
+      "redactedLines": 0,
+      "publishedSha256": "65cebb2ed7ccfe27d87af6f8ce6abb8482701921aa2c69fce59ab8c3e85f91cf"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/default-regression/be8954fc-fe83-4d8d-ae84-ad57ef6fcdbd/host-typecheck.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/default-regression/be8954fc-fe83-4d8d-ae84-ad57ef6fcdbd/runner-build.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/default-regression/be8954fc-fe83-4d8d-ae84-ad57ef6fcdbd/scenario.log",
+      "bytes": 3847,
+      "sha256": "2725cd685db70ecd3261764d7b289cfb1f9dfafceec4156266954de140a02627"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/default-regression.log",
+      "bytes": 1044,
+      "sha256": "1d90bea7d45515609ecc5e9d9e8bb69fb3fefcddf8fe467df1f9a3eff633b2a5"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/original-shell/c2f557bc-0392-499f-bf4a-5c3173c7c228/host-typecheck.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/original-shell/c2f557bc-0392-499f-bf4a-5c3173c7c228/runner-build.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/original-shell/c2f557bc-0392-499f-bf4a-5c3173c7c228/scenario.log",
+      "bytes": 3842,
+      "sha256": "50d062f7571ca0fe8eef7f45148677af5286abd08ac6e97158b47ab606746da2"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/original-shell-run.log",
+      "bytes": 1148,
+      "sha256": "b98ed9ca71662e9ea97de0d0d2b2230ece1a3aa053f603e2b65a2098c5b60e8d"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/public-build.log",
+      "bytes": 60,
+      "sha256": "a4ca9eeb8fc8b506e49736b4609cc50ea2e7a321368e909d01daa732d111e245"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/public-tests.log",
+      "bytes": 306,
+      "sha256": "542b59a9ae91a90b6c2e5f92bb82992f42ceb51b76b85b23b398c84fd530edd4"
+    },
+    {
+      "path": ".local/t7-runner-shell-20261024/public-typecheck.log",
+      "bytes": 50,
+      "sha256": "dec1accd6b79a6cc4c9eb742e0836bb04e2b3215f048d39c60cd11fd14e3f424"
+    }
+  ]
+}

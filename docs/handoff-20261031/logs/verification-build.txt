@@ -1,0 +1,2 @@
+Command: node node_modules/typescript/bin/tsc -p tsconfig.build.json
+Exit: 0

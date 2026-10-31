@@ -23,8 +23,16 @@ export interface BotReportOptions {
 export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file'|'task';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;taskId?:string;taskStatus?:string;reply:BotReplyPlan;}
 export interface BotReplyExecution {beforeReply?:(scope:BotReadScope)=>Promise<void>;context:WecomBotContext;event:BotEvent;actor:StaffContext;result:BotReportResult;}
 export function createBotReportHandler(options:BotReportOptions){
+ if(options.mode!=='isolated-synthetic')throw Error('invalid_report_catalog');
+ return createReportHandler(options);
+}
+export function createControlledRealBotReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'controlled-real-pilot'}){
+ if(options.mode!=='controlled-real-pilot'||options.tasks||options.artifacts)throw Error('invalid_report_catalog');
+ return createReportHandler(options);
+}
+function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolated-synthetic' | 'controlled-real-pilot'}){
  const valid=(s:unknown):s is string=>typeof s==='string'&&!!s.trim()&&s.length<=120&&!/[\u0000-\u001f]/.test(s);
- if(options.mode!=='isolated-synthetic'||!options.scope||Object.values(options.scope).length!==3||!['tenant','store','workspace'].every(k=>valid(Reflect.get(options.scope,k)))||!Array.isArray(options.employees)||!options.employees.length||options.employees.some(p=>!p||![p.accountId,p.employeeId,p.employeeName].every(valid))||new Set(options.employees.map(p=>p.accountId)).size!==options.employees.length||new Set(options.employees.map(p=>p.employeeId)).size!==options.employees.length)throw Error('invalid_report_catalog');
+ if(!options.scope||Object.values(options.scope).length!==3||!['tenant','store','workspace'].every(k=>valid(Reflect.get(options.scope,k)))||!Array.isArray(options.employees)||!options.employees.length||options.employees.some(p=>!p||![p.accountId,p.employeeId,p.employeeName].every(valid))||new Set(options.employees.map(p=>p.accountId)).size!==options.employees.length||new Set(options.employees.map(p=>p.employeeId)).size!==options.employees.length)throw Error('invalid_report_catalog');
  const scope={...options.scope},employees=structuredClone(options.employees),{authority,ledger,artifacts,tasks,conversations,readEvent,beforeWork}=options,now=options.now??(()=>new Date());
  const roster=employees.map(e=>({...scope,employeeId:e.employeeId,employeeName:e.employeeName}));
  const money=(cents:number|null)=>cents===null?'未知':`${cents<0?'-':''}${Math.trunc(Math.abs(cents)/100)}.${String(Math.abs(cents)%100).padStart(2,'0')}元`;

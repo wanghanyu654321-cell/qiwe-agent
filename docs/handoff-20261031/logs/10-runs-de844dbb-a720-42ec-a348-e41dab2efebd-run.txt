@@ -1,0 +1,35 @@
+FULL_HOST_RUN {"runId":"2026-10-29T12-37-16-251Z-1083b4cc-913c-4256-9fab-337c29a76055","evidenceRoot":"/tmp/qiwe-full-host-evidence/2026-10-29T12-37-16-251Z-1083b4cc-913c-4256-9fab-337c29a76055","status":"preparing"}
+FULL_HOST_PHASE {"runId":"2026-10-29T12-37-16-251Z-1083b4cc-913c-4256-9fab-337c29a76055","phase":"boot","status":"starting"}
+
+ RUN  v4.1.12 /tmp/qiwe-full-host-zuWvwG
+
+[2026-10-29 12:39:27.233] [32mINFO[39m (274): [36mDatabase initialized[39m
+[2026-10-29 12:39:27.237] [32mINFO[39m (274): [36mState loaded[39m
+    [35mgroupCount[39m: 16
+[2026-10-29 12:39:27.245] [32mINFO[39m (274): [36mWeb server started[39m
+    [35mport[39m: 38301
+ ❯ tests/frontagent-existing-flow.test.mts (1 test | 1 failed) 50562ms
+   × uses restored original Frontagent identity and role in the same real host with offline synthetic I/O 50561ms
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  12:38:37
+   Duration  53.23s (transform 2.45s, setup 0ms, import 1.53s, tests 50.56s, environment 0ms)
+
+FULL_HOST_RETAINED_VOLUME_ROOT /tmp/qiwe-full-host-zuWvwG
+(node:1) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:274) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+stderr | tests/frontagent-existing-flow.test.mts > uses restored original Frontagent identity and role in the same real host with offline synthetic I/O
+[REDACTED PRIVATE LOG LINE]
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/frontagent-existing-flow.test.mts > uses restored original Frontagent identity and role in the same real host with offline synthetic I/O
+Error: EXISTING_ORIGINAL_RESTORE_REVIEW_BLOCKED
+ ❯ tests/frontagent-existing-flow.test.mts:94:357
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯

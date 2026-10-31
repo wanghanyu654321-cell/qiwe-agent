@@ -20,3 +20,34 @@ test('mount translation admits exact tmp child only and rejects other command, p
  assert.deepEqual(translateLocalMounts(['run','-v','/tmp/work/a:/workspace/group:ro'],expected.mountpoint),['run','-v',expected.mountpoint+'/work/a:/workspace/group:ro']);
  for(const args of [['exec','x'],['run','-v','/tmp:/workspace/group'],['run','-v','/tmp/../etc:/workspace/group'],['run','-v','/input/src:/app/src'],['run','-v','relative:/workspace/group']])assert.throws(()=>translateLocalMounts(args,expected.mountpoint),/LOCAL_DOCKER/);
 });
+
+const scope=()=>({mode:'controlled-real-pilot',environment:'local-test',runId,expiresAt:Date.now()+600000,networkName:'qiwe-pilot-'+runId});
+function pilot(){
+ const controlledRealPilot=scope(),networkId='c'.repeat(64),f=facts();
+ const network={Id:networkId,Name:controlledRealPilot.networkName,Driver:'bridge',Scope:'local',Internal:false,Attachable:false,Ingress:false,EnableIPv6:false,Labels:{'qiwe.verification-run':runId,'qiwe.controlled-real-pilot':'local-test'},Options:{},IPAM:{Driver:'default',Options:null,Config:[{Subnet:'172.20.0.0/16',Gateway:'172.20.0.1'}]}};
+ f.network={...structuredClone(network),Containers:{[hostId]:{Name:'qiwe-host',EndpointID:'d'.repeat(64)}}};
+ f.host.HostConfig.NetworkMode=controlledRealPilot.networkName;
+ f.host.HostConfig.PortBindings={};f.host.HostConfig.PublishAllPorts=false;
+ f.host.NetworkSettings={Ports:{},Networks:{[controlledRealPilot.networkName]:{NetworkID:networkId,EndpointID:'d'.repeat(64)}}};
+ return {f,e:{...expected,controlledRealPilot,network}};
+}
+test('controlled local pilot admits its pinned sole bridge with original volume and confinement',()=>{
+ const {f,e}=pilot();assert.equal(validateLocalDockerFacts(f,e),true);
+});
+test('accepts Docker 29 default bridge options but rejects changed options',()=>{
+ const {f,e}=pilot();
+ f.network.Options={'com.docker.network.enable_ipv4':'true','com.docker.network.enable_ipv6':'false'};
+ e.network.Options=structuredClone(f.network.Options);
+ assert.equal(validateLocalDockerFacts(f,e),true);
+ f.network.Options['com.docker.network.enable_ipv6']='true';e.network.Options=structuredClone(f.network.Options);
+ assert.throws(()=>validateLocalDockerFacts(f,e),/LOCAL_DOCKER/);
+});
+test('controlled pilot refuses expired, foreign or unbounded scope and default cannot accept a bridge',()=>{
+ for(const change of [e=>delete e.controlledRealPilot,e=>e.controlledRealPilot.expiresAt=Date.now()-1,e=>e.controlledRealPilot.expiresAt=Date.now()+3600001,e=>e.controlledRealPilot.environment='production',e=>e.controlledRealPilot.runId='other',e=>e.controlledRealPilot.networkName='bridge',e=>delete e.network]){
+  const {f,e}=pilot();change(e);assert.throws(()=>validateLocalDockerFacts(f,e),/LOCAL_DOCKER/);
+ }
+});
+test('controlled pilot refuses substituted bridge, foreign members, exposed ports and weakened original boundary',()=>{
+ const changes=[f=>f.network.Id='e'.repeat(64),f=>f.network.Driver='host',f=>f.network.Labels['qiwe.verification-run']='other',f=>delete f.network.Labels['qiwe.controlled-real-pilot'],f=>f.network.Containers.other={},f=>delete f.network.Containers[hostId],f=>f.host.NetworkSettings.Networks.other={NetworkID:'e'.repeat(64)},f=>f.host.NetworkSettings.Networks[f.network.Name].NetworkID='e'.repeat(64),f=>f.host.HostConfig.NetworkMode='bridge',f=>f.host.HostConfig.PortBindings={'80/tcp':[{HostPort:'8080'}]},f=>f.host.HostConfig.PublishAllPorts=true,f=>f.host.NetworkSettings.Ports={'80/tcp':[{HostPort:'8080'}]},f=>f.host.Mounts[0].RW=false,f=>f.host.Config.User='0:0',f=>f.host.HostConfig.ReadonlyRootfs=false,f=>f.host.HostConfig.CapDrop=[],f=>f.containers.push({Id:oldId,Mounts:[]}),f=>f.containers.push({Id:'foreign-writer',Mounts:[{Name:expected.volume}]})];
+ for(const change of changes){const {f,e}=pilot();change(f);assert.throws(()=>validateLocalDockerFacts(f,e),/LOCAL_DOCKER/);}
+});

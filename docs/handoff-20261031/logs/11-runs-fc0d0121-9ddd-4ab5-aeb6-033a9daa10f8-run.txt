@@ -1,0 +1,36 @@
+FULL_HOST_RUN {"runId":"2026-10-30T05-13-30-809Z-d25313d3-e180-45a7-8341-42c096fbf804","evidenceRoot":"/tmp/qiwe-full-host-evidence/2026-10-30T05-13-30-809Z-d25313d3-e180-45a7-8341-42c096fbf804","status":"preparing"}
+FULL_HOST_PHASE {"runId":"2026-10-30T05-13-30-809Z-d25313d3-e180-45a7-8341-42c096fbf804","phase":"boot","status":"starting"}
+
+ RUN  v4.1.12 /tmp/qiwe-full-host-KvaxJw
+
+[2026-10-30 05:15:36.692] [32mINFO[39m (275): [36mDatabase initialized[39m
+[2026-10-30 05:15:36.695] [32mINFO[39m (275): [36mState loaded[39m
+    [35mgroupCount[39m: 16
+[2026-10-30 05:15:36.696] [32mINFO[39m (275): [36mPlugin catalog auto-scan disabled by SystemSettings.pluginAutoScan[39m
+[2026-10-30 05:15:36.704] [32mINFO[39m (275): [36mWeb server started[39m
+    [35mport[39m: 43019
+ ❯ tests/frontagent-existing-flow.test.mts (1 test | 1 failed) 55887ms
+   × uses restored original Frontagent identity and role in the same real host with offline synthetic I/O 55886ms
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  05:14:44
+   Duration  58.86s (transform 2.69s, setup 0ms, import 1.87s, tests 55.89s, environment 0ms)
+
+FULL_HOST_RETAINED_VOLUME_ROOT /tmp/qiwe-full-host-KvaxJw
+(node:1) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:275) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+stderr | tests/frontagent-existing-flow.test.mts > uses restored original Frontagent identity and role in the same real host with offline synthetic I/O
+[REDACTED PRIVATE LOG LINE]
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/frontagent-existing-flow.test.mts > uses restored original Frontagent identity and role in the same real host with offline synthetic I/O
+Error: EXISTING_ORIGINAL_RESTORE_REVIEW_BLOCKED
+ ❯ tests/frontagent-existing-flow.test.mts:94:357
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯

@@ -1,0 +1,36 @@
+FULL_HOST_RUN {"runId":"2026-10-30T13-50-10-936Z-61616548-36cc-45f4-a8c7-55d0b5de249c","evidenceRoot":"/tmp/qiwe-full-host-evidence/2026-10-30T13-50-10-936Z-61616548-36cc-45f4-a8c7-55d0b5de249c","status":"preparing"}
+FULL_HOST_PHASE {"runId":"2026-10-30T13-50-10-936Z-61616548-36cc-45f4-a8c7-55d0b5de249c","phase":"boot","status":"starting"}
+
+ RUN  v4.1.12 /tmp/qiwe-full-host-84O9jC
+
+[2026-10-30 13:52:42.086] [32mINFO[39m (257): [36mDatabase initialized[39m
+[2026-10-30 13:52:42.090] [32mINFO[39m (257): [36mState loaded[39m
+    [35mgroupCount[39m: 16
+[2026-10-30 13:52:42.090] [32mINFO[39m (257): [36mPlugin catalog auto-scan disabled by SystemSettings.pluginAutoScan[39m
+[2026-10-30 13:52:42.103] [32mINFO[39m (257): [36mWeb server started[39m
+    [35mport[39m: 40125
+ ❯ tests/frontagent-existing-flow.test.mts (1 test | 1 failed) 69946ms
+   × uses restored original Frontagent identity and role in the same real host with offline synthetic I/O 69945ms
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  13:51:38
+   Duration  73.12s (transform 3.01s, setup 0ms, import 1.79s, tests 69.95s, environment 0ms)
+
+FULL_HOST_RETAINED_VOLUME_ROOT /tmp/qiwe-full-host-84O9jC
+(node:1) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:257) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+stderr | tests/frontagent-existing-flow.test.mts > uses restored original Frontagent identity and role in the same real host with offline synthetic I/O
+[REDACTED PRIVATE LOG LINE]
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/frontagent-existing-flow.test.mts > uses restored original Frontagent identity and role in the same real host with offline synthetic I/O
+Error: EXISTING_ORIGINAL_RESTORE_REVIEW_BLOCKED
+ ❯ tests/frontagent-existing-flow.test.mts:112:357
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯

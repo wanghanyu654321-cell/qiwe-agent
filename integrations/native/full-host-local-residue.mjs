@@ -1,16 +1,21 @@
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 const skills=['beauty-local-content','vendor-content-strategy','vendor-copywriting'];
-const folder='synthetic-restoration-role',root=`sessions/${folder}/.claude/`;
-const knownFile=relative=>['.miniclaw-native-settings.json','agent/auth.json','agent/models-store.json','agent/settings.json','settings.json'].some(p=>relative===root+p)||
- relative===`env/${folder}/default/main/env`||relative==='config/container-claude-json.json'||relative.startsWith(root+'sessions/')&&/^\d{4}-\d\d-\d\dT[\d-Z]+_[-a-f0-9]{36}\.jsonl$/.test(relative.slice((root+'sessions/').length));
+const defaultFolder='synthetic-restoration-role';
+const safeFolder=value=>typeof value==='string'&&/^[a-z0-9][a-z0-9_-]{0,127}$/.test(value);
+const contextFolder=context=>{
+ const folder=Array.isArray(context)&&context[0]?.folder;
+ return safeFolder(folder)&&context.every(item=>item?.folder===folder&&typeof item.sessionId==='string'&&typeof item.content==='string')?folder:undefined;
+};
+const knownFile=(relative,folder)=>{const root=`sessions/${folder}/.claude/`;return ['.miniclaw-native-settings.json','agent/auth.json','agent/models-store.json','agent/settings.json','settings.json'].some(p=>relative===root+p)||
+ relative===`env/${folder}/default/main/env`||relative==='config/container-claude-json.json'||relative.startsWith(root+'sessions/')&&/^\d{4}-\d\d-\d\dT[\d-Z]+_[-a-f0-9]{36}\.jsonl$/.test(relative.slice((root+'sessions/').length));};
 const keys=(value,allowed)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>allowed.includes(k));
 const exact=(value,expected)=>JSON.stringify(value,Object.keys(expected).sort())===JSON.stringify(expected,Object.keys(expected).sort())&&keys(value,Object.keys(expected));
-const eligible=context=>Array.isArray(context)&&context.some(item=>item.folder===folder&&typeof item.sessionId==='string'&&typeof item.content==='string');
 const textParts=value=>Array.isArray(value)&&value.length>0&&value.every(part=>keys(part,['type','text'])&&part.type==='text'&&typeof part.text==='string');
 const time=value=>typeof value==='string'&&Number.isFinite(Date.parse(value));
 const escapeXml=value=>value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-export function settledLocalSessions(rows,records){
+export function settledLocalSessions(rows,records,folder=defaultFolder){
+ if(!safeFolder(folder))return [];
  const all=table=>rows.get(table)??[],answer=[];
  for(const {table,row,record} of records){
   if(table!=='wecom_conversation_results'||!record.evidence.includes('d5_frozen_result_verified')||typeof row.session_id!=='string'||typeof row.content!=='string')continue;
@@ -24,7 +29,8 @@ export function settledLocalSessions(rows,records){
  }
  return answer;
 }
-function settledSession(relative,raw,context,observedSessions){
+function settledSession(relative,raw,context,observedSessions,folder){
+ const root=`sessions/${folder}/.claude/`;
  const rows=raw.trim().split('\n').map(line=>JSON.parse(line));if(rows.length<3||rows.length>64)return false;
  const header=rows.shift();
  if(!keys(header,['type','version','id','timestamp','cwd'])||header.type!=='session'||header.version!==3||header.cwd!=='/workspace/group'||!time(header.timestamp)||!/^[-a-f0-9]{36}$/.test(header.id??'')||
@@ -67,10 +73,15 @@ function settledSession(relative,raw,context,observedSessions){
  observedSessions.add(header.id);return true;
 }
 export function classifyLocalRunnerFile(relative,raw,context,observedSessions=new Set()){
- if(!eligible(context)||!knownFile(relative)||typeof raw!=='string'||Buffer.byteLength(raw)>131072)return undefined;
+ const folder=contextFolder(context),root=`sessions/${folder}/.claude/`;
+ if(!folder||!knownFile(relative,folder)||typeof raw!=='string'||Buffer.byteLength(raw)>131072)return undefined;
  try{
-  if(relative===`env/${folder}/default/main/env`)return raw==="MINICLAW_CLAUDE_ENDPOINT_KIND='official'\n"?'fixed_official_endpoint_env':undefined;
-  if(relative.startsWith(root+'sessions/')&&/^\d{4}-\d\d-\d\dT[\d-Z]+_[-a-f0-9]{36}\.jsonl$/.test(relative.slice((root+'sessions/').length)))return settledSession(relative,raw,context,observedSessions)?'settled_pi_session_exact_d5':undefined;
+  if(relative===`env/${folder}/default/main/env`){
+   if(raw==="MINICLAW_CLAUDE_ENDPOINT_KIND='official'\n")return 'fixed_official_endpoint_env';
+   if(raw==="MINICLAW_CLAUDE_ENDPOINT_KIND='official'\nMINICLAW_AGENT_MCP_POLICY='disabled'\n")return 'fixed_official_endpoint_disabled_mcp_env';
+   return undefined;
+  }
+  if(relative.startsWith(root+'sessions/')&&/^\d{4}-\d\d-\d\dT[\d-Z]+_[-a-f0-9]{36}\.jsonl$/.test(relative.slice((root+'sessions/').length)))return settledSession(relative,raw,context,observedSessions,folder)?'settled_pi_session_exact_d5':undefined;
   const value=JSON.parse(raw);
   if(relative==='config/container-claude-json.json')return exact(value,{hasCompletedOnboarding:true,autoUpdates:false})?'fixed_original_onboarding_config':undefined;
   if(['.miniclaw-native-settings.json','agent/auth.json','agent/models-store.json'].some(p=>relative===root+p))return exact(value,{})?'empty_original_runtime_store':undefined;
@@ -83,7 +94,8 @@ export function classifyLocalRunnerFile(relative,raw,context,observedSessions=ne
  return undefined;
 }
 export function classifyLocalRunnerLink(relative,target,context){
- if(!eligible(context))return undefined;
+ const folder=contextFolder(context);if(!folder)return undefined;
+ const root=`sessions/${folder}/.claude/`;
  return skills.some(id=>relative===root+'skills/'+id&&target==='/workspace/effective-skills/'+id)?'original_rebuilt_skill_link':undefined;
 }
 /** Called only from the original descriptor walker with its already lstat'ed
@@ -91,12 +103,13 @@ export function classifyLocalRunnerLink(relative,target,context){
  * exact descriptor identity before and after reading. */
 export function inspectLocalRunnerResidue(name,relative,stat,context,observedSessions){
  const stamp=s=>[s.dev,s.ino,s.mode,s.nlink,s.size,s.mtimeNs,s.ctimeNs].map(String).join(':');
+ const folder=contextFolder(context);if(!folder)return undefined;
  if(stat.isSymbolicLink()){
   if(stat.uid!==0n||stat.gid!==0n)return undefined;
   const reason=classifyLocalRunnerLink(relative,fs.readlinkSync(name),context);
   return reason&&stamp(fs.lstatSync(name,{bigint:true}))===stamp(stat)?reason:undefined;
  }
- if(!knownFile(relative)||!stat.isFile()||stat.uid!==1000n||stat.gid!==1000n||stat.nlink!==1n||stat.size>131072n||stat.size<0n||(stat.mode&0o022n)!==0n)return undefined;
+ if(!knownFile(relative,folder)||!stat.isFile()||stat.uid!==1000n||stat.gid!==1000n||stat.nlink!==1n||stat.size>131072n||stat.size<0n||(stat.mode&0o022n)!==0n)return undefined;
  let fd;
  try{
   fd=fs.openSync(name,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
