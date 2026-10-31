@@ -6,7 +6,7 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {validatePilotPrivateInput} from './frontagent-controlled-live-entry.mjs';
 import {PILOT_PRIVATE_CONFIG_PATH,assertIsolatedSyntheticClosed,createPilotScratch,runContainerPrivateInstall,sealWindowsPlaceholder,stageWindowsPrivateFile} from './pilot-private-bootstrap.mjs';
-import {restageControlledCode,sealControlledLinuxCopy,verifyControlledLinuxCopy} from './linux-runtime.mjs';
+import {assertRestagedCode,restageControlledCode,sealControlledLinuxCopy,verifyControlledLinuxCopy} from './linux-runtime.mjs';
 
 export const PILOT_MAX_REQUESTS=8,PILOT_MAX_OUTPUT_TOKENS=1024,PILOT_MAX_DURATION_MS=30*60*1000;
 export const RUNNER_IMAGE='sha256:092853e7a053fc50f84b8a6b6f7cabf4f1d52673718be4c3df10672a2f4fc187';
@@ -170,7 +170,7 @@ export function buildFrontagentExistingInput(product,bootstrapFile,dest){
  });
  return dest;
 }
-/** Copy the Linux docker client and build-input-linux.json from the same local sources the sealed stage uses. */
+/** Copy docker, build-input, and the product snapshot from the data roots. Code is restaged from the checkout that contains cwd. */
 export function prepareSealedStage(cwd=process.cwd(),options={}){
  const input=resolveSealedStage(cwd),stageRoot=path.dirname(input),roots=pilotSourceRoots(cwd,options);
  const docker=ensureStageFile(roots,stageRoot,'docker'),buildInput=ensureStageFile(roots,stageRoot,'build-input-linux.json');
@@ -185,18 +185,30 @@ export function prepareSealedStage(cwd=process.cwd(),options={}){
   if(existingLayout(premade))fs.cpSync(premade,existing,{recursive:true});
   else throw missingSource(located.product?'bootstrap':'product-host',[...located.products,...located.bootstraps]);
  }
- const repo=roots.at(-1);
+ const repo=runningCheckout(cwd)??path.resolve(cwd);
  restageControlledCode(repo,input);
  const commit=gitHead(repo);
  sealControlledLinuxCopy(input,commit);
  return {docker,buildInput,existing,commit};
 }
-function gitHead(cwd){
- try{const commit=defaultExec('git',['-C',cwd,'rev-parse','HEAD'],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();return /^[0-9a-f]{40}$/.test(commit)?commit:undefined;}
- catch{return undefined;}
+function gitRead(cwd,args){
+ try{return defaultExec('git',['-C',cwd,...args],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();}
+ catch{return '';}
 }
-export function assertStageSeal(copyRoot,commit){
- try{return verifyControlledLinuxCopy(copyRoot,commit);}
+function runningCheckout(cwd){
+ const top=gitRead(cwd,['rev-parse','--show-toplevel']);
+ return top&&fs.existsSync(top)?path.resolve(top):undefined;
+}
+function gitHead(cwd){
+ const commit=gitRead(cwd,['rev-parse','HEAD']);
+ return /^[0-9a-f]{40}$/.test(commit)?commit:undefined;
+}
+export function assertStageSeal(copyRoot,commit,checkout){
+ try{
+  const result=verifyControlledLinuxCopy(copyRoot,commit);
+  if(checkout)assertRestagedCode(checkout,copyRoot);
+  return result;
+ }
  catch(error){if(error?.message==='PILOT_LAUNCH_STAGE_SEAL')throw error;const wrapped=Error('PILOT_LAUNCH_STAGE_SEAL');wrapped.reason='contents';throw wrapped;}
 }
 function resolveHostControls(stageInput,options){
@@ -322,7 +334,8 @@ export function runSupervisedPilot(options={}){
  if(hosted)Object.assign(environment,{HOME:'/tmp',TMPDIR:'/tmp',QIWE_EVIDENCE_ROOT:'/tmp/qiwe-evidence',QIWE_LOCAL_DOCKER_VOLUME:volume,QIWE_LOCAL_DOCKER_HOST:hostName,QIWE_LOCAL_DOCKER_IMAGE:image,QIWE_LOCAL_DOCKER_DRIVER_IMAGE:RUNNER_IMAGE,QIWE_RESTORATION_REAL_CONTAINER:'1'});
  const stage=hosted?resolveSealedStage(options.cwd??process.cwd()):undefined;
  const controls=hosted?resolveHostControls(stage,options):undefined;
- if(hosted)assertStageSeal(stage,gitHead(options.sourceRoot??options.cwd??process.cwd()));
+ const checkout=hosted?runningCheckout(options.cwd??process.cwd()):undefined;
+ if(hosted)assertStageSeal(stage,gitHead(checkout??options.cwd??process.cwd()),checkout);
  const realMounts=hosted?[`${stage}:/input:ro`,`${volume}:/tmp`,`${controls.socket}:/qiwe-control/docker.sock`,`${controls.docker}:/qiwe-control/docker:ro`,`${controls.buildInput}:/qiwe-control/build-input.json:ro`]:[];
  const envArgs=Object.entries(environment).flatMap(([key,value])=>['-e',key+'='+value]);
  const publishArgs=options.publishWeb?['-p','127.0.0.1:39130:39130']:[];
@@ -424,9 +437,11 @@ export function createRecordingDocker(){
 // Stage a Windows private file under the user profile. The grant is *SID:(R), not the display name:
 // node integrations/native/controlled-real-launcher.mjs --stage-private-file C:\path\to\source.json
 // Optional --destination must stay inside the user profile.
-// Prepare the sealed stage's docker client and build-input-linux.json, then rehearse:
-// node integrations/native/controlled-real-launcher.mjs --prepare-stage --source-root <main-checkout>
-// QIWE_PILOT_SOURCE_ROOT is the same override. Otherwise the main checkout is dirname of `git rev-parse --git-common-dir`.
+// Prepare from the checkout whose code should run. --source-root supplies only data
+// (product host, bootstrap, docker, build-input). Code and the seal HEAD come from
+// `git rev-parse --show-toplevel` of this process.
+// node integrations/native/controlled-real-launcher.mjs --prepare-stage --source-root <data-checkout>
+// QIWE_PILOT_SOURCE_ROOT is the same data override. Otherwise data falls back to dirname of `git rev-parse --git-common-dir`.
 // $env:DOCKER_CONTEXT='desktop-linux'
 // node integrations/native/controlled-real-launcher.mjs --rehearsal --docker-context desktop-linux --image sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9
 function main(){

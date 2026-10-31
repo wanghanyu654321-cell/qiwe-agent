@@ -399,8 +399,6 @@ test('prepare-stage reads a worktree from the main checkout and does not copy th
  fs.writeFileSync(path.join(main,'README'),'main\n');
  git(['add','README'],main);
  git(['commit','-m','init'],main);
- fs.mkdirSync(path.join(main,'src'),{recursive:true});
- fs.writeFileSync(path.join(main,'src/from-head.ts'),'export const head=1;\n');
  git(['worktree','add','--detach',wt],main);
  const runner=path.join(main,'.local','t7-runner-shell-20261024');
  fs.mkdirSync(runner,{recursive:true});
@@ -423,9 +421,8 @@ test('prepare-stage reads a worktree from the main checkout and does not copy th
  fs.mkdirSync(path.join(input,'.local','d4-skills'),{recursive:true});
  try{
   const prepared=prepareSealedStage(wt,{env:{}});
-  assert.equal(prepared.commit,git(['rev-parse','HEAD'],main).trim());
+  assert.equal(prepared.commit,git(['rev-parse','HEAD'],wt).trim());
   assert.equal(JSON.parse(fs.readFileSync(path.join(input,'.qiwe-linux-stage.json'),'utf8')).commit,prepared.commit);
-  assert.equal(fs.readFileSync(path.join(input,'qiwe-agent/src/from-head.ts'),'utf8'),'export const head=1;\n');
   assert.equal(fs.readFileSync(prepared.docker,'utf8'),'from-main-docker');
   assert.equal(fs.readFileSync(prepared.buildInput,'utf8'),'{"from":"main"}\n');
   assert.equal(fs.existsSync(path.join(wt,'.local','frontagent-r3-20261029','bootstrap-input.private.json')),false);
@@ -435,6 +432,54 @@ test('prepare-stage reads a worktree from the main checkout and does not copy th
   const wrong=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-source-root-'));
   try{assert.throws(()=>prepareSealedStage(wt,{sourceRoot:wrong,env:{QIWE_PILOT_SOURCE_ROOT:main}}),error=>error.message==='PILOT_LAUNCH_SOURCE_MISSING'&&error.reason==='docker'&&error.paths.some(file=>file.startsWith(wrong))&&!error.paths.some(file=>file.startsWith(main))&&!JSON.stringify(error.paths).includes(cookie));}
   finally{fs.rmSync(wrong,{recursive:true,force:true});}
+ }finally{git(['worktree','remove','--force',wt],main);fs.rmSync(parent,{recursive:true,force:true});}
+});
+test('prepare-stage restages the running checkout and uses source-root only for data',()=>{
+ const parent=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-two-roots-'));
+ const main=path.join(parent,'main'),wt=path.join(parent,'wt');
+ fs.mkdirSync(main);
+ const git=(args,cwd)=>realExec('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe'],env:{...process.env,GIT_AUTHOR_NAME:'qiwe',GIT_AUTHOR_EMAIL:'qiwe@example.com',GIT_COMMITTER_NAME:'qiwe',GIT_COMMITTER_EMAIL:'qiwe@example.com'}});
+ git(['init'],main);
+ fs.mkdirSync(path.join(main,'integrations/native'),{recursive:true});
+ fs.writeFileSync(path.join(main,'integrations/native/verify-full-host.mjs'),'export const build="old-main";\n');
+ git(['add','integrations/native/verify-full-host.mjs'],main);
+ git(['commit','-m','old'],main);
+ git(['worktree','add','--detach',wt],main);
+ fs.writeFileSync(path.join(wt,'integrations/native/verify-full-host.mjs'),'export const build="worktree";\n');
+ git(['add','integrations/native/verify-full-host.mjs'],wt);
+ git(['commit','-m','new'],wt);
+ const runner=path.join(main,'.local','t7-runner-shell-20261024');
+ fs.mkdirSync(runner,{recursive:true});
+ fs.writeFileSync(path.join(runner,'docker'),'data-docker');
+ fs.writeFileSync(path.join(runner,'build-input-linux.json'),'{"from":"data"}\n');
+ const product=path.join(main,'.local','frontagent-product-host-r1-final');
+ fs.mkdirSync(path.join(product,'state'),{recursive:true});
+ fs.mkdirSync(path.join(product,'code'),{recursive:true});
+ fs.writeFileSync(path.join(product,'state','note.txt'),'state-bytes');
+ fs.writeFileSync(path.join(product,'code','product-web.mjs'),'web-bytes');
+ const typeWeb='export declare const routes: boolean;\n',typeModules='export declare const modules: boolean;\n';
+ const sha=value=>createHash('sha256').update(value).digest('hex');
+ const descriptor={format:'frontagent-existing-state-v1',files:[{path:'state/note.txt',sha256:sha('state-bytes')},{path:'code/product-web.mjs',sha256:sha('web-bytes')},{path:'code/product-web.d.mts',sha256:sha(typeWeb)},{path:'code/product-modules.d.mts',sha256:sha(typeModules)}]};
+ fs.mkdirSync(path.join(main,'.local','frontagent-r3-20261029'),{recursive:true});
+ fs.writeFileSync(path.join(main,'.local','frontagent-r3-20261029','bootstrap-input.private.json'),JSON.stringify({descriptor,typeFiles:{'product-web.d.mts':typeWeb,'product-modules.d.mts':typeModules}}));
+ const input=path.join(wt,'.local','frontagent-r3-20261029','input');
+ fs.mkdirSync(path.join(input,'.local','full-instance','stage','app','src'),{recursive:true});
+ fs.mkdirSync(path.join(input,'.local','core-fix','appointment-identity-candidate','src'),{recursive:true});
+ fs.mkdirSync(path.join(input,'.local','d4-skills'),{recursive:true});
+ const staged=path.join(input,'qiwe-agent/integrations/native/verify-full-host.mjs');
+ try{
+  const prepared=prepareSealedStage(wt,{sourceRoot:main,env:{}});
+  const runnerHead=git(['rev-parse','HEAD'],wt).trim(),dataHead=git(['rev-parse','HEAD'],main).trim();
+  assert.notEqual(runnerHead,dataHead);
+  assert.equal(prepared.commit,runnerHead);
+  assert.equal(fs.readFileSync(staged,'utf8'),'export const build="worktree";\n');
+  assert.equal(fs.readFileSync(prepared.docker,'utf8'),'data-docker');
+  assert.equal(fs.readFileSync(path.join(prepared.existing,'code','product-web.d.mts'),'utf8'),typeWeb);
+  assertStageSeal(input,runnerHead,wt);
+  assert.throws(()=>assertStageSeal(input,dataHead,wt),error=>error.message==='PILOT_LAUNCH_STAGE_SEAL'&&error.reason==='commit');
+  fs.writeFileSync(staged,'export const build="old-main";\n');
+  sealControlledLinuxCopy(input,runnerHead);
+  assert.throws(()=>assertStageSeal(input,runnerHead,wt),error=>error.message==='PILOT_LAUNCH_STAGE_SEAL'&&error.reason==='contents');
  }finally{git(['worktree','remove','--force',wt],main);fs.rmSync(parent,{recursive:true,force:true});}
 });
 test('a quiet host is reported as stalled with the last log lines',()=>{

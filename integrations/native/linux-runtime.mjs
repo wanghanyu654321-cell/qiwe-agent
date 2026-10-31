@@ -103,6 +103,27 @@ function stageInventory(copyRoot){
     const target=path.join(directory,entry.name);if(entry.isDirectory())walk(target,name+'/');else files[name]=sha256(fs.readFileSync(target));
   }};walk(copyRoot);return Object.fromEntries(Object.entries(files).sort(([a],[b])=>a.localeCompare(b,'en')));
 }
+function codeDigest(target){
+  if(!fs.existsSync(target))return null;
+  const files={};
+  const walk=(absolute,relative)=>{
+    const stat=fs.lstatSync(absolute);
+    if(stat.isSymbolicLink()||stat.isFIFO()||stat.isSocket())throw Error('Stage symlinks are forbidden');
+    if(stat.isDirectory()){
+      for(const name of fs.readdirSync(absolute).sort()){
+        if(name==='node_modules')continue;
+        walk(path.join(absolute,name),relative?relative+'/'+name:name);
+      }
+      return;
+    }
+    if(!stat.isFile()||stat.nlink!==1)throw Error('Unapproved stage path: '+relative);
+    files[relative]=sha256(fs.readFileSync(absolute));
+  };
+  const stat=fs.lstatSync(target);
+  if(stat.isDirectory())walk(target,'');
+  else walk(target,'.');
+  return files;
+}
 export function restageControlledCode(repoRoot,copyRoot){
   let copied=0;
   for(const [from,to] of codeRestage){
@@ -115,6 +136,13 @@ export function restageControlledCode(repoRoot,copyRoot){
     copied++;
   }
   return copied;
+}
+export function assertRestagedCode(repoRoot,copyRoot){
+  for(const [from,to] of codeRestage){
+    if(JSON.stringify(codeDigest(path.join(repoRoot,from)))!==JSON.stringify(codeDigest(path.join(copyRoot,to)))){
+      const error=Error('PILOT_LAUNCH_STAGE_SEAL');error.reason='contents';throw error;
+    }
+  }
 }
 export function sealControlledLinuxCopy(copyRoot,commit){
   writeExistingInputManifest(copyRoot);
