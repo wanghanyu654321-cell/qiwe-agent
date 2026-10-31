@@ -38,7 +38,7 @@ const {d4OriginalHashes,d4SkillHashes}=await import('./role-capabilities-overlay
 const {applyFullHostPiDrain,applyFullHostPiAbort}=await import('./full-host-restoration-pi-overlay.mjs');
 const {verifyOriginalShellImage,prepareOriginalShellCandidate}=await import('./original-shell.mjs');
 const {cleanupOwnedContainers}=await import('./real-container-cleanup.mjs');
-const {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disableExistingPilotPluginScan,restrictExistingPilotSessionKey,restrictExistingPilotSettings}=await import('./frontagent-existing-state.ts');
+const {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disableExistingPilotPluginScan,restrictExistingPilotSessionKey,restrictExistingPilotSettings,existingStateBudgetMs}=await import('./frontagent-existing-state.ts');
 const {originalProductWeb}=await import('./local-pilot-host.mjs');
 const {restrictPilotWebLoopback}=await import('./controlled-real-web.mjs');
 const {validateControlledRealPilotScope}=await import('./full-host-local-docker.mjs');
@@ -93,7 +93,11 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
 mark('retained-volume','done');
  if(options.frontagentExistingInput){
   mark('existing-state','start');
-  frontagentExistingState=prepareExistingFrontagentState({inputRoot:options.frontagentExistingInput,hostRoot:directory});
+  let existingMarked=0;
+  frontagentExistingState=prepareExistingFrontagentState({inputRoot:options.frontagentExistingInput,hostRoot:directory,budgetMs:existingStateBudgetMs,progress(event){
+   const now=Date.now();
+   if(event.count===1||event.count%200===0||now-existingMarked>=15000){console.log('FULL_HOST_STEP',JSON.stringify({step:'existing-state',phase:event.phase,count:event.count}));existingMarked=now;}
+  }});
   frontagentExistingState.audit.localSessionKeyMode=restrictExistingPilotSessionKey(directory);
   writeAudit({status:'preparing',events:['local_session_key_permissions']});
   frontagentExistingState.audit.localPluginScan=disableExistingPilotPluginScan(directory);

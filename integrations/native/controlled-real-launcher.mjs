@@ -6,6 +6,7 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {validatePilotPrivateInput} from './frontagent-controlled-live-entry.mjs';
 import {PILOT_PRIVATE_CONFIG_PATH,assertIsolatedSyntheticClosed,createPilotScratch,runContainerPrivateInstall,sealWindowsPlaceholder,stageWindowsPrivateFile} from './pilot-private-bootstrap.mjs';
+import {restageControlledCode,sealControlledLinuxCopy,verifyControlledLinuxCopy} from './linux-runtime.mjs';
 
 export const PILOT_MAX_REQUESTS=8,PILOT_MAX_OUTPUT_TOKENS=1024,PILOT_MAX_DURATION_MS=30*60*1000;
 export const RUNNER_IMAGE='sha256:092853e7a053fc50f84b8a6b6f7cabf4f1d52673718be4c3df10672a2f4fc187';
@@ -184,7 +185,19 @@ export function prepareSealedStage(cwd=process.cwd(),options={}){
   if(existingLayout(premade))fs.cpSync(premade,existing,{recursive:true});
   else throw missingSource(located.product?'bootstrap':'product-host',[...located.products,...located.bootstraps]);
  }
- return {docker,buildInput,existing};
+ const repo=roots.at(-1);
+ restageControlledCode(repo,input);
+ const commit=gitHead(repo);
+ sealControlledLinuxCopy(input,commit);
+ return {docker,buildInput,existing,commit};
+}
+function gitHead(cwd){
+ try{const commit=defaultExec('git',['-C',cwd,'rev-parse','HEAD'],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();return /^[0-9a-f]{40}$/.test(commit)?commit:undefined;}
+ catch{return undefined;}
+}
+export function assertStageSeal(copyRoot,commit){
+ try{return verifyControlledLinuxCopy(copyRoot,commit);}
+ catch(error){if(error?.message==='PILOT_LAUNCH_STAGE_SEAL')throw error;const wrapped=Error('PILOT_LAUNCH_STAGE_SEAL');wrapped.reason='contents';throw wrapped;}
 }
 function resolveHostControls(stageInput,options){
  const stageRoot=path.dirname(stageInput),cwd=options.cwd??process.cwd(),roots=pilotSourceRoots(cwd,options),remote=(options.platform??process.platform)==='win32'||Boolean(options.dockerContext);
@@ -309,6 +322,7 @@ export function runSupervisedPilot(options={}){
  if(hosted)Object.assign(environment,{HOME:'/tmp',TMPDIR:'/tmp',QIWE_EVIDENCE_ROOT:'/tmp/qiwe-evidence',QIWE_LOCAL_DOCKER_VOLUME:volume,QIWE_LOCAL_DOCKER_HOST:hostName,QIWE_LOCAL_DOCKER_IMAGE:image,QIWE_LOCAL_DOCKER_DRIVER_IMAGE:RUNNER_IMAGE,QIWE_RESTORATION_REAL_CONTAINER:'1'});
  const stage=hosted?resolveSealedStage(options.cwd??process.cwd()):undefined;
  const controls=hosted?resolveHostControls(stage,options):undefined;
+ if(hosted)assertStageSeal(stage,gitHead(options.sourceRoot??options.cwd??process.cwd()));
  const realMounts=hosted?[`${stage}:/input:ro`,`${volume}:/tmp`,`${controls.socket}:/qiwe-control/docker.sock`,`${controls.docker}:/qiwe-control/docker:ro`,`${controls.buildInput}:/qiwe-control/build-input.json:ro`]:[];
  const envArgs=Object.entries(environment).flatMap(([key,value])=>['-e',key+'='+value]);
  const publishArgs=options.publishWeb?['-p','127.0.0.1:39130:39130']:[];

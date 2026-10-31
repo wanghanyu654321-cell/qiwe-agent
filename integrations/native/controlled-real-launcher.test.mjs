@@ -8,7 +8,8 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import net from 'node:net';
 import {execFileSync as realExec} from 'node:child_process';
-import {assertRecordedHostBoundary,launcherPlan,prepareSealedStage,runSupervisedPilot} from './controlled-real-launcher.mjs';
+import {assertRecordedHostBoundary,assertStageSeal,launcherPlan,prepareSealedStage,runSupervisedPilot} from './controlled-real-launcher.mjs';
+import {sealControlledLinuxCopy,verifyControlledLinuxCopy} from './linux-runtime.mjs';
 import {probeDockerSocket,runBoundedCommand} from './original-shell.mjs';
 import {createPilotScratch} from './pilot-private-bootstrap.mjs';
 import {windowsEpermCase} from '../../docs/handoff-20261031/verify.mjs';
@@ -274,6 +275,7 @@ test('rehearsal resolves host controls and succeeds only after the receipt and e
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-launch-rehearsal-'));
  const stage=path.join(root,'.local','frontagent-r3-20261029');
  fs.mkdirSync(path.join(stage,'input'),{recursive:true});
+ fs.writeFileSync(path.join(stage,'input','.qiwe-linux-stage.json'),JSON.stringify({format:'qiwe-linux-controlled-copy-v1',files:{}},null,2)+'\n');
  fs.writeFileSync(path.join(stage,'docker'),'');
  fs.writeFileSync(path.join(stage,'build-input-linux.json'),'{}');
  const win=process.platform==='win32'?{platform:'win32',homedir:root,currentSid:'S-1-5-21-1-2-3-1001',reparsePoint:false,aces:[{sid:'S-1-5-21-1-2-3-1001',type:'Allow',inherited:false}],aclExec(){}}: {};
@@ -365,11 +367,20 @@ test('prepare-stage copies docker and build-input from the local runner source',
  fs.mkdirSync(path.join(existing,'code'),{recursive:true});
  fs.mkdirSync(path.join(existing,'state'),{recursive:true});
  fs.writeFileSync(path.join(existing,'descriptor.json'),'{"format":"frontagent-existing-state-v1"}\n');
+ fs.mkdirSync(path.join(root,'src/node_modules/left'),{recursive:true});
+ fs.writeFileSync(path.join(root,'src/sample.ts'),'export const sample=1;\n');
+ fs.writeFileSync(path.join(root,'src/node_modules/left/index.js'),'nope');
+ fs.mkdirSync(path.join(input,'qiwe-agent/node_modules'),{recursive:true});
+ fs.writeFileSync(path.join(input,'qiwe-agent/node_modules/linux.js'),'keep');
  try{
   const prepared=prepareSealedStage(root);
   assert.equal(fs.readFileSync(prepared.docker,'utf8'),'linux-docker');
   assert.equal(fs.readFileSync(prepared.buildInput,'utf8'),'{"files":{}}\n');
   assert.equal(fs.existsSync(path.join(prepared.existing,'descriptor.json')),true);
+  assert.equal(fs.readFileSync(path.join(input,'qiwe-agent/src/sample.ts'),'utf8'),'export const sample=1;\n');
+  assert.equal(fs.existsSync(path.join(input,'qiwe-agent/src/node_modules')),false);
+  assert.equal(fs.readFileSync(path.join(input,'qiwe-agent/node_modules/linux.js'),'utf8'),'keep');
+  assert.equal(verifyControlledLinuxCopy(input).files>=1,true);
   fs.writeFileSync(prepared.docker,'keep');
   prepareSealedStage(root);
   assert.equal(fs.readFileSync(prepared.docker,'utf8'),'keep');
@@ -388,6 +399,8 @@ test('prepare-stage reads a worktree from the main checkout and does not copy th
  fs.writeFileSync(path.join(main,'README'),'main\n');
  git(['add','README'],main);
  git(['commit','-m','init'],main);
+ fs.mkdirSync(path.join(main,'src'),{recursive:true});
+ fs.writeFileSync(path.join(main,'src/from-head.ts'),'export const head=1;\n');
  git(['worktree','add','--detach',wt],main);
  const runner=path.join(main,'.local','t7-runner-shell-20261024');
  fs.mkdirSync(runner,{recursive:true});
@@ -410,6 +423,9 @@ test('prepare-stage reads a worktree from the main checkout and does not copy th
  fs.mkdirSync(path.join(input,'.local','d4-skills'),{recursive:true});
  try{
   const prepared=prepareSealedStage(wt,{env:{}});
+  assert.equal(prepared.commit,git(['rev-parse','HEAD'],main).trim());
+  assert.equal(JSON.parse(fs.readFileSync(path.join(input,'.qiwe-linux-stage.json'),'utf8')).commit,prepared.commit);
+  assert.equal(fs.readFileSync(path.join(input,'qiwe-agent/src/from-head.ts'),'utf8'),'export const head=1;\n');
   assert.equal(fs.readFileSync(prepared.docker,'utf8'),'from-main-docker');
   assert.equal(fs.readFileSync(prepared.buildInput,'utf8'),'{"from":"main"}\n');
   assert.equal(fs.existsSync(path.join(wt,'.local','frontagent-r3-20261029','bootstrap-input.private.json')),false);
@@ -448,6 +464,26 @@ test('docker preflight does not wait on a client or proxy that never answers',as
   assert.equal((await probeDockerSocket(readySock,2000)).ApiVersion,'1.41');
  }finally{silent.close();ready.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
+test('launcher refuses a stage whose seal does not match the files or the commit',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-stage-seal-'));
+ const stage=path.join(root,'.local','frontagent-r3-20261029');
+ const input=path.join(stage,'input');
+ fs.mkdirSync(path.join(input,'qiwe-agent','src'),{recursive:true});
+ fs.writeFileSync(path.join(input,'qiwe-agent','src','sample.ts'),'export const value=1;\n');
+ fs.writeFileSync(path.join(stage,'docker'),'');
+ fs.writeFileSync(path.join(stage,'build-input-linux.json'),'{}');
+ const win=process.platform==='win32'?{platform:'win32',homedir:root,currentSid:'S-1-5-21-1-2-3-1001',reparsePoint:false,aces:[{sid:'S-1-5-21-1-2-3-1001',type:'Allow',inherited:false}],aclExec(){}}: {};
+ try{
+  sealControlledLinuxCopy(input,'a'.repeat(40));
+  assertStageSeal(input,'a'.repeat(40));
+  assert.throws(()=>assertStageSeal(input,'b'.repeat(40)),error=>error.message==='PILOT_LAUNCH_STAGE_SEAL'&&error.reason==='commit');
+  fs.writeFileSync(path.join(input,'qiwe-agent','src','sample.ts'),'export const value=2;\n');
+  assert.throws(()=>assertStageSeal(input,'a'.repeat(40)),error=>error.message==='PILOT_LAUNCH_STAGE_SEAL'&&error.reason==='contents');
+  const exec=trackingDocker();
+  assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image:'sha256:'+'ab'.repeat(32),env:clean,execFileSync:exec.execFileSync,cwd:root,dockerContext:'desktop-linux',sourceRoot:root,setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_STAGE_SEAL'&&error.reason==='contents');
+  assert.equal(exec.calls.length,0);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
 test('an uncoded launch error prints its name and message without secrets',()=>{
  const execFileSync=(command,args)=>{if(args.includes('create'))throw Error('listen EACCES token=supersecretvalue');return '';};
  assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync,setTimeout:()=>({unref(){}})}),error=>error.message==='PILOT_LAUNCH_FAILED'&&error.causeName==='Error'&&error.causeMessage==='listen EACCES [redacted]'&&!error.causeMessage.includes('supersecretvalue')&&!error.causeMessage.includes('powershell.exe'));
@@ -456,6 +492,7 @@ function dockerDaemon(){try{realExec('docker',['info'],{stdio:'ignore',timeout:8
 async function hostControls(root){
  const stage=path.join(root,'.local','frontagent-r3-20261029');
  fs.mkdirSync(path.join(stage,'input'),{recursive:true});
+ fs.writeFileSync(path.join(stage,'input','.qiwe-linux-stage.json'),JSON.stringify({format:'qiwe-linux-controlled-copy-v1',files:{}},null,2)+'\n');
  fs.writeFileSync(path.join(stage,'build-input-linux.json'),'{}');
  const dockerBin=path.join(stage,'docker');
  fs.writeFileSync(dockerBin,'');
