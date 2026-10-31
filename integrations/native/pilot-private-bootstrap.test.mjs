@@ -82,8 +82,12 @@ test('container install copies the verified snapshot and checks the in-container
   assert.deepEqual(installed,{uid:1000,gid:1000,mode:0o600,nlink:1,bytes:Buffer.byteLength(text)});
   const flat=JSON.stringify(calls);
   assert.equal(flat.includes(secret)||flat.includes(modelKey)||flat.includes(file),false);
-  assert.equal(calls.some(argv=>argv.includes('cp')&&argv.includes('qiwe-pilot-host:/tmp/qiwe-live-pilot.private.json')),true);
-  assert.equal(calls.some(argv=>argv.includes('sha256sum')&&argv.includes('/tmp/qiwe-live-pilot.private.json')),true);
+  const copied=calls.find(argv=>argv.includes('cp'));
+  assert.match(copied.at(-1),/^qiwe-pilot-host:\/tmp\/qiwe-private-[a-f0-9]{16}$/);
+  const temp=copied.at(-1).slice('qiwe-pilot-host:'.length);
+  assert.equal(calls.some(argv=>argv.includes('sha256sum')&&argv.includes(temp)),true);
+  assert.equal(calls.some(argv=>argv.includes('mv')&&argv.includes(temp)&&argv.includes('/tmp/qiwe-live-pilot.private.json')),true);
+  assert.equal(calls.some(argv=>argv.includes('rm')||argv.includes('qiwe-pilot-host:/tmp/qiwe-live-pilot.private.json')),false);
   assert.equal(calls.some(argv=>['sh','bash','node'].includes(argv[0])||argv.includes(text)),false);
  }finally{f.cleanup();}
 });
@@ -106,18 +110,42 @@ test('container install removes the destination after chown, stat, or post-copy 
   const file=writeHost(f.root),text=body();
   for(const kind of ['chown','stat','snapshot']){
    let copied=0,removed=0;
+   let removedPath;
    assert.throws(()=>runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync(command,args){
-    if(args.includes('rm')){removed++;return '';}
+    if(args.includes('rm')){removed++;removedPath=args.at(-1);return '';}
     if(args.includes('cp')){copied++;return '';}
     if(kind==='chown'&&args.includes('chown'))throw Error('boom '+secret);
     if(kind==='snapshot'&&args.includes('sha256sum'))fs.chmodSync(file,0o644);
-    if(args.includes('sha256sum'))return `${digestOf(text)}  /tmp/qiwe-live-pilot.private.json\n`;
+    if(args.includes('sha256sum'))return `${digestOf(text)}  /tmp/qiwe-private-temp\n`;
     if(args.includes('stat'))return kind==='stat'?`1000 1000 644 1 ${Buffer.byteLength(text)}\n`:`1000 1000 600 1 ${Buffer.byteLength(text)}\n`;
     return '';
-   }}),error=>!String(error.message).includes(secret)&&(error.message==='PILOT_PRIVATE_CONTAINER_UNVERIFIED'||error.message==='PILOT_PRIVATE_FILE_UNSAFE'));
+   }}),error=>!String(error.message).includes(secret)&&(error.message==='PILOT_PRIVATE_CONTAINER_UNVERIFIED'||error.message==='PILOT_PRIVATE_FILE_UNSAFE'||error.message==='PILOT_PRIVATE_INPUT_CHANGED'));
    assert.equal(copied,1,kind);assert.equal(removed,1,kind);
+   assert.match(removedPath,/^\/tmp\/qiwe-private-[a-f0-9]{16}$/);
+   assert.notEqual(removedPath,'/tmp/qiwe-live-pilot.private.json');
    fs.chmodSync(file,0o600);
   }
+ }finally{f.cleanup();}
+});
+test('a failed docker cp does not remove a container path',()=>{
+ const f=scratch();try{
+  const file=writeHost(f.root);
+  let removed=0;
+  assert.throws(()=>runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync(command,args){
+   if(args.includes('rm'))removed++;
+   if(args.includes('cp'))throw Error('cp failed '+secret);
+   return '';
+  }}),error=>error.message==='PILOT_PRIVATE_CONTAINER_UNVERIFIED'&&!error.message.includes(secret));
+  assert.equal(removed,0);
+ }finally{f.cleanup();}
+});
+test('install does not replace or delete a final name that appears after the absence check',()=>{
+ const f=scratch();try{
+  const destination=path.join(f.root,'container','secret.json'),occupant='OCCUPANT_NOT_OURS\n';
+  fs.mkdirSync(path.dirname(destination));
+  assert.throws(()=>installVerifiedPilotPrivateConfig({hostFile:writeHost(f.root),destination,beforePublish(){fs.writeFileSync(destination,occupant,{mode:0o600});}}),error=>error.message==='PILOT_PRIVATE_DESTINATION_INVALID'&&!error.message.includes(secret)&&!error.message.includes('OCCUPANT'));
+  assert.equal(fs.readFileSync(destination,'utf8'),occupant);
+  assert.deepEqual(fs.readdirSync(path.dirname(destination)),['secret.json']);
  }finally{f.cleanup();}
 });
 test('install rejects a symlink in an ancestor and does not write the target',()=>{

@@ -57,13 +57,14 @@ if(options.restorationPiScenario&&!options.restorationScenario)throw Error('REST
 if(options.restorationScenario&&(!options.fullHostConversations||process.platform!=='linux'))throw Error('RESTORATION_SCENARIO_REQUIRES_COMPLETE_LINUX_HOST');
 const runId=new Date().toISOString().replaceAll(/[:.]/g,'-')+'-'+randomUUID();
 const evidenceRoot=path.join(process.env.QIWE_EVIDENCE_ROOT??path.join(project,'.local/t7d'),runId);
+const {loadVerifierTypescript}=await import('./full-host-typescript.mjs');
+let ts;try{ts=await loadVerifierTypescript();}catch(error){console.error(error?.message==='FULL_HOST_TYPESCRIPT_UNAVAILABLE'?error.message:'FULL_HOST_TYPESCRIPT_UNAVAILABLE');process.exit(1);}
 fs.mkdirSync(evidenceRoot,{recursive:true});
 let candidate,directory,ownedManifest,frontagentExistingState;
 const writeAudit=value=>fs.writeFileSync(path.join(evidenceRoot,'full-host-audit.json'),JSON.stringify({runId,...value,...(frontagentExistingState?{frontagentExistingState:frontagentExistingState.audit}:{})},null,2));
 writeAudit({status:'preparing',events:[]});
 console.log('FULL_HOST_RUN',JSON.stringify({runId,evidenceRoot,status:'preparing'}));
 try{
-const ts=(await import('typescript')).default;
 if(!overlay||options.unpatched)throw Error('FULL_HOST_EXPLICIT_OVERLAY_REQUIRED');
 if(driver){const {verifyPreparedNativeSqlite}=await import('./prepare-native-sqlite.mjs');verifyPreparedNativeSqlite(source,driver);}
 else{const {verifyOriginalLinuxSqlite}=await import('./linux-runtime.mjs');verifyOriginalLinuxSqlite(source);}

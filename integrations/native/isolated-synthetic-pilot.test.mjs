@@ -84,3 +84,14 @@ test('verify-full-host isolated-synthetic flag completes the formal order and do
  assert.equal(mixed.stderr.trim(),'ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
  assert.equal(mixed.stdout.includes('FULL_HOST_RUN'),false);
 });
+
+test('typescript load is outside the audit try and a failure is a fixed code',async()=>{
+ const source=fs.readFileSync(path.join(here,'verify-full-host.mjs'),'utf8');
+ const runAt=source.indexOf("console.log('FULL_HOST_RUN'");
+ const loadAt=source.search(/import\('typescript'\)|loadVerifierTypescript\(/);
+ const auditCatch=source.indexOf('catch(error){writeAudit');
+ const tryStart=source.lastIndexOf('try{',auditCatch);
+ assert.ok(loadAt!==-1&&loadAt<runAt&&loadAt<tryStart);
+ const {loadVerifierTypescript}=await import('./full-host-typescript.mjs');
+ await assert.rejects(loadVerifierTypescript(async()=>{throw Error('Cannot find package typescript secret-loader-path');}),error=>error.message==='FULL_HOST_TYPESCRIPT_UNAVAILABLE'&&!error.message.includes('secret-loader-path')&&!String(error.stack).includes('secret-loader-path'));
+});
