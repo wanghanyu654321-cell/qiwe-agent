@@ -4,21 +4,32 @@ import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
-import ts from 'typescript';
-import {nativeVerificationOptions} from './verification-options.mjs';
-import {createFullHostCandidate} from './full-host-candidate.mjs';
-import {createRestorationSupervisorReceipt} from './full-host-restoration-supervisor.mjs';
-import {prepareOriginalPiRunner} from './role-capabilities-runner.mjs';
-import {d4OriginalHashes,d4SkillHashes} from './role-capabilities-overlay.mjs';
-import {applyFullHostPiDrain,applyFullHostPiAbort} from './full-host-restoration-pi-overlay.mjs';
-import {verifyOriginalShellImage,prepareOriginalShellCandidate} from './original-shell.mjs';
-import {cleanupOwnedContainers} from './real-container-cleanup.mjs';
-import {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disableExistingPilotPluginScan,restrictExistingPilotSessionKey,restrictExistingPilotSettings} from './frontagent-existing-state.ts';
-import {originalProductWeb} from './local-pilot-host.mjs';
-import {restrictPilotWebLoopback} from './controlled-real-web.mjs';
-import {validateControlledRealPilotScope} from './full-host-local-docker.mjs';
-import {createPilotRunLedger,openRestartLookup} from './controlled-real-run-budget.mjs';
-import {disableControlledRealPiRetries} from './controlled-real-pi-retry.mjs';
+if(process.argv.slice(2).includes('--isolated-synthetic')){
+ const {runIsolatedSyntheticFormalPath}=await import('./isolated-synthetic-pilot.mjs');
+ try{
+  const result=await runIsolatedSyntheticFormalPath({args:process.argv.slice(2),env:process.env});
+  console.log(JSON.stringify({status:result.status,order:result.order,restart:result.restart,reserve:result.reserve,disposed:result.disposed,reserved:result.reserved}));
+  fs.rmSync(result.root,{recursive:true,force:true});
+ }catch(error){
+  const code=typeof error?.message==='string'&&/^[A-Z0-9_]{1,80}$/.test(error.message)?error.message:'ISOLATED_SYNTHETIC_FAILED';
+  console.error(code);process.exitCode=1;
+ }
+ process.exit(process.exitCode??0);
+}
+const {nativeVerificationOptions}=await import('./verification-options.mjs');
+const {createFullHostCandidate}=await import('./full-host-candidate.mjs');
+const {createRestorationSupervisorReceipt}=await import('./full-host-restoration-supervisor.mjs');
+const {prepareOriginalPiRunner}=await import('./role-capabilities-runner.mjs');
+const {d4OriginalHashes,d4SkillHashes}=await import('./role-capabilities-overlay.mjs');
+const {applyFullHostPiDrain,applyFullHostPiAbort}=await import('./full-host-restoration-pi-overlay.mjs');
+const {verifyOriginalShellImage,prepareOriginalShellCandidate}=await import('./original-shell.mjs');
+const {cleanupOwnedContainers}=await import('./real-container-cleanup.mjs');
+const {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disableExistingPilotPluginScan,restrictExistingPilotSessionKey,restrictExistingPilotSettings}=await import('./frontagent-existing-state.ts');
+const {originalProductWeb}=await import('./local-pilot-host.mjs');
+const {restrictPilotWebLoopback}=await import('./controlled-real-web.mjs');
+const {validateControlledRealPilotScope}=await import('./full-host-local-docker.mjs');
+const {createPilotRunLedger,openRestartLookup}=await import('./controlled-real-run-budget.mjs');
+const {disableControlledRealPiRetries}=await import('./controlled-real-pi-retry.mjs');
 const here=path.dirname(fileURLToPath(import.meta.url)),project=path.resolve(here,'../..');
 const existingInput=parseExistingFrontagentStateOption(process.argv.slice(2));
 const inputArgs=existingInput.args,piFlags=inputArgs.filter(value=>value==='--restoration-pi-scenario');
@@ -46,6 +57,8 @@ if(options.restorationPiScenario&&!options.restorationScenario)throw Error('REST
 if(options.restorationScenario&&(!options.fullHostConversations||process.platform!=='linux'))throw Error('RESTORATION_SCENARIO_REQUIRES_COMPLETE_LINUX_HOST');
 const runId=new Date().toISOString().replaceAll(/[:.]/g,'-')+'-'+randomUUID();
 const evidenceRoot=path.join(process.env.QIWE_EVIDENCE_ROOT??path.join(project,'.local/t7d'),runId);
+const {loadVerifierTypescript}=await import('./full-host-typescript.mjs');
+let ts;try{ts=await loadVerifierTypescript();}catch(error){console.error(error?.message==='FULL_HOST_TYPESCRIPT_UNAVAILABLE'?error.message:'FULL_HOST_TYPESCRIPT_UNAVAILABLE');process.exit(1);}
 fs.mkdirSync(evidenceRoot,{recursive:true});
 let candidate,directory,ownedManifest,frontagentExistingState;
 const writeAudit=value=>fs.writeFileSync(path.join(evidenceRoot,'full-host-audit.json'),JSON.stringify({runId,...value,...(frontagentExistingState?{frontagentExistingState:frontagentExistingState.audit}:{})},null,2));
