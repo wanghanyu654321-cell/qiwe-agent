@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import {EventEmitter} from 'node:events';
+import {disposeConfirmedNewPilotEnv,witnessPilotEnvAbsence} from './controlled-real-env-disposition.mjs';
 
 // Exercise the adapter with deterministic local ports; no Docker or network call.
 function fixture(){
@@ -59,6 +61,33 @@ test('unknown stop retains the deny-by-default process routing until exit',async
  assert.notEqual(f.actual.spawn,originalSpawn);
  assert.throws(()=>f.actual.spawn('docker',args,options),/FORBIDDEN/);
  assert.throws(()=>f.actual.execFileSync('docker',['stop','miniclaw-marketing-999']),/CONTROL/);
+});
+test('real close disposes a witnessed new env file through the real disposition function',async()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-real-close-')),data=path.join(root,'data');
+ fs.mkdirSync(data);
+ const runId='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+ const scope={mode:'controlled-real-pilot',environment:'local-test',runId,networkName:'qiwe-pilot-'+runId,expiresAt:Date.now()+60000};
+ const receipt={version:3,controlledRealPilot:scope,docker:{mountpoint:'/var/lib/docker/volumes/qiwe-test/_data'}};
+ const child=new EventEmitter();child.pid=42;
+ const actual={spawn:()=>child,execFile:()=>child,execFileSync:(...args)=>{if(args[1].includes('info'))return '[]';if(args[1].includes('stop'))child.emit('close',0);},exec:()=>{},execSync:()=>{},spawnSync:()=>{},fork:()=>{}};
+ const source=fs.readFileSync(new URL('./controlled-real-container-transport.mjs',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'').replaceAll('export function ','function ');
+ const install=new vm.Script('(function(){'+source+';return installControlledRealContainerTransport;})()').runInNewContext({fs:{constants:fs.constants,readFileSync:target=>target=== '/proc/1/fd/8'?JSON.stringify(receipt):fs.readFileSync(target),realpathSync:target=>target,openSync:fs.openSync,writeSync:fs.writeSync,closeSync:fs.closeSync,fstatSync:fs.fstatSync},path:path.posix,childProcess:actual,syncBuiltinESMExports:()=>{},process:{platform:'linux',getuid:()=>1000,getgid:()=>1000,cwd:()=>root,env:{QIWE_RESTORATION_RECEIPT:'/proc/1/fd/8'}},
+  witnessPilotEnvAbsence,disposeConfirmedNewPilotEnv,
+  inspectLocalDockerReceipt:value=>value.docker,localDocker:'/qiwe-control/docker',localEndpoint:'unix:///qiwe-control/docker.sock',
+  admitLocalDockerSpawn:(cmd,args,opts,state)=>{if(cmd!=='docker'||!state.ready||state.alreadyStarted||args[4]!=='miniclaw-marketing-123')throw Error('LOCAL_DOCKER_SPAWN_FORBIDDEN');},
+  admitControlledRealDockerRun:args=>({name:args[4],args:[...args],mounts:[]}),translateLocalMounts:args=>args,
+  admitDockerControl:(cmd,args,owners)=>{if(cmd!=='docker'||args[0]!=='info'&&!(args[0]==='stop'&&owners.has(args[1])))throw Error('CONTROL');return args;},
+  admitDockerShell:()=>['stop','miniclaw-marketing-123'],setTimeout,clearTimeout,Promise,Set,Error,JSON,Object,Number,String});
+ const manifest=path.join(root,'owned');fs.writeFileSync(manifest,'');
+ const transport=install({root,folder:'marketing',accountId:'member',image:'sha256:'+'ab'.repeat(32),originalShell:{},controlledRealPilot:scope,manifest,preload:path.join(root,'preload.mjs'),modelModule:path.join(root,'model.ts')});
+ try{
+  transport.prepare({GROUPS_DIR:path.join(root,'groups'),DATA_DIR:data});
+  const file=path.join(data,'env','marketing','default','main','env');fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'SECRET_NOT_ORIGINAL\n');
+  transport.activate({phase:()=>'ready'});
+  actual.spawn('docker',['run','-i','--rm','--name','miniclaw-marketing-123','image'],{});
+  await transport.close();
+  assert.equal(fs.existsSync(file),false);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 test('rejects mismatched scope and refuses malformed options before installing process routes',()=>{
  const f=fixture(),original=f.actual.spawn;

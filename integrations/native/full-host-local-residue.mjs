@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
+import {admitPiSessionBeyondSyntheticProtocol} from './pi-session-recovery.mjs';
 const skills=['beauty-local-content','vendor-content-strategy','vendor-copywriting'];
 const defaultFolder='synthetic-restoration-role';
 const safeFolder=value=>typeof value==='string'&&/^[a-z0-9][a-z0-9_-]{0,127}$/.test(value);
@@ -81,7 +82,12 @@ export function classifyLocalRunnerFile(relative,raw,context,observedSessions=ne
    if(raw==="MINICLAW_CLAUDE_ENDPOINT_KIND='official'\nMINICLAW_AGENT_MCP_POLICY='disabled'\n")return 'fixed_official_endpoint_disabled_mcp_env';
    return undefined;
   }
-  if(relative.startsWith(root+'sessions/')&&/^\d{4}-\d\d-\d\dT[\d-Z]+_[-a-f0-9]{36}\.jsonl$/.test(relative.slice((root+'sessions/').length)))return settledSession(relative,raw,context,observedSessions,folder)?'settled_pi_session_exact_d5':undefined;
+  if(relative.startsWith(root+'sessions/')&&/^\d{4}-\d\d-\d\dT[\d-Z]+_[-a-f0-9]{36}\.jsonl$/.test(relative.slice((root+'sessions/').length))){
+   // No original Pi 0.84.2 session sample is available. The gate stays closed,
+   // so only the already witnessed synthetic exact-D5 shape can be accepted.
+   if(admitPiSessionBeyondSyntheticProtocol().admitted)return undefined;
+   return settledSession(relative,raw,context,observedSessions,folder)?'settled_pi_session_exact_d5':undefined;
+  }
   const value=JSON.parse(raw);
   if(relative==='config/container-claude-json.json')return exact(value,{hasCompletedOnboarding:true,autoUpdates:false})?'fixed_original_onboarding_config':undefined;
   if(['.miniclaw-native-settings.json','agent/auth.json','agent/models-store.json'].some(p=>relative===root+p))return exact(value,{})?'empty_original_runtime_store':undefined;

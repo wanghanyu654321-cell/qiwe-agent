@@ -44,7 +44,8 @@ export function installControlledRealContainerTransport(options){
    const fd=fs.openSync(manifest,fs.constants.O_WRONLY|fs.constants.O_APPEND|fs.constants.O_NOFOLLOW);
    try{const stat=fs.fstatSync(fd);if(!stat.isFile()||stat.nlink!==1)fail('MANIFEST');fs.writeSync(fd,admitted.name+'\n');}finally{fs.closeSync(fd);}
    owned.add(admitted.name);
-   child=originals.spawn(localDocker,['--host',localEndpoint,...translated],spawnOptions);
+   try{child=originals.spawn(localDocker,['--host',localEndpoint,...translated],spawnOptions);}
+   catch(error){if(envWitness)disposeConfirmedNewPilotEnv(envDataDir,folder,envWitness,{state:'exited',exitCode:null,signal:'SPAWN_FAILED'});throw error;}
    child.once('close',(code,signal)=>{exited=true;exitCode=code??null;exitSignal=signal??null;owned.delete(admitted.name);});
    return child;
   },
@@ -70,14 +71,12 @@ export function installControlledRealContainerTransport(options){
   async close(){
    if(disposalUnknown)throw Error('CONTROLLED_REAL_TRANSPORT_ENV_DISPOSE_UNKNOWN');
    if(closed)return;active=false;
+   const disposeWitnessed=executor=>{if(!envWitness)return;try{disposeConfirmedNewPilotEnv(envDataDir,folder,envWitness,executor);}catch(error){disposalUnknown=true;throw error;}};
    if(child&&!exited){
     for(const name of owned)originals.execFileSync(localDocker,['--host',localEndpoint,...admitDockerControl('docker',['stop',name],owned,prefix)],{encoding:'utf8',timeout:20000});
-    if(!exited)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('CONTROLLED_REAL_TRANSPORT_CLOSE_UNKNOWN')),10000);child.once('close',()=>{clearTimeout(timer);resolve();});});
+    if(!exited)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{try{disposeWitnessed({state:'exited',exitCode:null,signal:'CLOSE_TIMEOUT'});}catch(error){reject(error);return;}reject(Error('CONTROLLED_REAL_TRANSPORT_CLOSE_UNKNOWN'));},10000);child.once('close',()=>{clearTimeout(timer);resolve();});});
    }
-   if(child&&exited&&envWitness){
-    try{disposeConfirmedNewPilotEnv(envDataDir,folder,envWitness,{state:'exited',exitCode,signal:exitSignal});}
-    catch(error){disposalUnknown=true;throw error;}
-   }
+   if(child&&exited)disposeWitnessed({state:'exited',exitCode,signal:exitSignal});
    // Keep the deny-by-default routing installed through process exit. The
    // original host may still be shutting down even after our owned runner
    // stops; restoring unrestricted child_process here would reopen Docker.

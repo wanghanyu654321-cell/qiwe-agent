@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 
 const witnesses=new WeakSet();
 const fixedTexts=[
@@ -34,14 +35,47 @@ export function witnessPilotEnvAbsence(dataDir,folder){
  const seen=walk(dataDir,folder);
  if(seen.absentAt===-1){
   const file=seen.chain.at(-1);
-  if(file.kind!=='file')fail('PILOT_ENV_PATH_UNSAFE');
-  const witness=freeze({status:'preexisting',dataDir,folder,root:stamp(root),chain:seen.chain.slice(0,-1),file});
+  if(file.kind!=='file'||file.nlink!=='1')fail('PILOT_ENV_PATH_UNSAFE');
+  const opened=readRegular(seen.file);
+  if(!same(stamp(opened.stat),file))fail('PILOT_ENV_WITNESS_INVALID');
+  const witness=freeze({status:'preexisting',dataDir,folder,root:stamp(root),chain:seen.chain.slice(0,-1),file:{...file,contentSha256:opened.sha256}});
   witnesses.add(witness);return witness;
  }
  const witness=freeze({status:'absent',dataDir,folder,root:stamp(root),absentAt:seen.absentAt,chain:seen.chain});
  witnesses.add(witness);return witness;
 }
-function same(left,right){return left.dev===right.dev&&left.ino===right.ino;}
+function same(left,right){return !!left&&!!right&&left.dev===right.dev&&left.ino===right.ino;}
+function readRegular(file){
+ const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+ try{
+  const stat=fs.fstatSync(fd,{bigint:true});
+  if(!stat.isFile()||stat.nlink!==1n||stat.size>131072n)fail('PILOT_ENV_PATH_UNSAFE');
+  const raw=Buffer.alloc(Number(stat.size));
+  let offset=0;while(offset<raw.length){const count=fs.readSync(fd,raw,offset,raw.length-offset,offset);if(count===0)break;offset+=count;}
+  if(offset!==raw.length)fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
+  const again=fs.fstatSync(fd,{bigint:true});
+  if(!same(stamp(again),stamp(stat))||again.size!==stat.size)fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
+  return {stat,raw,sha256:createHash('sha256').update(raw).digest('hex')};
+ }finally{fs.closeSync(fd);}
+}
+function unlinkVerified(file,identity){
+ const parent=path.dirname(file);
+ const parentFd=fs.openSync(parent,fs.constants.O_RDONLY|fs.constants.O_DIRECTORY|fs.constants.O_NOFOLLOW);
+ let fileFd;
+ try{
+  fileFd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+  const stat=fs.fstatSync(fileFd,{bigint:true});
+  if(!stat.isFile()||stat.nlink!==1n||!same(stamp(stat),identity))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
+  const raw=Buffer.alloc(Number(stat.size));
+  let offset=0;while(offset<raw.length){const count=fs.readSync(fileFd,raw,offset,raw.length-offset,offset);if(count===0)break;offset+=count;}
+  const reread=Buffer.alloc(raw.length);fs.readSync(fileFd,reread,0,reread.length,0);
+  if(offset!==raw.length||!reread.equals(raw))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
+  fs.unlinkSync(file);
+  if(fs.fstatSync(fileFd,{bigint:true}).nlink!==0n)fail('PILOT_ENV_DISPOSE_UNKNOWN');
+  try{fs.lstatSync(file);fail('PILOT_ENV_DISPOSE_UNKNOWN');}catch(error){if(error?.code!=='ENOENT')fail('PILOT_ENV_DISPOSE_UNKNOWN');}
+  fs.fsyncSync(parentFd);
+ }finally{if(fileFd!==undefined)fs.closeSync(fileFd);fs.closeSync(parentFd);}
+}
 function confirmed(executor){
  if(!executor||Object.keys(executor).sort().join(',')!=='exitCode,signal,state'||executor.state!=='exited')return false;
  const code=executor.exitCode===null||Number.isInteger(executor.exitCode);
@@ -54,7 +88,16 @@ export function disposeConfirmedNewPilotEnv(dataDir,folder,witness,executor){
  if(!witnesses.has(witness)||witness.dataDir!==dataDir||witness.folder!==folder||!confirmed(executor))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
  const root=fs.lstatSync(dataDir,{bigint:true});
  if(root.isSymbolicLink()||!root.isDirectory()||!same(stamp(root),witness.root))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
- if(witness.status==='preexisting')return freeze({disposed:false,reason:'original_file_retained',extraEntries:0});
+ if(witness.status==='preexisting'){
+  const target=path.join(dataDir,'env',folder,'default','main','env');
+  let listed;try{listed=fs.lstatSync(target,{bigint:true});}catch(error){if(error?.code==='ENOENT')fail('PILOT_ENV_DISPOSE_UNCONFIRMED');throw error;}
+  if(listed.isSymbolicLink()||!listed.isFile()||listed.nlink!==1n)fail('PILOT_ENV_PATH_UNSAFE');
+  const opened=readRegular(target);
+  if(same(stamp(opened.stat),witness.file)&&opened.sha256===witness.file.contentSha256)return freeze({disposed:false,reason:'original_file_retained',extraEntries:0});
+  if(same(stamp(opened.stat),witness.file))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
+  unlinkVerified(target,stamp(opened.stat));
+  return freeze({disposed:true,reason:'crash_residue_removed',extraEntries:0});
+ }
  const seen=walk(dataDir,folder);
  if(seen.chain.length<witness.chain.length||!witness.chain.every((item,index)=>same(item,seen.chain[index])&&item.name===seen.chain[index].name))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
  if(seen.absentAt!==-1)return freeze({disposed:false,reason:'still_absent',extraEntries:0});
@@ -75,7 +118,8 @@ export function disposeConfirmedNewPilotEnv(dataDir,folder,witness,executor){
   if(!names.includes('env'))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
   const extraEntries=names.filter(name=>name!=='env').length;
   if(fixedTexts.some(text=>text.equals(raw)))return freeze({disposed:false,reason:'fixed_secret_free_retained',extraEntries});
-  if(!same(stamp(fs.fstatSync(parentFd,{bigint:true})),parentStamp)||!same(stamp(fs.lstatSync(seen.file,{bigint:true})),created.at(-1)))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
+  const reread=Buffer.alloc(raw.length);fs.readSync(fileFd,reread,0,reread.length,0);
+  if(!same(stamp(fs.fstatSync(parentFd,{bigint:true})),parentStamp)||!same(stamp(fs.fstatSync(fileFd,{bigint:true})),created.at(-1))||!reread.equals(raw))fail('PILOT_ENV_DISPOSE_UNCONFIRMED');
   fs.unlinkSync(seen.file);
   if(fs.fstatSync(fileFd,{bigint:true}).nlink!==0n)fail('PILOT_ENV_DISPOSE_UNKNOWN');
   try{fs.lstatSync(seen.file);fail('PILOT_ENV_DISPOSE_UNKNOWN');}catch(error){if(error?.code!=='ENOENT')fail('PILOT_ENV_DISPOSE_UNKNOWN');}

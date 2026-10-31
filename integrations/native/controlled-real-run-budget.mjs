@@ -16,8 +16,10 @@ function readLedger(file,runId){
 export function createPilotRunLedger(file,input){
  if(typeof file!=='string'||!path.isAbsolute(file)||!runIdOk(input?.runId)||!Number.isSafeInteger(input.maxRequests)||input.maxRequests<1||input.maxRequests>8||!Number.isSafeInteger(input.expiresAt)||input.expiresAt<=Date.now())fail('PILOT_BUDGET_INVALID');
  const body=JSON.stringify({version:1,runId:input.runId,maxRequests:input.maxRequests,reserved:0,expiresAt:input.expiresAt});
- const fd=fs.openSync(file,'wx',0o600);
+ const fd=fs.openSync(file,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_NOFOLLOW,0o600);
  try{fs.writeFileSync(fd,body);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+ const directory=fs.openSync(path.dirname(file),fs.constants.O_RDONLY|fs.constants.O_DIRECTORY|fs.constants.O_NOFOLLOW);
+ try{fs.fsyncSync(directory);}finally{fs.closeSync(directory);}
  return Object.freeze(parse(body,input.runId));
 }
 export function openPilotRunLedger(file,expected){
@@ -26,15 +28,18 @@ export function openPilotRunLedger(file,expected){
  return Object.freeze({...value});
 }
 export function reservePilotModelCall(file,expected){
- const lock=file+'.lock';let lockFd;try{lockFd=fs.openSync(lock,'wx',0o600);}catch{fail('PILOT_BUDGET_LOCK_HELD');}
+ const lock=file+'.lock';let lockFd;try{lockFd=fs.openSync(lock,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_NOFOLLOW,0o600);}catch{fail('PILOT_BUDGET_LOCK_HELD');}
  try{
-  const value=readLedger(file,expected.runId);
-  if(value.maxRequests!==expected.maxRequests||value.expiresAt!==expected.expiresAt)fail('PILOT_BUDGET_MISMATCH');
-  if(Date.now()>=value.expiresAt||value.reserved>=value.maxRequests)fail('PILOT_BUDGET_EXHAUSTED');
-  const next={...value,reserved:value.reserved+1};const body=JSON.stringify(next);
-  const fd=fs.openSync(file,'r+');
-  try{fs.ftruncateSync(fd,0);fs.writeFileSync(fd,body);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
-  return Object.freeze(next);
+  const fd=fs.openSync(file,fs.constants.O_RDWR|fs.constants.O_NOFOLLOW);
+  try{
+   const stat=fs.fstatSync(fd);if(!stat.isFile()||stat.nlink!==1||stat.size>4096)fail('PILOT_BUDGET_UNREADABLE');
+   const value=parse(fs.readFileSync(fd,'utf8'),expected.runId);
+   if(value.maxRequests!==expected.maxRequests||value.expiresAt!==expected.expiresAt)fail('PILOT_BUDGET_MISMATCH');
+   if(Date.now()>=value.expiresAt||value.reserved>=value.maxRequests)fail('PILOT_BUDGET_EXHAUSTED');
+   const next={...value,reserved:value.reserved+1},body=JSON.stringify(next);
+   fs.ftruncateSync(fd,0);fs.writeSync(fd,body,0,'utf8');fs.fsyncSync(fd);
+   return Object.freeze(next);
+  }finally{fs.closeSync(fd);}
  }finally{fs.closeSync(lockFd);fs.unlinkSync(lock);}
 }
 /** Restart lookup can read the durable counter and cannot spend it or start a runner. */
