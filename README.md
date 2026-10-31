@@ -98,6 +98,22 @@ npm run benchmark:local
 
 `benchmark:local`测量4个独立成员入口共享真实临时SQLite/Excel的本地耗时，输出冷首用、热串行及4人并发样本、分段P50/P95、错误与脱敏诊断。SDK和Native仅为合成端口，阶段可能嵌套；这些结果不包含模型、平台网络或手机收取时间，不能作为生产SLA。
 
+### 离线企微回调模拟
+
+在 Windows PowerShell 里，于仓库根目录执行。这一步只跑新增的离线样本，不跑全量测试，不连接企微，不调用 DeepSeek，也不带 `--controlled-real-pilot` 或 `run-live-preflight`。
+
+```powershell
+Set-Location '仓库根目录'
+npm ci --ignore-scripts
+node scripts/offline-wecom-sim.mjs
+```
+
+假密钥在每次进程里临时生成，前缀是 `fake-token-`，接收方固定为 `fake-corp-offline-sim`。脚本用这把密钥把 `fixtures/offline-wecom-sim/samples.json` 里的三份合成回调走完：验签、解密、映射到唯一测试员工「B店王伊君」、交给 Frontagent 替身、再加密回复。三份样本是普通文字问答、慢且较长的回复、未绑定成员。验签只核对这把本地假密钥。加密回复里没有平台错误码。结果不能当作平台回执、手机实收或原 Agent 已恢复。
+
+PR #30 点名的三份原 Pi 离线 jsonl（无工具直接回答、同会话追问、非 read 工具）本仓库没有原字节，`pi-session-recovery.mjs` 仍拒绝猜测 schema。本目录不补造那三份会话。
+
+`tests/offline-wecom-sim-pr30-gaps.test.ts` 用 `it.fails` 记下审查指出的四处缺口：容器只挂了 preload 和模型文件、账本没有接到启动/重启且拒绝请求仍扣次、崩溃/拉起失败/关闭超时会跳过 env 清理且 preexisting 不复查内容、分类器没有调用 `pi-session-recovery.mjs`。这些用例现在按预期失败，不能当成生产问题已经修好。
+
 ## 文件职责
 
 | 文件 | 职责 |
