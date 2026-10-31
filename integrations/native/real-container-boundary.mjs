@@ -113,6 +113,7 @@ export function admitControlledRealDockerRun(args,options){
   }catch{throw Error('CONTROLLED_REAL_PRELOAD');}
  };
  const pinnedPreload=regularFile(preload),pinnedModel=regularFile(modelModule);
+ if(args.some(value=>typeof value==='string'&&value.includes('QIWE_PILOT_MODEL_LEDGER')))throw Error('CONTROLLED_REAL_LEDGER_MOUNT');
  // The existing original-shell admission validates the command, every mount,
  // user identity and image evidence. Only its offline-injected flags are discarded.
  const admitted=admitDockerRun(args,{...options,provider:pinnedPreload,startupFailure:false});

@@ -4,6 +4,7 @@ import childProcess from 'node:child_process';
 import {syncBuiltinESMExports} from 'node:module';
 import {admitControlledRealDockerRun,admitDockerControl,admitDockerShell,admitLocalDockerSpawn} from './real-container-boundary.mjs';
 import {inspectLocalDockerReceipt,translateLocalMounts,localDocker,localEndpoint} from './full-host-local-docker.mjs';
+import {disposeConfirmedNewPilotEnv,witnessPilotEnvAbsence} from './controlled-real-env-disposition.mjs';
 
 let transportInstalled=false;
 // Installs the original Docker runner's transport only within the supervised
@@ -25,7 +26,7 @@ export function installControlledRealContainerTransport(options){
  if(receipt.version!==3||JSON.stringify(receipt.controlledRealPilot)!==JSON.stringify(scope))fail('SCOPE');
  const facts=inspectLocalDockerReceipt(receipt);
  const originals=Object.fromEntries(['spawn','exec','execFile','execFileSync','execSync','spawnSync','fork'].map(name=>[name,childProcess[name]]));
- const owned=new Set(),prefix='miniclaw-'+folder+'-';let expectedMounts,gate,started=false,active=false,exited=false,closed=false,child;
+ const owned=new Set(),prefix='miniclaw-'+folder+'-';let expectedMounts,gate,started=false,active=false,exited=false,closed=false,child,envWitness,envDataDir,exitCode=null,exitSignal=null,disposalUnknown=false;
  const route=(command,args)=>['--host',localEndpoint,...admitDockerControl(command,args,owned,prefix)];
  const ports={
   execFileSync:(command,args,...rest)=>originals.execFileSync(localDocker,route(command,args),...rest),
@@ -43,8 +44,9 @@ export function installControlledRealContainerTransport(options){
    const fd=fs.openSync(manifest,fs.constants.O_WRONLY|fs.constants.O_APPEND|fs.constants.O_NOFOLLOW);
    try{const stat=fs.fstatSync(fd);if(!stat.isFile()||stat.nlink!==1)fail('MANIFEST');fs.writeSync(fd,admitted.name+'\n');}finally{fs.closeSync(fd);}
    owned.add(admitted.name);
-   child=originals.spawn(localDocker,['--host',localEndpoint,...translated],spawnOptions);
-   child.once('close',()=>{exited=true;owned.delete(admitted.name);});
+   try{child=originals.spawn(localDocker,['--host',localEndpoint,...translated],spawnOptions);}
+   catch(error){if(envWitness)disposeConfirmedNewPilotEnv(envDataDir,folder,envWitness,{state:'exited',exitCode:null,signal:'SPAWN_FAILED'});throw error;}
+   child.once('close',(code,signal)=>{exited=true;exitCode=code??null;exitSignal=signal??null;owned.delete(admitted.name);});
    return child;
   },
  };
@@ -55,6 +57,7 @@ export function installControlledRealContainerTransport(options){
   prepare(config){
    if(closed||expectedMounts||!config||![config.GROUPS_DIR,config.DATA_DIR].every(inside))fail('PREPARE');
    const group=path.join(config.GROUPS_DIR,folder),data=config.DATA_DIR,skills=['beauty-local-content','vendor-content-strategy','vendor-copywriting'];
+   envDataDir=data;envWitness=witnessPilotEnvAbsence(data,folder);
    expectedMounts=Object.fromEntries([
     ['/workspace/group',group,false],['/workspace/ipc',path.join(data,'ipc',folder),false],['/home/node/.claude',path.join(data,'sessions',folder,'.claude'),false],
     ['/home/node/.claude.json',path.join(data,'config/container-claude-json.json'),true],
@@ -66,11 +69,14 @@ export function installControlledRealContainerTransport(options){
   },
   activate(value){if(!expectedMounts)fail('PREPARE');if(closed||active||!value||typeof value.phase!=='function'||value.phase()!=='ready'||Date.now()>=scope.expiresAt)fail('GATE');gate=value;active=true;},
   async close(){
+   if(disposalUnknown)throw Error('CONTROLLED_REAL_TRANSPORT_ENV_DISPOSE_UNKNOWN');
    if(closed)return;active=false;
+   const disposeWitnessed=executor=>{if(!envWitness)return;try{disposeConfirmedNewPilotEnv(envDataDir,folder,envWitness,executor);}catch(error){disposalUnknown=true;throw error;}};
    if(child&&!exited){
     for(const name of owned)originals.execFileSync(localDocker,['--host',localEndpoint,...admitDockerControl('docker',['stop',name],owned,prefix)],{encoding:'utf8',timeout:20000});
-    if(!exited)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('CONTROLLED_REAL_TRANSPORT_CLOSE_UNKNOWN')),10000);child.once('close',()=>{clearTimeout(timer);resolve();});});
+    if(!exited)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{try{disposeWitnessed({state:'exited',exitCode:null,signal:'CLOSE_TIMEOUT'});}catch(error){reject(error);return;}reject(Error('CONTROLLED_REAL_TRANSPORT_CLOSE_UNKNOWN'));},10000);child.once('close',()=>{clearTimeout(timer);resolve();});});
    }
+   if(child&&exited)disposeWitnessed({state:'exited',exitCode,signal:exitSignal});
    // Keep the deny-by-default routing installed through process exit. The
    // original host may still be shutting down even after our owned runner
    // stops; restoring unrestricted child_process here would reopen Docker.

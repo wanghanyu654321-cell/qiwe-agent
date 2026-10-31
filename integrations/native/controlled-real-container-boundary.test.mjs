@@ -41,6 +41,7 @@ test('rejects foreign scope, exhausted deadline, unsafe limits, identity, shell,
    {expectedMounts:{'/workspace/group':{source:f.group,readonly:true}}},
   ])assert.throws(()=>boundary.admitControlledRealDockerRun(f.args,{...f.options,...bad}));
   assert.throws(()=>boundary.admitControlledRealDockerRun([...f.args.slice(0,-1),'-e','ANTHROPIC_API_KEY=unexpected',f.image],f.options));
+  assert.throws(()=>boundary.admitControlledRealDockerRun([...f.args.slice(0,-1),'-e','QIWE_PILOT_MODEL_LEDGER=/host/pilot-model-ledger.json',f.image],f.options),/LEDGER_MOUNT/);
   assert.throws(()=>boundary.admitControlledRealDockerRun([...f.args.slice(0,-1),'-v',f.root+':/workspace/ipc',f.image],f.options));
  }finally{f.cleanup();}
 });

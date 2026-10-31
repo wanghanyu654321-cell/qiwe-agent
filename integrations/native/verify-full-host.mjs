@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import ts from 'typescript';
@@ -17,6 +17,7 @@ import {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disabl
 import {originalProductWeb} from './local-pilot-host.mjs';
 import {restrictPilotWebLoopback} from './controlled-real-web.mjs';
 import {validateControlledRealPilotScope} from './full-host-local-docker.mjs';
+import {createPilotRunLedger,openRestartLookup} from './controlled-real-run-budget.mjs';
 import {disableControlledRealPiRetries} from './controlled-real-pi-retry.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url)),project=path.resolve(here,'../..');
 const existingInput=parseExistingFrontagentStateOption(process.argv.slice(2));
@@ -275,6 +276,11 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
    fs.writeFileSync(target,ts.transpileModule(fs.readFileSync(path.join(directory,'src',name),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText);
   }
   env.QIWE_CONTROLLED_REAL_SCOPE=JSON.stringify(scope);
+  // The durable model ledger stays on the supervisor host, outside every
+  // runner mount. QIWE_PILOT_MODEL_LEDGER is deliberately not forwarded.
+  delete env.QIWE_PILOT_MODEL_LEDGER;
+  const ledgerPath=path.join(evidenceRoot,'pilot-model-ledger.json');
+  createPilotRunLedger(ledgerPath,{runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,maxRequests:8,expiresAt:deadline});
   const supervisor=await createRestorationSupervisorReceipt({hostRoot:directory,dataDir:path.join(directory,'data'),runId:runId+'-live',timeoutMs:5000,controlledRealPilot:scope});
   env.QIWE_RESTORATION_RECEIPT=supervisor.locator;
   console.log('FULL_HOST_PHASE',JSON.stringify({runId,phase:'controlled-real',status:'starting'}));
@@ -283,7 +289,11 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   if(fs.existsSync(path.join(directory,'frontagent-live-cleanup-unknown.json')))throw Error('CONTROLLED_REAL_CLEANUP_UNKNOWN');
   if(result.error)throw result.error;
   if(result.status!==0)throw Error('CONTROLLED_REAL_WORKER_FAILED');
-  writeAudit({...candidate.audit,status:'controlled-real-worker-stopped',limitations:instrumentation.localDocker.limitations});
+  const restartLookup=spawnSync(process.execPath,['--input-type=module','-e',`import {openRestartLookup} from ${JSON.stringify(pathToFileURL(path.join(here,'controlled-real-run-budget.mjs')).href)}; const lookup=openRestartLookup(process.argv[1], process.argv[2]); try{lookup.startRunner();}catch(error){if(!String(error.message).includes('PILOT_RESTART_RUNNER_FORBIDDEN'))throw error;} lookup.read(()=>undefined);`,ledgerPath,process.env.QIWE_LOCAL_DOCKER_RUN_ID],{encoding:'utf8'});
+  if(restartLookup.status!==0)throw Error('CONTROLLED_REAL_RESTART_LOOKUP_FAILED');
+  const hostedLookup=openRestartLookup(ledgerPath,process.env.QIWE_LOCAL_DOCKER_RUN_ID);
+  try{hostedLookup.startRunner();throw Error('CONTROLLED_REAL_RESTART_RUNNER_STARTED');}catch(error){if(!String(error?.message).includes('PILOT_RESTART_RUNNER_FORBIDDEN'))throw error;}
+  writeAudit({...candidate.audit,status:'controlled-real-worker-stopped',limitations:[...instrumentation.localDocker.limitations,'Restart lookup refuses a new runner; this source path has not been executed as a live pilot']});
  }else{
  for(const phase of ['boot','restart']){
   env.QIWE_FULL_HOST_PHASE=phase;env.QIWE_FULL_HOST_EVIDENCE=path.join(directory,'evidence-'+phase+'.json');
