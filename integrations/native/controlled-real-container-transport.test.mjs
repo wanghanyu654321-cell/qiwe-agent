@@ -15,7 +15,9 @@ function fixture(){
  const fakeFs={constants:{O_WRONLY:1,O_APPEND:2,O_NOFOLLOW:4},readFileSync:p=>{assert.equal(p,'/proc/1/fd/8');return JSON.stringify(receipt);},realpathSync:p=>p,openSync:()=>7,writeSync:(_fd,s)=>owned.push(s),closeSync:()=>{},fstatSync:()=>({isFile:()=>true,nlink:1})};
  const fakeProcess={platform:'linux',getuid:()=>1000,getgid:()=>1000,cwd:()=>'/tmp/job',env:{QIWE_RESTORATION_RECEIPT:'/proc/1/fd/8'}};
  const source=fs.readFileSync(new URL('./controlled-real-container-transport.mjs',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'').replaceAll('export function ','function ');
+ const disposed=[];
  const install=new vm.Script('(function(){'+source+';return installControlledRealContainerTransport;})()').runInNewContext({fs:fakeFs,path:path.posix,childProcess:actual,syncBuiltinESMExports:()=>{},process:fakeProcess,
+  witnessPilotEnvAbsence:(dataDir,folder)=>({status:'absent',dataDir,folder}),disposeConfirmedNewPilotEnv:(...args)=>{disposed.push(args);return {disposed:false,reason:'still_absent'};},
   inspectLocalDockerReceipt:r=>{assert.equal(r.version,3);return r.docker;},localDocker:'/qiwe-control/docker',localEndpoint:'unix:///qiwe-control/docker.sock',
   admitLocalDockerSpawn:(cmd,args,opts,s)=>{if(cmd!=='docker'||!s.ready||s.alreadyStarted||args[4]!=='miniclaw-marketing-123')throw Error('LOCAL_DOCKER_SPAWN_FORBIDDEN');},
   admitControlledRealDockerRun:(args,opts)=>({name:args[4],args:[...args],mounts:[]}),translateLocalMounts:args=>args,
@@ -23,7 +25,7 @@ function fixture(){
   admitDockerShell:(cmd,owners)=>{const name=cmd.replace('docker stop ','');if(!owners.has(name))throw Error('CONTROL');return ['stop',name];},
   setTimeout,clearTimeout,Promise,Set,Error,JSON,Object,Number,String});
  const opts={root:'/tmp/job',folder:'marketing',accountId:'member',image:'sha256:'+'a'.repeat(64),originalShell:{},controlledRealPilot:scope,manifest:'/tmp/job/owned',preload:'/tmp/job/preload.mjs',modelModule:'/tmp/job/model.ts'};
- return {install,opts,scope,receipt,calls,owned,actual,child,state};
+ return {install,opts,scope,receipt,calls,owned,actual,child,state,disposed};
 }
 test('requires prepared original gate, routes exactly one runner and keeps control ownership',async()=>{
  const f=fixture(),originalSpawn=f.actual.spawn,transport=f.install(f.opts);
@@ -44,6 +46,7 @@ test('requires prepared original gate, routes exactly one runner and keeps contr
  assert.equal(f.actual.execFile('docker',['stop','miniclaw-marketing-123'],execOptions,callback),f.child);
  const routed=f.calls.find(call=>call[0]==='execFile');assert.equal(routed[3],execOptions);assert.equal(routed[4],callback);
  await transport.close();assert.ok(f.calls.some(call=>call[0]==='execFileSync'&&call[2].includes('stop')));
+ assert.equal(f.disposed.length,1);assert.equal(JSON.stringify(f.disposed[0][3]),JSON.stringify({state:'exited',exitCode:0,signal:null}));
  assert.notEqual(f.actual.spawn,originalSpawn);
  assert.throws(()=>f.actual.spawn('docker',args,options),/FORBIDDEN/);
  assert.throws(()=>f.actual.execFileSync('docker',['stop','miniclaw-marketing-123']),/CONTROL/);
@@ -52,7 +55,7 @@ test('unknown stop retains the deny-by-default process routing until exit',async
  const f=fixture(),originalSpawn=f.actual.spawn,transport=f.install(f.opts),args=['run','-i','--rm','--name','miniclaw-marketing-123',f.opts.image],options={stdio:['pipe','pipe','pipe']};
  transport.prepare({GROUPS_DIR:'/tmp/job/groups',DATA_DIR:'/tmp/job/data'});transport.activate({phase:()=> 'ready'});
  f.actual.spawn('docker',args,options);f.state.stopFails=true;
- await assert.rejects(transport.close(),/stop unknown/);
+ await assert.rejects(transport.close(),/stop unknown/);assert.equal(f.disposed.length,0);
  assert.notEqual(f.actual.spawn,originalSpawn);
  assert.throws(()=>f.actual.spawn('docker',args,options),/FORBIDDEN/);
  assert.throws(()=>f.actual.execFileSync('docker',['stop','miniclaw-marketing-999']),/CONTROL/);
