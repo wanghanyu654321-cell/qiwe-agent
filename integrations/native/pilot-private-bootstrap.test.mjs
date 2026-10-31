@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {assertIsolatedSyntheticClosed,installVerifiedPilotPrivateConfig,readHostPilotPrivateFile,runContainerPrivateInstall,windowsAllowAces} from './pilot-private-bootstrap.mjs';
+import {assertIsolatedSyntheticClosed,installVerifiedPilotPrivateConfig,parseWindowsAclProbe,readHostPilotPrivateFile,runContainerPrivateInstall,stageWindowsPrivateFile,windowsAclProbeArgs,windowsAclProbeScript,windowsAllowAces} from './pilot-private-bootstrap.mjs';
 
 const secret='host-file-secret-value';
 const modelKey='host-file-model-key';
@@ -56,9 +56,9 @@ test('windows mode 0666 is accepted only for explicit allow SIDs, not a name ins
   assert.equal(windowsAllowAces([allow(userSid),allow('S-1-5-32-546')],userSid),false);
   assert.equal(windowsAllowAces([{sid:userSid,type:'Allow',inherited:true}],userSid),false);
   assert.equal(windowsAllowAces([{sid:userSid,type:'Deny',inherited:false}],userSid),false);
-  assert.throws(()=>readHostPilotPrivateFile(file,{...base,user:'张伟',aces:[allow('S-1-1-0')]}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes('张伟'));
-  assert.throws(()=>readHostPilotPrivateFile(file,{...base,user:'Müller',aces:[allow(userSid)],reparsePoint:true}),/PILOT_PRIVATE_FILE_UNSAFE/);
-  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'linux',homedir:home,currentSid:userSid,aces:[allow(userSid)],realpath:()=>file}),/PILOT_PRIVATE_FILE_UNSAFE/);
+  assert.throws(()=>readHostPilotPrivateFile(file,{...base,user:'张伟',aces:[allow('S-1-1-0')]}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&error.reason==='acl'&&!error.message.includes('张伟')&&error.reason!=='张伟');
+  assert.throws(()=>readHostPilotPrivateFile(file,{...base,user:'Müller',aces:[allow(userSid)],reparsePoint:true}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&error.reason==='reparse');
+  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'linux',homedir:home,currentSid:userSid,aces:[allow(userSid)],realpath:()=>file}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&error.reason==='mode');
   const accepted=readHostPilotPrivateFile(file,{...base,user:'Müller',aces:[allow(userSid),allow('S-1-5-18'),allow('S-1-5-32-544')]});
   assert.equal(accepted.bot.botId,'bot-id-example');
   assert.equal(JSON.stringify(accepted).includes('Müller')||JSON.stringify(accepted).includes('张伟'),false);
@@ -230,6 +230,40 @@ test('install rejects a symlink in an ancestor and does not write the target',()
   const destination=path.join(f.root,'pilot-link','sub','secret.json');
   assert.throws(()=>installVerifiedPilotPrivateConfig({hostFile:writeHost(f.root),destination}),/PILOT_PRIVATE_DESTINATION_INVALID/);
   assert.equal(fs.existsSync(path.join(target,'secret.json')),false);
+ }finally{f.cleanup();}
+});
+test('credential refusal names the variables and ignores Git config keys',()=>{
+ const absent=path.join(os.tmpdir(),'qiwe-missing-private.json'),token='stitch-key-not-for-logs';
+ assert.throws(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin',STITCH_API_KEY:token,DEEPSEEK_API_KEY:'other-secret',GIT_CONFIG_KEY_0:'credential.helper',GIT_CONFIG_KEY_1:'http.extraheader'},absent,{root:os.tmpdir()}),error=>error.message==='ISOLATED_SYNTHETIC_REAL_CREDENTIAL'&&JSON.stringify(error.envNames)===JSON.stringify(['DEEPSEEK_API_KEY','STITCH_API_KEY'])&&!error.message.includes(token)&&!JSON.stringify(error.envNames).includes(token));
+ assert.doesNotThrow(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin',GIT_CONFIG_KEY_0:'credential.helper',GIT_CONFIG_VALUE_0:'not-a-name-match'},absent,{root:os.tmpdir()}));
+});
+test('PowerShell 5 probe output is SID JSON even when the bytes are UTF-16',()=>{
+ const payload='{"currentSid":"S-1-5-21-9-8-7-1001","reparse":false,"aces":[{"sid":"S-1-5-21-9-8-7-1001","type":"Allow","inherited":false}]}';
+ const parsed=parseWindowsAclProbe(Buffer.from(payload,'utf8'));
+ assert.equal(parsed.currentSid,'S-1-5-21-9-8-7-1001');
+ const wide=Buffer.concat([Buffer.from([0xFF,0xFE]),Buffer.from(payload,'utf16le')]);
+ assert.equal(parseWindowsAclProbe(wide).aces[0].sid,'S-1-5-21-9-8-7-1001');
+ const args=windowsAclProbeArgs();
+ const decoded=Buffer.from(args.at(-1),'base64').toString('utf16le');
+ assert.equal(args[2],'-EncodedCommand');
+ assert.equal(decoded,windowsAclProbeScript);
+ assert.match(decoded,/\$p=\$env:QIWE_ACL_PATH/);
+ assert.match(decoded,/Get-Acl -LiteralPath \$p/);
+ assert.match(decoded,/WindowsIdentity/);
+ assert.equal(decoded.includes('私密'),false);
+});
+test('staging a Windows private file grants the SID and stays inside the profile',()=>{
+ const f=scratch();try{
+  const home=path.join(f.root,'why的私密花园'),source=writeHost(f.root),calls=[];
+  fs.mkdirSync(home);
+  const sid='S-1-5-21-9-8-7-1001';
+  const staged=stageWindowsPrivateFile({platform:'win32',homedir:home,source,currentSid:sid,execFileSync:(command,args)=>{calls.push([command,...args]);}});
+  assert.equal(staged.destination,path.join(home,'qiwe-pilot','private.json'));
+  assert.equal(fs.readFileSync(staged.destination,'utf8'),body());
+  const grant=calls.find(argv=>argv[0]==='icacls');
+  assert.deepEqual(grant.slice(2),['/inheritance:r','/grant:r',`*${sid}:(R)`]);
+  assert.equal(grant.some(item=>item.includes(':(R)')&&!item.startsWith('*S-1-')),false);
+  assert.throws(()=>stageWindowsPrivateFile({platform:'linux',homedir:home,source,currentSid:sid,execFileSync(){}}),/PILOT_STAGE_WINDOWS_ONLY/);
  }finally{f.cleanup();}
 });
 test('model provider env names refuse isolated-synthetic without echoing values',()=>{

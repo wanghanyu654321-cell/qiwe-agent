@@ -16,6 +16,7 @@ const credentialSuffixes=['API_KEY','_TOKEN','SECRET','SECRET_KEY','ACCESS_KEY_I
 const syntheticQiweAllowlist=new Set(['QIWE_PILOT_ENTRY_MODE','QIWE_SYNTHETIC_DATA_DIR','QIWE_SYNTHETIC_FOLDER']);
 function credentialEnvName(name){
  const upper=String(name).toUpperCase();
+ if(/^GIT_CONFIG_KEY_[0-9]+$/.test(upper))return false;
  if(syntheticQiweAllowlist.has(upper))return false;
  if(upper.startsWith('ANTHROPIC_')&&upper!=='ANTHROPIC_MODEL')return true;
  if(credentialPrefixes.some(prefix=>upper.startsWith(prefix))||REAL_CREDENTIAL_ENV_NAMES.includes(upper))return true;
@@ -28,9 +29,16 @@ function present(file){
  if(typeof file!=='string'||!path.isAbsolute(file))fail('ISOLATED_SYNTHETIC_INPUT_INVALID');
  try{fs.lstatSync(file);return true;}catch(error){if(error?.code==='ENOENT')return false;fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');}
 }
+function refuseSynthetic(names){
+ const error=Error('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
+ error.envNames=Object.freeze([...names].sort());
+ throw error;
+}
 /** Real pilot credentials and the isolated-synthetic entry cannot be combined. */
 export function assertIsolatedSyntheticClosed(env,privateConfigPath,options){
- if(!env||env.QIWE_CONTROLLED_REAL_PILOT==='1'||Object.entries(env).some(([name,value])=>typeof value==='string'&&value.trim().length>0&&credentialEnvName(name)))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
+ if(!env||env.QIWE_CONTROLLED_REAL_PILOT==='1')refuseSynthetic(env?.QIWE_CONTROLLED_REAL_PILOT==='1'?['QIWE_CONTROLLED_REAL_PILOT']:[]);
+ const names=Object.entries(env).filter(([name,value])=>typeof value==='string'&&value.trim().length>0&&credentialEnvName(name)).map(([name])=>name);
+ if(names.length)refuseSynthetic(names);
  const root=options?.root??projectRoot;
  if(options?.root!==undefined&&(typeof root!=='string'||!path.isAbsolute(root)))fail('ISOLATED_SYNTHETIC_INPUT_INVALID');
  const files=new Set([PILOT_PRIVATE_CONFIG_PATH,privateConfigPath,...liveRelative.map(relative=>path.join(root,relative))]);
@@ -56,38 +64,112 @@ export function windowsAllowAces(aces,currentSid){
  }
  return userAllow;
 }
-function readWindowsAcl(hostFile){
+export const windowsAclProbeScript="$ErrorActionPreference='Stop'; $p=$env:QIWE_ACL_PATH; $acl=Get-Acl -LiteralPath $p; $item=Get-Item -LiteralPath $p -Force; $reparse=[bool](($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0); $current=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $rows=foreach($ace in @($acl.Access)){ $sid=$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value; [pscustomobject]@{sid=$sid; type=[string]$ace.AccessControlType; inherited=[bool]$ace.IsInherited} }; @{currentSid=$current; reparse=$reparse; aces=@($rows)} | ConvertTo-Json -Compress";
+export function windowsAclProbeArgs(script=windowsAclProbeScript){
+ return ['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')];
+}
+export function parseWindowsAclProbe(output){
+ const buffer=Buffer.isBuffer(output)?output:Buffer.from(String(output??''),'utf8');
+ const utf16=buffer.length>=2&&(buffer[0]===0xFF&&buffer[1]===0xFE||buffer[1]===0);
+ const text=(utf16?buffer.subarray(buffer[0]===0xFF?2:0).toString('utf16le'):buffer.toString('utf8')).replace(/^\uFEFF/,'');
+ const start=text.indexOf('{'),end=text.lastIndexOf('}');
+ if(start<0||end<start)return null;
+ let parsed;try{parsed=JSON.parse(text.slice(start,end+1));}catch{return null;}
+ const aces=Array.isArray(parsed.aces)?parsed.aces:parsed.aces?[parsed.aces]:[];
+ if(typeof parsed.currentSid!=='string'||!/^S-1-[0-9-]+$/.test(parsed.currentSid))return null;
+ return {aces,currentSid:parsed.currentSid,reparsePoint:parsed.reparse===true};
+}
+function readWindowsAcl(hostFile,run){
  try{
-  const script="$ErrorActionPreference='Stop'; $p=$env:QIWE_ACL_PATH; $acl=Get-Acl -LiteralPath $p; $item=Get-Item -LiteralPath $p -Force; $reparse=[bool](($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0); $rows=foreach($ace in @($acl.Access)){ $sid=$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value; [pscustomobject]@{sid=$sid; type=[string]$ace.AccessControlType; inherited=[bool]$ace.IsInherited} }; @{reparse=$reparse; aces=@($rows)} | ConvertTo-Json -Compress";
   const env={SystemRoot:process.env.SystemRoot??'',WINDIR:process.env.WINDIR??'',PATH:process.env.PATH??'',QIWE_ACL_PATH:hostFile};
-  const output=execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:15000,windowsHide:true,env});
-  const who=execFileSync('whoami.exe',['/user','/fo','csv','/nh'],{encoding:'utf8',timeout:10000,windowsHide:true,env});
-  const currentSid=/"(S-1-[0-9-]+)"/.exec(who)?.[1],parsed=JSON.parse(output);
-  const aces=Array.isArray(parsed.aces)?parsed.aces:parsed.aces?[parsed.aces]:[];
-  return {aces,currentSid,reparsePoint:parsed.reparse===true};
+  const output=(run??execFileSync)('powershell.exe',windowsAclProbeArgs(),{encoding:'buffer',timeout:15000,windowsHide:true,env});
+  return parseWindowsAclProbe(output);
  }catch{return null;}
+}
+function rejectPrivate(reason){
+ const error=Error('PILOT_PRIVATE_FILE_UNSAFE');
+ error.reason=reason;
+ throw error;
+}
+export function grantWindowsSid(target,sid,run){
+ if(typeof target!=='string'||!path.isAbsolute(target)||!/^S-1-[0-9-]+$/.test(sid??''))rejectPrivate('sid');
+ (run??execFileSync)('icacls',[target,'/inheritance:r','/grant:r',`*${sid}:(R)`],{windowsHide:true,stdio:'ignore'});
+}
+export function createPilotScratch(options={}){
+ const platform=options.platform??process.platform;
+ if(platform!=='win32')return fs.mkdtempSync(path.join(options.tmpdir??os.tmpdir(),'qiwe-launch-'));
+ const home=options.homedir??os.homedir();
+ if(typeof home!=='string'||!path.isAbsolute(home))rejectPrivate('home');
+ const root=path.join(home,'qiwe-pilot');
+ fs.mkdirSync(root,{recursive:true});
+ return fs.mkdtempSync(path.join(root,'launch-'));
+}
+function readPrivateBytes(source){
+ if(typeof source!=='string'||!path.isAbsolute(source))rejectPrivate('path');
+ let fd;try{fd=fs.openSync(source,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);}catch{rejectPrivate('open');}
+ try{
+  const stat=fs.fstatSync(fd);
+  if(!stat.isFile())rejectPrivate('type');
+  if(stat.size<=0||stat.size>maxBytes)rejectPrivate('size');
+  const raw=readExact(fd,stat.size);
+  let parsed;try{parsed=JSON.parse(raw.toString('utf8'));}catch{fail('CONTROLLED_REAL_PRIVATE_INPUT_INVALID');}
+  validatePilotPrivateInput(parsed);
+  return raw;
+ }finally{fs.closeSync(fd);}
+}
+/** Copy a private file under the user profile and grant only that user's SID read access. */
+export function stageWindowsPrivateFile(options={}){
+ if((options.platform??process.platform)!=='win32')throw Error('PILOT_STAGE_WINDOWS_ONLY');
+ const home=options.homedir??os.homedir();
+ const destination=options.destination??path.join(home,'qiwe-pilot','private.json');
+ if(typeof home!=='string'||!path.isAbsolute(home)||typeof destination!=='string'||!path.isAbsolute(destination))rejectPrivate('home');
+ const parent=path.dirname(destination),prefix=home.endsWith(path.sep)?home:home+path.sep;
+ if(parent!==home&&!parent.startsWith(prefix))rejectPrivate('home');
+ const raw=readPrivateBytes(options.source);
+ fs.mkdirSync(parent,{recursive:true});
+ fs.writeFileSync(destination,raw);
+ const run=options.execFileSync??execFileSync;
+ grantWindowsSid(destination,options.currentSid??currentWindowsSid(run),run);
+ return {destination};
+}
+export function sealWindowsPlaceholder(file,options={}){
+ if((options.platform??process.platform)!=='win32')return file;
+ grantWindowsSid(file,options.currentSid??currentWindowsSid(options.execFileSync),options.execFileSync);
+ return file;
+}
+function currentWindowsSid(run){
+ const output=(run??execFileSync)('powershell.exe',windowsAclProbeArgs('[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value'),{encoding:'utf8',timeout:15000,windowsHide:true});
+ const sid=/S-1-[0-9-]+/.exec(String(output))?.[0];
+ if(!sid)rejectPrivate('sid');
+ return sid;
 }
 /** Windows node reports NTFS mode 0666. Accept a regular file inside the user home when every explicit Allow ACE SID is the current user, SYSTEM, or Administrators. Linux still requires mode 0600. */
 function windowsPrivateFileAccepted(hostFile,stat,options={}){
- if((options.platform??process.platform)!=='win32'||!stat.isFile()||stat.nlink!==1||stat.size<=0||stat.size>maxBytes)return false;
- let listed;try{listed=fs.lstatSync(hostFile);}catch{return false;}
- if(!listed.isFile()||listed.isSymbolicLink()||listed.nlink!==1)return false;
+ if((options.platform??process.platform)!=='win32')return false;
+ if(!stat.isFile()||stat.nlink!==1||stat.size<=0||stat.size>maxBytes)return false;
+ let listed;try{listed=fs.lstatSync(hostFile);}catch{rejectPrivate('open');}
+ if(listed.isSymbolicLink())rejectPrivate('reparse');
+ if(!listed.isFile()||listed.nlink!==1)return false;
  const home=options.homedir??os.homedir();
- if(typeof home!=='string'||!path.isAbsolute(home))return false;
- let real;try{real=(options.realpath??fs.realpathSync)(hostFile);}catch{return false;}
+ if(typeof home!=='string'||!path.isAbsolute(home))rejectPrivate('home');
+ let real;try{real=(options.realpath??fs.realpathSync)(hostFile);}catch{rejectPrivate('home');}
  const parent=path.dirname(real),prefix=home.endsWith(path.sep)?home:home+path.sep;
- if(parent!==home&&!parent.startsWith(prefix))return false;
+ if(parent!==home&&!parent.startsWith(prefix))rejectPrivate('home');
  let aces=options.aces,currentSid=options.currentSid,reparsePoint=options.reparsePoint===true;
- if(aces===undefined){if(process.platform!=='win32')return false;const probed=readWindowsAcl(hostFile);if(!probed)return false;aces=probed.aces;currentSid=probed.currentSid;reparsePoint=probed.reparsePoint;}
- if(reparsePoint)return false;
- return windowsAllowAces(aces,currentSid);
+ if(aces===undefined){if((options.platform??process.platform)!=='win32')rejectPrivate('probe');const probed=readWindowsAcl(hostFile,options.aclExec);if(!probed)rejectPrivate('probe');aces=probed.aces;currentSid=probed.currentSid;reparsePoint=probed.reparsePoint;}
+ if(reparsePoint)rejectPrivate('reparse');
+ if(!windowsAllowAces(aces,currentSid))rejectPrivate('acl');
+ return true;
 }
 function snapshotHostFile(hostFile,options={}){
- if(typeof hostFile!=='string'||!path.isAbsolute(hostFile))fail('PILOT_PRIVATE_FILE_UNSAFE');
- let fd;try{fd=fs.openSync(hostFile,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);}catch{fail('PILOT_PRIVATE_FILE_UNSAFE');}
+ if(typeof hostFile!=='string'||!path.isAbsolute(hostFile))rejectPrivate('path');
+ let fd;try{fd=fs.openSync(hostFile,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);}catch{rejectPrivate('open');}
  try{
   const stat=fs.fstatSync(fd);
-  if(!stat.isFile()||stat.nlink!==1||stat.size<=0||stat.size>maxBytes||(stat.mode&0o777)!==privateMode&&!windowsPrivateFileAccepted(hostFile,stat,options))fail('PILOT_PRIVATE_FILE_UNSAFE');
+  if(!stat.isFile())rejectPrivate('type');
+  if(stat.nlink!==1)rejectPrivate('link');
+  if(stat.size<=0||stat.size>maxBytes)rejectPrivate('size');
+  if((stat.mode&0o777)!==privateMode&&!windowsPrivateFileAccepted(hostFile,stat,options))rejectPrivate('mode');
   const raw=readExact(fd,stat.size);
   let parsed;try{parsed=JSON.parse(raw.toString('utf8'));}catch{fail('CONTROLLED_REAL_PRIVATE_INPUT_INVALID');}
   return {fd,raw,accepted:validatePilotPrivateInput(parsed)};

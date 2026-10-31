@@ -6,6 +6,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {launcherPlan,runSupervisedPilot} from './controlled-real-launcher.mjs';
+import {createPilotScratch} from './pilot-private-bootstrap.mjs';
 import {windowsEpermCase} from '../../docs/handoff-20261031/verify.mjs';
 
 const launcher=new URL('./controlled-real-launcher.mjs',import.meta.url).pathname;
@@ -48,8 +49,14 @@ test('synthetic launcher creates the container, installs a fake private file, th
 });
 test('synthetic launcher refuses a real provider variable before any docker command',()=>{
  const exec=trackingDocker();
- assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:{...clean,DEEPSEEK_API_KEY:'not-for-logs'},execFileSync:exec.execFileSync}),error=>error.message==='ISOLATED_SYNTHETIC_REAL_CREDENTIAL'&&!error.message.includes('not-for-logs'));
+ assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:{...clean,DEEPSEEK_API_KEY:'not-for-logs',GIT_CONFIG_KEY_0:'credential.helper'},execFileSync:exec.execFileSync}),error=>error.message==='ISOLATED_SYNTHETIC_REAL_CREDENTIAL'&&error.envNames.includes('DEEPSEEK_API_KEY')&&!error.envNames.includes('GIT_CONFIG_KEY_0')&&!error.message.includes('not-for-logs'));
  assert.equal(exec.calls.length,0);
+ const child=spawnSync(process.execPath,[launcher,'--no-credential'],{encoding:'utf8',env:{...clean,DEEPSEEK_API_KEY:'not-for-logs',STITCH_API_KEY:'stitch-secret',GIT_CONFIG_KEY_0:'credential.helper'},timeout:20000});
+ assert.equal(child.status,1);
+ assert.match(child.stderr,/ISOLATED_SYNTHETIC_REAL_CREDENTIAL/);
+ assert.match(child.stderr,/DEEPSEEK_API_KEY/);
+ assert.match(child.stderr,/STITCH_API_KEY/);
+ assert.equal(child.stderr.includes('not-for-logs')||child.stderr.includes('stitch-secret')||child.stderr.includes('GIT_CONFIG_KEY_0'),false);
 });
 test('real launcher opens a private bridge, installs the file, then starts, and refuses a raised cap',()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-launch-real-'));
@@ -180,6 +187,22 @@ test('a failed container remove is retried and reported with the cleanup command
  const result=runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,setTimeout:()=>({unref(){}})});
  assert.throws(()=>result.stop(),error=>error.message==='PILOT_LAUNCH_CLEANUP_FAILED'&&error.stopCommand.startsWith('docker rm -f ')&&!error.stopCommand.includes('synthetic-bot-secret'));
  assert.equal(exec.calls.filter(argv=>argv[1]==='rm'&&argv.includes('-f')).length,3);
+});
+test('windows no-credential scratch is created inside the profile and granted by SID',()=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-profile-'));
+ const profile=path.join(home,'why的私密花园');fs.mkdirSync(profile);
+ const exec=trackingDocker(),acl=[];
+ const sid='S-1-5-21-9-8-7-1001';
+ try{
+  const scratch=createPilotScratch({platform:'win32',homedir:profile});
+  assert.ok(scratch.startsWith(profile+path.sep));
+  const result=runSupervisedPilot({mode:'no-credential',env:clean,execFileSync:exec.execFileSync,platform:'win32',homedir:profile,currentSid:sid,aclExec:(command,args)=>{acl.push([command,...args]);},setTimeout:()=>({unref(){}})});
+  assert.ok(result.privateFile.startsWith(profile+path.sep));
+  const grant=acl.find(argv=>argv[0]==='icacls'&&argv[1]===result.privateFile);
+  assert.equal(grant.at(-1),`*${sid}:(R)`);
+  assert.equal(grant.includes('/inheritance:r')&&grant.includes('/grant:r'),true);
+  result.stop();
+ }finally{fs.rmSync(home,{recursive:true,force:true});}
 });
 test('entry arguments that assign a secret are refused',()=>{
  const exec=trackingDocker();

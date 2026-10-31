@@ -5,7 +5,7 @@ import {execFileSync as defaultExec} from 'node:child_process';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {validatePilotPrivateInput} from './frontagent-controlled-live-entry.mjs';
-import {PILOT_PRIVATE_CONFIG_PATH,assertIsolatedSyntheticClosed,runContainerPrivateInstall} from './pilot-private-bootstrap.mjs';
+import {PILOT_PRIVATE_CONFIG_PATH,assertIsolatedSyntheticClosed,createPilotScratch,runContainerPrivateInstall,sealWindowsPlaceholder,stageWindowsPrivateFile} from './pilot-private-bootstrap.mjs';
 
 export const PILOT_MAX_REQUESTS=8,PILOT_MAX_OUTPUT_TOKENS=1024,PILOT_MAX_DURATION_MS=30*60*1000;
 const noCredentialImage='node:22.19.0-alpine';
@@ -58,7 +58,7 @@ export function runSupervisedPilot(options={}){
  if(!runIdOk(runId)||!/^[a-f0-9]{32}$/.test(nonce))fail('PILOT_LAUNCH_RUN_ID');
  const network=mode==='real'?'qiwe-pilot-'+runId:'none',hostName='qiwe-pilot-host-'+runId;
  const image=mode==='real'?options.image:mode==='no-credential'?noCredentialImage:'sha256:'+'ab'.repeat(32);
- const scratch=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-launch-')),privateFile=mode==='real'?options.privateFile:placeholderFile(scratch);
+ const scratch=createPilotScratch({platform:options.platform,homedir:options.homedir}),privateFile=mode==='real'?options.privateFile:sealWindowsPlaceholder(placeholderFile(scratch),{platform:options.platform,homedir:options.homedir,currentSid:options.currentSid,execFileSync:options.aclExec});
  const exec=options.execFileSync??defaultExec,docker='docker',prefix=context?['--context',context]:[];
  const wrapped=(command,args,opts)=>exec(command,[...prefix,...args],opts);
  const environment=pilotEnv(runId,network,expiresAt,nonce);
@@ -118,11 +118,19 @@ export function createRecordingDocker(){
  };
  return {execFileSync};
 }
+// Stage a Windows private file under the user profile. The grant is *SID:(R), not the display name:
+// node integrations/native/controlled-real-launcher.mjs --stage-private-file C:\path\to\source.json
+// Optional --destination must stay inside the user profile.
 function main(){
  const args=process.argv.slice(2),plan=launcherPlan(process.platform,args),dash=args.indexOf('--'),cli=dash>=0?args.slice(0,dash):args;
- const fileAt=cli.indexOf('--private-file'),imageAt=cli.indexOf('--image'),contextAt=cli.indexOf('--docker-context');
+ const fileAt=cli.indexOf('--private-file'),imageAt=cli.indexOf('--image'),contextAt=cli.indexOf('--docker-context'),stageAt=cli.indexOf('--stage-private-file'),destAt=cli.indexOf('--destination');
  const value=index=>cli[index+1];
  try{
+  if(stageAt>=0){
+   const staged=stageWindowsPrivateFile({source:path.resolve(value(stageAt)),destination:destAt>=0?path.resolve(value(destAt)):undefined});
+   console.log(staged.destination);
+   return;
+  }
   if(plan.mode==='synthetic'&&(fileAt>=0||imageAt>=0))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
   if(plan.mode==='no-credential'&&(fileAt>=0||imageAt>=0||dash>=0))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
   const result=runSupervisedPilot({mode:plan.mode,env:process.env,privateFile:fileAt>=0?path.resolve(value(fileAt)):undefined,image:imageAt>=0?value(imageAt):undefined,dockerContext:contextAt>=0?value(contextAt):undefined,entryArgs:dash>=0?args.slice(dash+1):undefined,publishWeb:cli.includes('--publish-web')?true:undefined,keepAlive:plan.mode!=='synthetic',...(plan.useRecordingDocker?{execFileSync:createRecordingDocker().execFileSync}:{})});
@@ -131,7 +139,11 @@ function main(){
   if(plan.mode==='synthetic')result.stop();
  }catch(error){
   const code=coded(error)?error.message:'PILOT_LAUNCH_FAILED';
-  console.error(code);if(error?.stopCommand)console.error(error.stopCommand);process.exitCode=1;
+  console.error(code);
+  if(Array.isArray(error?.envNames))for(const name of error.envNames)if(/^[A-Za-z0-9_]+$/.test(name))console.error(name);
+  if(typeof error?.reason==='string'&&/^[a-z0-9-]{1,40}$/.test(error.reason))console.error(error.reason);
+  if(error?.stopCommand)console.error(error.stopCommand);
+  process.exitCode=1;
  }
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main();
