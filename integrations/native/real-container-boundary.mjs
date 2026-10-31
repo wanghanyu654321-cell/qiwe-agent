@@ -90,3 +90,40 @@ export function admitDockerRun(args,{root,runner,deps,provider,image,expectedMou
   '--workdir','/workspace/group','--entrypoint','node'];
  return {name:args[4],mounts,args:[...args.slice(0,-1),...extra,image,'/verification/provider.mjs']};
 }
+
+// Explicit opt-in for the local, time-limited pilot. The caller must still
+// verify the live restoration receipt and invoke this only for its one runner.
+// No credentials are accepted or constructed in the command-line arguments.
+export function admitControlledRealDockerRun(args,options){
+ const {root,preload,modelModule,image,runId,controlledRealPilot:scope,maxRequests,maxOutputTokens,originalShell,ownedContainerPrefix}=options;
+ const bounded=(value,max)=>Number.isSafeInteger(value)&&value>0&&value<=max;
+ if(!scope||Object.keys(scope).sort().join(',')!=='environment,expiresAt,mode,networkName,runId'||
+  scope.mode!=='controlled-real-pilot'||scope.environment!=='local-test'||scope.runId!==runId||scope.networkName!=='qiwe-pilot-'+runId||
+  !Number.isSafeInteger(scope.expiresAt)||scope.expiresAt<=Date.now()||scope.expiresAt>Date.now()+1800000||
+  !bounded(maxRequests,8)||!bounded(maxOutputTokens,1024))throw Error('CONTROLLED_REAL_SCOPE');
+ if(!originalShell||originalShell.piAiVersions?.topLevel!=='0.84.2'||originalShell.piAiVersions?.nested!=='0.84.2'||
+  options.expectedIdentity!=='direct'||options.expectedUid!==1000||options.expectedGid!==1000||!ownedContainerPrefix)throw Error('CONTROLLED_REAL_IDENTITY');
+ const canonicalRoot=fs.realpathSync(root);
+ const regularFile=source=>{
+  try{
+   const resolved=fs.realpathSync(source),relative=path.relative(canonicalRoot,resolved),stat=fs.lstatSync(source);
+   if(!relative||relative.startsWith('..')||path.isAbsolute(relative)||stat.isSymbolicLink()||!stat.isFile()||stat.nlink!==1||
+    path.resolve(source)!==resolved)throw Error();
+   return resolved;
+  }catch{throw Error('CONTROLLED_REAL_PRELOAD');}
+ };
+ const pinnedPreload=regularFile(preload),pinnedModel=regularFile(modelModule);
+ // The existing original-shell admission validates the command, every mount,
+ // user identity and image evidence. Only its offline-injected flags are discarded.
+ const admitted=admitDockerRun(args,{...options,provider:pinnedPreload,startupFailure:false});
+ const extra=['--pull=never','--label','qiwe.verification-run='+runId,'--network',scope.networkName,'--read-only','--cap-drop','ALL',
+  ...['CHOWN','DAC_OVERRIDE','FOWNER','KILL','SETGID','SETUID'].flatMap(cap=>['--cap-add',cap]),
+  '--security-opt','no-new-privileges','--user','0:0','--tmpfs','/tmp:rw,nosuid,nodev','--tmpfs','/run:rw,nosuid,nodev',
+  '--tmpfs','/home/node:rw,nosuid,nodev,uid=1000,gid=1000,mode=0700',
+  '-v',`${pinnedPreload}:/verification/controlled-real-preload.mjs:ro`,
+  '-v',`${pinnedModel}:/verification/controlled-real-model.ts:ro`,
+  '-e','HOME=/home/node','-e','MINICLAW_AGENT_RUNTIME=pi','-e','QIWE_PILOT_RUN_ID='+runId,
+  '-e','QIWE_PILOT_MODEL_EXPIRES_AT='+scope.expiresAt,'-e','QIWE_PILOT_MODEL_REQUESTS='+maxRequests,
+  '-e','QIWE_PILOT_MODEL_OUTPUT_TOKENS='+maxOutputTokens];
+ return {name:admitted.name,mounts:admitted.mounts,args:[...args.slice(0,-1),...extra,image]};
+}

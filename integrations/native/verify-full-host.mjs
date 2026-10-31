@@ -15,9 +15,14 @@ import {verifyOriginalShellImage,prepareOriginalShellCandidate} from './original
 import {cleanupOwnedContainers} from './real-container-cleanup.mjs';
 import {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disableExistingPilotPluginScan,restrictExistingPilotSessionKey,restrictExistingPilotSettings} from './frontagent-existing-state.ts';
 import {originalProductWeb} from './local-pilot-host.mjs';
+import {restrictPilotWebLoopback} from './controlled-real-web.mjs';
+import {validateControlledRealPilotScope} from './full-host-local-docker.mjs';
+import {disableControlledRealPiRetries} from './controlled-real-pi-retry.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url)),project=path.resolve(here,'../..');
 const existingInput=parseExistingFrontagentStateOption(process.argv.slice(2));
 const inputArgs=existingInput.args,piFlags=inputArgs.filter(value=>value==='--restoration-pi-scenario');
+const liveFlags=inputArgs.filter(value=>value==='--controlled-real-pilot');
+if(liveFlags.length>1)throw Error('CONTROLLED_REAL_DUPLICATE_OPTION');
 const realFlags=inputArgs.filter(value=>value==='--restoration-real-container');
 const c4Flags=inputArgs.filter(value=>value==='--c4-synthetic-case'),c4Index=inputArgs.indexOf('--c4-synthetic-case');
 const c4SyntheticCase=c4Index>=0?inputArgs.splice(c4Index,2)[1]:undefined;
@@ -32,7 +37,8 @@ const fullHostConversationFlags=process.argv.slice(2).filter(value=>value==='--f
 if(fullHostConversationFlags.length>1)throw Error('Invalid duplicate full host conversation option');
 const restorationFlags=process.argv.slice(2).filter(value=>value==='--restoration-scenario');
 if(restorationFlags.length>1)throw Error('Invalid duplicate restoration scenario option');
-const options={...nativeVerificationOptions(inputArgs.filter(value=>!['--full-host-conversations','--restoration-scenario','--restoration-pi-scenario','--restoration-real-container'].includes(value))),fullHostConversations:fullHostConversationFlags.length===1,restorationScenario:restorationFlags.length===1,restorationPiScenario:piFlags.length===1,restorationRealContainer:realFlags.length===1,c4SyntheticCase,frontagentExistingInput:existingInput.inputRoot},{source,overlay,driver}=options;
+const options={...nativeVerificationOptions(inputArgs.filter(value=>!['--full-host-conversations','--restoration-scenario','--restoration-pi-scenario','--restoration-real-container','--controlled-real-pilot'].includes(value))),fullHostConversations:fullHostConversationFlags.length===1,restorationScenario:restorationFlags.length===1,restorationPiScenario:piFlags.length===1,restorationRealContainer:realFlags.length===1,controlledRealPilot:liveFlags.length===1,c4SyntheticCase,frontagentExistingInput:existingInput.inputRoot},{source,overlay,driver}=options;
+if(options.controlledRealPilot&&(!options.restorationRealContainer||!options.restorationScenario||!options.fullHostConversations||!options.frontagentExistingInput||options.c4SyntheticCase||process.platform!=='linux'||process.env.QIWE_CONTROLLED_REAL_PILOT!=='1'))throw Error('CONTROLLED_REAL_EXPLICIT_EXISTING_LINUX_HOST_REQUIRED');
 if(options.restorationRealContainer&&!options.restorationScenario)throw Error('RESTORATION_REAL_CONTAINER_REQUIRES_RESTORATION');
 if(options.restorationRealContainer)process.env.QIWE_RESTORATION_REAL_CONTAINER='1';
 if(options.restorationPiScenario&&!options.restorationScenario)throw Error('RESTORATION_PI_REQUIRES_RESTORATION_SCENARIO');
@@ -58,17 +64,22 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   writeAudit({status:'preparing',events:['local_plugin_scan_configuration'],frontagentExistingState:frontagentExistingState.audit});
   frontagentExistingState.audit.localSettingsMode=restrictExistingPilotSettings(directory);
   writeAudit({status:'preparing',events:['local_settings_permissions']});
-  const web=originalProductWeb(candidate.files.get('web.ts'),frontagentExistingState.ownerId,{codeRoot:frontagentExistingState.codeRoot,jobRoot:frontagentExistingState.jobRoot});
+  let web=originalProductWeb(candidate.files.get('web.ts'),frontagentExistingState.ownerId,{codeRoot:frontagentExistingState.codeRoot,jobRoot:frontagentExistingState.jobRoot});
+  if(options.controlledRealPilot)web=restrictPilotWebLoopback(web);
   candidate.files.set('web.ts',web);candidate.audit.composedHashes['web.ts']=createHash('sha256').update(web).digest('hex');
  }
  const piRunner=options.restorationPiScenario||options.restorationRealContainer?prepareOriginalPiRunner({source,root:directory,skillRoot,trueMain:options.restorationRealContainer}):undefined;
  if(piRunner)fs.writeFileSync(piRunner.entryFile,applyFullHostPiDrain(fs.readFileSync(piRunner.entryFile,'utf8')));
  if(piRunner){const runtimeFile=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runner.ts');fs.writeFileSync(runtimeFile,applyFullHostPiAbort(fs.readFileSync(runtimeFile,'utf8')));}
+ if(options.controlledRealPilot){const runtime=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runtime.ts');fs.writeFileSync(runtime,disableControlledRealPiRetries(fs.readFileSync(runtime,'utf8')));}
  let originalShell;
  if(options.restorationRealContainer){
   ownedManifest=path.join(directory,'owned-containers.txt');
   originalShell=verifyOriginalShellImage({source,buildInput:'/qiwe-control/build-input.json',image:process.env.QIWE_LOCAL_DOCKER_IMAGE,docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,manifest:ownedManifest,runnerHashes:piRunner.runnerSourceHashes});
-  prepareOriginalShellCandidate(piRunner);
+  if(options.controlledRealPilot){
+   fs.writeFileSync(piRunner.entryFile,"await (await import('/verification/controlled-real-preload.mjs' as string)).installControlledRealModelFetch();\n"+fs.readFileSync(piRunner.entryFile,'utf8'));
+   for(const name of ['controlled-real-preload.mjs','controlled-real-model.ts'])fs.copyFileSync(path.join(here,name),path.join(directory,name));
+  }else prepareOriginalShellCandidate(piRunner);
   const hotRoot=path.join(directory,'container/agent-runner');fs.mkdirSync(hotRoot,{recursive:true});
   for(const name of ['src','prompts'])fs.cpSync(path.join(piRunner.runnerTarget,name),path.join(hotRoot,name),{recursive:true});
   fs.copyFileSync(path.join(here,'real-container-provider.mjs'),path.join(directory,'real-container-provider.mjs'));
@@ -139,6 +150,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  if(options.frontagentExistingInput)for(const name of ['wecom-bot-bindings','native-bot-identity','wecom-bot-context'])compilePublic(name);
  fs.copyFileSync(path.join(here,'role-workspace-overlay.mjs'),path.join(directory,'test-support/role-workspace-overlay.mjs'));
  fs.copyFileSync(path.join(here,'conversation-overlay.mjs'),path.join(directory,'test-support/conversation-overlay.mjs'));
+ if(options.controlledRealPilot)for(const name of ['frontagent-controlled-pilot.mjs','frontagent-pilot-restoration.mjs','frontagent-controlled-live-worker.mjs','frontagent-controlled-live-entry.mjs','controlled-real-container-transport.mjs','real-container-boundary.mjs','full-host-local-docker.mjs'])fs.copyFileSync(path.join(here,name),path.join(directory,'test-support',name));
  compilePublic('offline-bot-sdk',path.join(project,'tests/fixtures/offline-bot-sdk.ts'));
  // Test-only observational exports. Original main() call and catch stay intact.
  fs.appendFileSync(path.join(directory,'src/index.ts'),'\nexport { queue as fullHostQueue, appointmentBootGate as fullHostBootGate };\n');
@@ -163,7 +175,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   env.MINICLAW_WEB_URL='http://127.0.0.1:39130';env.CORS_ALLOW_LOCALHOST='false';env.CORS_ALLOWED_ORIGINS='http://127.0.0.1:39130';
   env.ALLOW_LEGACY_UNSIGNED_COOKIE='false';env.TRUST_PROXY='false';
   // Reuse only the deterministic fake-provider three-skill protocol; this run remains R3 existing-state, not C4.
-  env.QIWE_C4_SYNTHETIC_CASE='grounded';
+  if(!options.controlledRealPilot)env.QIWE_C4_SYNTHETIC_CASE='grounded';
  }
  fs.mkdirSync(env.HOME);
  env.QIWE_FULL_HOST_CONVERSATIONS=options.fullHostConversations?'1':'0';
@@ -174,6 +186,11 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   for(const key of ['QIWE_LOCAL_DOCKER_RUN_ID','QIWE_LOCAL_DOCKER_VOLUME','QIWE_LOCAL_DOCKER_HOST','QIWE_LOCAL_DOCKER_IMAGE','QIWE_LOCAL_DOCKER_DRIVER_IMAGE'])env[key]=process.env[key];
   env.MINICLAW_CONTAINER_IMAGE=process.env.QIWE_LOCAL_DOCKER_IMAGE;env.QIWE_REAL_CONTAINER_OWNED_MANIFEST=ownedManifest;
   env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL=JSON.stringify(Object.fromEntries(['verified','image','entrypoint','piVersion','files'].map(key=>[key,originalShell[key]])));
+  if(options.controlledRealPilot){
+   env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL=JSON.stringify(Object.fromEntries(['verified','image','entrypoint','piVersion','piAiVersions','files'].map(key=>[key,originalShell[key]])));
+   env.QIWE_CONTROLLED_REAL_PILOT='1';env.QIWE_LOCAL_DOCKER_NETWORK=process.env.QIWE_LOCAL_DOCKER_NETWORK;
+   env.WEB_PORT='39130';
+  }
  }
  if(piRunner){
   const check=spawnSync(process.execPath,[path.join(project,'node_modules/typescript/bin/tsc'),'--noEmit','--incremental','false'],{cwd:piRunner.runnerTarget,env,encoding:'utf8',timeout:60000});
@@ -243,13 +260,31 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  }:{};
  const instrumentation={executedIndexHash:hashFile(path.join(directory,'src/index.ts')),testHash:hashFile(path.join(directory,'tests/full-host.test.mts')),projectResidueTestHash:hashFile(path.join(directory,'tests/project-residue.test.mts')),queueRecoveryTestHash:hashFile(path.join(directory,'tests/queue-recovery.test.mts')),botPreparationNativeTestHash:hashFile(path.join(directory,'tests/bot-preparation-native.test.mts')),roleWorkspaceCandidateTestHash:hashFile(path.join(directory,'tests/role-workspace-candidate.test.mts')),roleWorkspaceOverlayHash:hashFile(path.join(directory,'test-support/role-workspace-overlay.mjs')),roleWorkspaceConfigHash:hashFile(path.join(directory,'role-workspace.vitest.config.mts')),publicSupportHashes,configHash:hashFile(path.join(directory,'vitest.config.mts')),verifierHash:hashFile(fileURLToPath(import.meta.url)),candidateBuilderHash:hashFile(path.join(here,'full-host-candidate.mjs'))};
  if(frontagentExistingState)instrumentation.frontagentExistingState={...frontagentExistingState.audit,helperHash:hashFile(path.join(here,'frontagent-existing-state.ts')),flowTestHash:hashFile(path.join(directory,'tests/frontagent-existing-flow.test.mts')),webAdapterHash:hashFile(path.join(here,'local-pilot-host.mjs'))};
- if(options.restorationRealContainer)instrumentation.localDocker={originalShell,runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,fixtureHash:hashFile(path.join(directory,'tests/full-host-local-container.fixture.mts')),providerHash:hashFile(path.join(directory,'real-container-provider.mjs')),admissionHash:hashFile(path.join(directory,'tests/real-container-boundary.mjs')),helperHash:hashFile(path.join(directory,'src/full-host-local-docker.mjs')),limitations:['Controlled local Desktop daemon; concurrent independent Docker administrators are outside this proof','Deterministic ModelRuntime I/O is not evidence of model semantic quality','No production, external message, external model, or deployment']};
+ if(options.restorationRealContainer)instrumentation.localDocker={originalShell,runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,fixtureHash:hashFile(path.join(directory,'tests/full-host-local-container.fixture.mts')),providerHash:hashFile(path.join(directory,'real-container-provider.mjs')),admissionHash:hashFile(path.join(directory,'tests/real-container-boundary.mjs')),helperHash:hashFile(path.join(directory,'src/full-host-local-docker.mjs')),limitations:options.controlledRealPilot?['Local controlled real pilot; not production','Network is not an operating-system-level domain allowlist']:['Controlled local Desktop daemon; concurrent independent Docker administrators are outside this proof','Deterministic ModelRuntime I/O is not evidence of model semantic quality','No production, external message, external model, or deployment']};
  const phases=[];
  if(options.fullHostConversations){
   conversationInstrumentation.restorationSources=Object.fromEntries(fs.readdirSync(here).filter(name=>/^(?:full-host-(?:restoration|entry-fencing|recovery-authority|execution-fences)|legacy-work-preservation)/.test(name)).map(name=>[name,hashFile(path.join(here,name))]));
   conversationInstrumentation.restorationScenario=options.restorationScenario;
   if(options.restorationScenario){conversationInstrumentation.restorationSeedPhase=restorationSeedPhase;conversationInstrumentation.restorationFlowConfigHash=hashFile(path.join(directory,'restoration-flow.vitest.config.mts'));}
  }
+ if(options.controlledRealPilot){
+  const deadline=Number(process.env.QIWE_PILOT_EXPIRES_AT),scope=validateControlledRealPilotScope({mode:'controlled-real-pilot',environment:'local-test',runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,expiresAt:deadline,networkName:process.env.QIWE_LOCAL_DOCKER_NETWORK},process.env.QIWE_LOCAL_DOCKER_RUN_ID);
+  if(deadline>Date.now()+1800000)throw Error('CONTROLLED_REAL_DURATION_INVALID');
+  for(const [name]of candidate.files)if(name.endsWith('.ts')&&!name.endsWith('.d.ts')){
+   const target=path.join(directory,'src',name.replace(/\.ts$/,'.js'));
+   fs.writeFileSync(target,ts.transpileModule(fs.readFileSync(path.join(directory,'src',name),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText);
+  }
+  env.QIWE_CONTROLLED_REAL_SCOPE=JSON.stringify(scope);
+  const supervisor=await createRestorationSupervisorReceipt({hostRoot:directory,dataDir:path.join(directory,'data'),runId:runId+'-live',timeoutMs:5000,controlledRealPilot:scope});
+  env.QIWE_RESTORATION_RECEIPT=supervisor.locator;
+  console.log('FULL_HOST_PHASE',JSON.stringify({runId,phase:'controlled-real',status:'starting'}));
+  let result;
+  try{result=spawnSync(process.execPath,[path.join(directory,'test-support/frontagent-controlled-live-entry.mjs')],{cwd:directory,env,stdio:'inherit',timeout:Math.max(1,deadline-Date.now()+30000)});}finally{supervisor.close();}
+  if(fs.existsSync(path.join(directory,'frontagent-live-cleanup-unknown.json')))throw Error('CONTROLLED_REAL_CLEANUP_UNKNOWN');
+  if(result.error)throw result.error;
+  if(result.status!==0)throw Error('CONTROLLED_REAL_WORKER_FAILED');
+  writeAudit({...candidate.audit,status:'controlled-real-worker-stopped',limitations:instrumentation.localDocker.limitations});
+ }else{
  for(const phase of ['boot','restart']){
   env.QIWE_FULL_HOST_PHASE=phase;env.QIWE_FULL_HOST_EVIDENCE=path.join(directory,'evidence-'+phase+'.json');
   env.QIWE_RESTORATION_FLOW_EVIDENCE=env.QIWE_FULL_HOST_EVIDENCE;
@@ -273,6 +308,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   // source/instrumentation identity in stdout to bind the retained host log.
   console.log('FULL_HOST_AUDIT_HASHES',JSON.stringify({runId,nativeTree:candidate.audit.nativeTree,overlayTree:candidate.audit.overlayTree,composedHashesSha256:createHash('sha256').update(JSON.stringify(candidate.audit.composedHashes)).digest('hex'),instrumentation:{...instrumentation,...conversationInstrumentation},platform:process.platform,node:process.version,driver:driver?'prepared-adapter':'original-linux-ELF'}));
   fs.writeFileSync(path.join(evidenceRoot,'full-host-evidence.json'),JSON.stringify(evidence,null,2));console.log('FULL_HOST_EVIDENCE',JSON.stringify(evidence));
+ }
  }
 }catch(error){writeAudit({...JSON.parse(fs.readFileSync(path.join(evidenceRoot,'full-host-audit.json'),'utf8')),...candidate?.audit,status:'failed',error:String(error)});throw error;
 }finally{

@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {inspectLocalDockerReceipt} from './full-host-local-docker.mjs';
+import {inspectLocalDockerReceipt,type ControlledRealPilotScope} from './full-host-local-docker.mjs';
 
 export interface RestorationBoundaryReceipt {
- version:1|2;runId:string;issuedAt:string;helperSha256?:string;
+ version:1|2|3;runId:string;issuedAt:string;helperSha256?:string;controlledRealPilot?:ControlledRealPilotScope;
  supervisor:{pid:1;startTime:string;scriptPath:string;scriptSha256:string;modulePath:string;moduleSha256:string};
  hostRoot:{path:string;dev:string;ino:string};dataRoot:{path:string;dev:string;ino:string};
  namespaces:{pid:string;net:string;mnt:string};
@@ -33,7 +33,7 @@ export function inspectRestorationBoundary(dataDir:string,supervisorHash:string,
  if(!stat.isFile()||stat.nlink!==0n||stat.size<=0n||stat.size>65536n)return fail();
  const raw=fs.readFileSync(locator,'utf8');
  const receipt:RestorationBoundaryReceipt=JSON.parse(raw);
- if((receipt.version!==1&&receipt.version!==2)||typeof receipt.runId!=='string'||!receipt.runId||receipt.supervisor?.pid!==1||
+ if((receipt.version!==1&&receipt.version!==2&&receipt.version!==3)||typeof receipt.runId!=='string'||!receipt.runId||receipt.supervisor?.pid!==1||
   receipt.supervisor.scriptSha256!==supervisorHash||sha(fs.readFileSync(receipt.supervisor.scriptPath))!==supervisorHash||
   proc(1).startTime!==receipt.supervisor.startTime)return fail();
  if(receipt.supervisor.modulePath!==path.join(path.dirname(receipt.supervisor.scriptPath),'full-host-restoration-supervisor.mjs')||
@@ -64,13 +64,14 @@ export function inspectRestorationBoundary(dataDir:string,supervisorHash:string,
  if(!mounts.find(row=>row.mount==='/'&&row.options.includes('ro'))||(receipt.version===1&&containing(dataDir)?.type!=='tmpfs')||
   !containing(receipt.supervisor.scriptPath)?.options.includes('ro')||!containing(receipt.supervisor.modulePath)?.options.includes('ro'))return fail();
  if(fs.existsSync('/var/run/docker.sock')||fs.existsSync('/run/docker.sock'))return fail();
- if(receipt.version===2){
+ if(receipt.version!==3&&(receipt.controlledRealPilot||process.env.QIWE_CONTROLLED_REAL_PILOT==='1'))return fail();
+ if(receipt.version===2||receipt.version===3){
   const helper=path.join(path.dirname(receipt.supervisor.scriptPath),'full-host-local-docker.mjs');
   if(receipt.helperSha256!=='LOCAL_DOCKER_HELPER_HASH'||sha(fs.readFileSync(helper))!==receipt.helperSha256||!containing(helper)?.options.includes('ro'))return fail();
   inspectLocalDockerReceipt(receipt);
  }else if(process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'||fs.existsSync('/qiwe-control/docker.sock'))return fail();
  const interfaces=fs.readFileSync('/proc/net/dev','utf8').split('\n').slice(2).filter(line=>line.includes(':')).map(line=>line.split(':')[0]!.trim());
- if(interfaces.some(name=>name!=='lo'))return fail();
+ if(receipt.version===3?JSON.stringify(interfaces.sort())!==JSON.stringify(['eth0','lo']):interfaces.some(name=>name!=='lo'))return fail();
  if(!Array.isArray(receipt.oldWriters)||receipt.oldWriters.length>128)return fail();
  for(const writer of receipt.oldWriters){
   if(!Number.isSafeInteger(writer.pid)||writer.pid<2||typeof writer.startTime!=='string'||
@@ -81,5 +82,5 @@ export function inspectRestorationBoundary(dataDir:string,supervisorHash:string,
  // The fixed local harness permits only the supervisor and the current test
  // process ancestor chain. An untracked sibling/old runner closes restoration.
  for(const entry of fs.readdirSync('/proc'))if(/^\d+$/.test(entry)&&!ancestorPids.has(Number(entry)))return fail();
- return {version:sha(raw),evidence:['pinned_pid1_supervisor','readonly_unlinked_receipt','same_host_namespace','observed_old_writer_exit',...(receipt.version===2?['controlled_local_docker_daemon','observed_old_container_removed','same_volume_inode_canary','live_no_other_volume_mounts']:['local_isolated_scope'])]};
+ return {version:sha(raw),evidence:['pinned_pid1_supervisor','readonly_unlinked_receipt','same_host_namespace','observed_old_writer_exit',...(receipt.version>=2?['controlled_local_docker_daemon','observed_old_container_removed','same_volume_inode_canary','live_no_other_volume_mounts']:['local_isolated_scope']),...(receipt.version===3?['controlled_real_pilot_local_test']:[])]};
 }

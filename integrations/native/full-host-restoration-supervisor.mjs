@@ -4,7 +4,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createHash,randomUUID} from 'node:crypto';
-import {observeLocalDockerBoundary} from './full-host-local-docker.mjs';
+import {observeLocalDockerBoundary,validateControlledRealPilotScope} from './full-host-local-docker.mjs';
 
 const sha=value=>createHash('sha256').update(value).digest('hex');
 function failure(code){const error=new Error(code);error.code=code;return error;}
@@ -143,12 +143,18 @@ function linuxSupervisor(scriptPath){
 /** PID1-only producer. Receipt facts are all observed here, never caller flags. */
 export async function createRestorationSupervisorReceipt(options){
  const supervisor=linuxSupervisor(process.argv[1]),input=inputs(options);
+ const controlledRealPilot=options.controlledRealPilot===undefined?undefined:validateControlledRealPilotScope(options.controlledRealPilot,process.env.QIWE_LOCAL_DOCKER_RUN_ID);
+ if(controlledRealPilot){
+  if(process.env.QIWE_CONTROLLED_REAL_PILOT!=='1'||process.env.QIWE_RESTORATION_REAL_CONTAINER!=='1'||process.env.QIWE_LOCAL_DOCKER_NETWORK!==controlledRealPilot.networkName)throw failure('RESTORATION_SUPERVISOR_PILOT_SCOPE_REQUIRED');
+  input.controlledRealPilot=controlledRealPilot;
+ }else if(process.env.QIWE_CONTROLLED_REAL_PILOT==='1')throw failure('RESTORATION_SUPERVISOR_PILOT_SCOPE_REQUIRED');
  const oldWriter=await observeOwnedRestorationWriter(options);
  const docker=process.env.QIWE_RESTORATION_REAL_CONTAINER==='1'?await observeLocalDockerBoundary(input):undefined;
  if(!sameIdentity(input.hostRoot,input.host,true)||!sameIdentity(input.dataDir,input.data,true)||
   JSON.stringify(linuxSupervisor(process.argv[1]))!==JSON.stringify(supervisor))throw failure('RESTORATION_SUPERVISOR_IDENTITY_CHANGED');
  const namespaces=Object.fromEntries(['pid','net','mnt'].map(name=>[name,fs.readlinkSync(`/proc/1/ns/${name}`)]));
- const receipt={version:docker?2:1,runId:input.runId,issuedAt:new Date().toISOString(),supervisor,hostRoot:input.host,dataRoot:input.data,namespaces,oldWriters:[oldWriter],...(docker?{docker,helperSha256:sha(fs.readFileSync(new URL('./full-host-local-docker.mjs',import.meta.url)))}:{})};
+ if(controlledRealPilot)validateControlledRealPilotScope(controlledRealPilot,process.env.QIWE_LOCAL_DOCKER_RUN_ID);
+ const receipt={version:controlledRealPilot?3:docker?2:1,runId:input.runId,issuedAt:new Date().toISOString(),supervisor,hostRoot:input.host,dataRoot:input.data,namespaces,oldWriters:[oldWriter],...(controlledRealPilot?{controlledRealPilot}:{}),...(docker?{docker,helperSha256:sha(fs.readFileSync(new URL('./full-host-local-docker.mjs',import.meta.url)))}:{})};
  const raw=Buffer.from(JSON.stringify(receipt)),receiptPath=path.join(input.hostRoot,`.qiwe-restoration-receipt-${randomUUID()}.json`);
  let writerFd,readerFd,owned;
  try{
