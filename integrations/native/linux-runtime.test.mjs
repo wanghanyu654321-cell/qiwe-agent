@@ -106,6 +106,18 @@ test('controlled copy admits only the exact public offline SDK fixture under tes
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 
+test('controlled copy admits the frontagent existing input tree',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-existing-'));
+  try{
+    const existing=path.join(root,'.local/frontagent-existing-input');
+    fs.mkdirSync(path.join(existing,'state'),{recursive:true});
+    fs.mkdirSync(path.join(existing,'code'),{recursive:true});
+    fs.writeFileSync(path.join(existing,'state','messages.db'),'synthetic');
+    fs.writeFileSync(path.join(existing,'descriptor.json'),'{}\n');
+    sealControlledLinuxCopy(root);
+    assert.equal(verifyControlledLinuxCopy(root).files,2);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
 test('controlled copy admits the three existing D4 skill definitions without other skill payloads',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-skills-test-'));
   try{

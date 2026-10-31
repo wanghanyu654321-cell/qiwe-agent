@@ -4,6 +4,19 @@ import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
+function reportFullHostExit(error){
+ if(reportFullHostExit.reported)return;
+ reportFullHostExit.reported=true;
+ const message=typeof error?.message==='string'?error.message:'';
+ const matched=/^([A-Z0-9_]{1,80})(?:[:\s]+([\s\S]*))?$/.exec(message);
+ const code=matched?matched[1]:'FULL_HOST_FAILED';
+ console.error(code);
+ const detail=(matched?matched[2]:message).replace(/[\r\n]+/g,' ').slice(0,300).replace(/(?:api[_-]?key|token|secret|password|adminCookie|miniclaw_session)\s*[:=]\s*\S+/gi,'[redacted]');
+ if(detail&&detail!==code)console.error(detail);
+ else if(!matched)console.error(/^[A-Za-z][A-Za-z0-9_]*$/.test(error?.name??'')?error.name:'Error');
+}
+process.on('uncaughtException',error=>{reportFullHostExit(error);process.exit(1);});
+process.on('unhandledRejection',error=>{reportFullHostExit(error);process.exit(1);});
 if(process.argv.slice(2).includes('--isolated-synthetic')){
  const {runIsolatedSyntheticFormalPath}=await import('./isolated-synthetic-pilot.mjs');
  try{
@@ -333,7 +346,11 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   fs.writeFileSync(path.join(evidenceRoot,'full-host-evidence.json'),JSON.stringify(evidence,null,2));console.log('FULL_HOST_EVIDENCE',JSON.stringify(evidence));
  }
  }
-}catch(error){writeAudit({...JSON.parse(fs.readFileSync(path.join(evidenceRoot,'full-host-audit.json'),'utf8')),...candidate?.audit,status:'failed',error:String(error)});throw error;
+}catch(error){
+ const failed=/^[A-Z0-9_]{1,80}/.exec(error?.message??'')?.[0]??'FULL_HOST_FAILED';
+ try{writeAudit({...JSON.parse(fs.readFileSync(path.join(evidenceRoot,'full-host-audit.json'),'utf8')),...candidate?.audit,status:'failed',error:failed});}
+ catch{try{fs.writeFileSync(path.join(evidenceRoot,'full-host-audit.json'),JSON.stringify({runId,status:'failed',error:failed},null,2));}catch{console.error('FULL_HOST_AUDIT_UNWRITTEN');}}
+ throw error;
 }finally{
  if(directory){
  if(ownedManifest)cleanupOwnedContainers({docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',manifest:ownedManifest,runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,...(frontagentExistingState?{ownedContainerPrefix:frontagentExistingState.containerPrefix}:{})});

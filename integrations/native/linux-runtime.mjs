@@ -36,7 +36,7 @@ export function runLinuxContainer(copyRoot,entryArguments,{execute=spawnSync,non
   }
 }
 const stageMarker='.qiwe-linux-stage.json';
-const stageTrees=['qiwe-agent/src/','qiwe-agent/integrations/native/','qiwe-agent/node_modules/','.local/full-instance/stage/app/src/','.local/full-instance/stage/app/node_modules/','.local/core-fix/appointment-identity-candidate/src/'];
+const stageTrees=['qiwe-agent/src/','qiwe-agent/integrations/native/','qiwe-agent/node_modules/','.local/full-instance/stage/app/src/','.local/full-instance/stage/app/node_modules/','.local/core-fix/appointment-identity-candidate/src/','.local/frontagent-existing-input/'];
 const stageFiles=['qiwe-agent/package.json','qiwe-agent/package-lock.json','qiwe-agent/tsconfig.json','qiwe-agent/tsconfig.build.json','qiwe-agent/tests/fixtures/offline-bot-sdk.ts','.local/full-instance/stage/app/package.json','.local/full-instance/stage/app/package-lock.json','.local/full-instance/stage/app/tsconfig.json'];
 const runnerStage='.local/full-instance/stage/app/container/agent-runner/';
 stageTrees.push(...['src/','prompts/','node_modules/'].map(name=>runnerStage+name));

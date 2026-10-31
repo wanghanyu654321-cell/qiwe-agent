@@ -56,9 +56,63 @@ function existingLayout(dir){
   return names.join('\0')===['code','descriptor.json','state'].join('\0')&&regularFile(path.join(dir,'descriptor.json'))&&fs.lstatSync(path.join(dir,'code')).isDirectory()&&fs.lstatSync(path.join(dir,'state')).isDirectory();
  }catch{return false;}
 }
-function copyExistingInput(source,dest){
- const walk=dir=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){if(entry.isSymbolicLink()||!entry.isDirectory()&&!entry.isFile())throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');if(entry.isDirectory())walk(path.join(dir,entry.name));}};
- walk(source);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.cpSync(source,dest,{recursive:true,errorOnExist:true});
+function readableTree(dir){
+ const listed=fs.lstatSync(dir);
+ if(listed.isSymbolicLink()||!listed.isDirectory())throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ try{fs.chmodSync(dir,0o755);}catch{}
+ for(const entry of fs.readdirSync(dir,{withFileTypes:true})){
+  const target=path.join(dir,entry.name);
+  if(entry.isSymbolicLink()||!entry.isDirectory()&&!entry.isFile())throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+  if(entry.isDirectory())readableTree(target);
+  else try{fs.chmodSync(target,0o644);}catch{}
+ }
+}
+function fileSha256(file){return createHash('sha256').update(fs.readFileSync(file)).digest('hex');}
+function listTreeFiles(dir,prefix=''){
+ const files=[];
+ for(const entry of fs.readdirSync(dir,{withFileTypes:true})){
+  const relative=prefix?prefix+'/'+entry.name:entry.name;
+  if(entry.isSymbolicLink()||!entry.isDirectory()&&!entry.isFile())throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+  if(entry.isDirectory())files.push(...listTreeFiles(path.join(dir,entry.name),relative));
+  else files.push(relative);
+ }
+ return files;
+}
+/** Host-side mirror of the existing-input preparation: copy state and code, write the two declaration files, and check every descriptor hash. */
+export function buildFrontagentExistingInput(cwd,dest){
+ const product=path.join(cwd,'.local','frontagent-product-host-r1-final');
+ const bootstrapFile=path.join(cwd,'.local','frontagent-r3-20261029','bootstrap-input.private.json');
+ if(!regularFile(bootstrapFile))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ requireStageDir(path.join(product,'state'),'existing-input');
+ requireStageDir(path.join(product,'code'),'existing-input');
+ let parsed;try{parsed=JSON.parse(fs.readFileSync(bootstrapFile,'utf8'));}catch{throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');}
+ const descriptor=parsed?.descriptor??parsed,typeFiles=parsed?.typeFiles??descriptor?.typeFiles;
+ if(!descriptor||typeof descriptor!=='object'||Array.isArray(descriptor)||!Array.isArray(descriptor.files))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ for(const name of ['product-web.d.mts','product-modules.d.mts'])if(typeof typeFiles?.[name]!=='string')throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ readableTree(path.join(product,'state'));readableTree(path.join(product,'code'));
+ fs.rmSync(dest,{recursive:true,force:true});fs.mkdirSync(dest,{recursive:true});
+ fs.cpSync(path.join(product,'state'),path.join(dest,'state'),{recursive:true});
+ fs.cpSync(path.join(product,'code'),path.join(dest,'code'),{recursive:true});
+ for(const name of ['product-web.d.mts','product-modules.d.mts'])fs.writeFileSync(path.join(dest,'code',name),typeFiles[name],{mode:0o644});
+ readableTree(dest);
+ const expected=new Map(descriptor.files.map(entry=>[entry?.path,entry?.sha256]));
+ const copied=listTreeFiles(path.join(dest,'state'),'state').concat(listTreeFiles(path.join(dest,'code'),'code'));
+ if(copied.length!==expected.size||copied.some(file=>!expected.has(file)))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ for(const [relative,sha] of expected){
+  if(typeof relative!=='string'||typeof sha!=='string')throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+  const copy=path.join(dest,...relative.split('/'));
+  const source=relative==='code/product-web.d.mts'||relative==='code/product-modules.d.mts'?null:path.join(product,...relative.split('/'));
+  let sourceHash=sha;
+  if(source){if(!regularFile(source))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');sourceHash=fileSha256(source);}
+  else sourceHash=createHash('sha256').update(typeFiles[relative.slice('code/'.length)]).digest('hex');
+  if(sourceHash!==sha||fileSha256(copy)!==sha)throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ }
+ const published={...descriptor};delete published.typeFiles;
+ const body=JSON.stringify(published,null,2)+'\n';
+ const descriptorFile=path.join(dest,'descriptor.json');
+ fs.writeFileSync(descriptorFile,body,{mode:0o600});try{fs.chmodSync(descriptorFile,0o600);}catch{}
+ if(fs.readdirSync(dest).sort().join('\0')!==['code','descriptor.json','state'].join('\0'))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+ return dest;
 }
 /** Copy the Linux docker client and build-input-linux.json from the same local sources the sealed stage uses. */
 export function prepareSealedStage(cwd=process.cwd()){
@@ -68,10 +122,12 @@ export function prepareSealedStage(cwd=process.cwd()){
  requireStageDir(path.join(input,'.local','core-fix','appointment-identity-candidate','src'),'core-fix');
  requireStageDir(path.join(input,'.local','d4-skills'),'d4-skills');
  const existing=path.join(input,'.local','frontagent-existing-input');
- if(!existingLayout(existing)){
-  const source=[path.join(stageRoot,'frontagent-existing-input'),path.join(cwd,'.local','frontagent-existing-input')].find(existingLayout);
-  if(!source)throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
-  copyExistingInput(source,existing);
+ const bootstrapFile=path.join(stageRoot,'bootstrap-input.private.json');
+ if(regularFile(bootstrapFile))buildFrontagentExistingInput(cwd,existing);
+ else if(!existingLayout(existing)){
+  const source=path.join(stageRoot,'frontagent-existing-input');
+  if(!existingLayout(source))throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING','existing-input');
+  fs.mkdirSync(path.dirname(existing),{recursive:true});fs.cpSync(source,existing,{recursive:true});
  }
  return {docker,buildInput,existing};
 }
@@ -84,9 +140,10 @@ function resolveHostControls(stageInput,options){
 }
 export function assertRecordedHostBoundary(args){
  const at=(flag,value)=>{const index=args.indexOf(flag);if(args[index+1]!==value)fail('PILOT_LAUNCH_BOUNDARY');};
- at('--cap-drop','ALL');at('--security-opt','no-new-privileges');at('--user','1000:1000');at('--workdir','/tmp');
+ at('--cap-drop','ALL');at('--security-opt','no-new-privileges');at('--user','1000:1000');at('--workdir','/tmp');at('--pids-limit','256');at('--memory','4g');at('--cpus','2');
+ const group=args.indexOf('--group-add');if(group<0||!/^\d+$/.test(args[group+1]??''))fail('PILOT_LAUNCH_BOUNDARY');
  if(!args.includes('--read-only')||args.includes('--tmpfs'))fail('PILOT_LAUNCH_BOUNDARY');
- if(args.some(item=>typeof item==='string'&&(item.startsWith('QIWE_RESTORATION_RECEIPT=')||item.includes(':/run/docker.sock')||item.includes(':/var/run/docker.sock'))))fail('PILOT_LAUNCH_BOUNDARY');
+ if(args.some(item=>typeof item==='string'&&(item.startsWith('QIWE_RESTORATION_RECEIPT=')||item.startsWith('QIWE_PILOT_READY_NONCE=')||item.includes(':/run/docker.sock')||item.includes(':/var/run/docker.sock'))))fail('PILOT_LAUNCH_BOUNDARY');
  const mounts=[];
  for(let index=0;index<args.length;index++)if(args[index]==='-v')mounts.push(args[index+1]??'');
  const byDest=new Map(mounts.map(item=>[item.endsWith(':ro')?item.slice(0,-3).slice(item.slice(0,-3).lastIndexOf(':')+1):item.slice(item.lastIndexOf(':')+1),item]));
@@ -94,9 +151,9 @@ export function assertRecordedHostBoundary(args){
  if(JSON.stringify([...byDest.keys()].sort())!==JSON.stringify([...wanted].sort()))fail('PILOT_LAUNCH_BOUNDARY');
  if(!byDest.get('/input').endsWith(':/input:ro')||!byDest.get('/qiwe-control/build-input.json').endsWith(':ro')||!byDest.get('/qiwe-control/docker').endsWith(':/qiwe-control/docker:ro'))fail('PILOT_LAUNCH_BOUNDARY');
  if(!/^qiwe-tmp-[a-z0-9-]+:\/tmp$/.test(byDest.get('/tmp'))||byDest.get('/tmp').endsWith(':ro'))fail('PILOT_LAUNCH_BOUNDARY');
- if(!args.some(item=>typeof item==='string'&&item.includes('exec node /input/qiwe-agent/integrations/native/verify-full-host.mjs /input/.local/full-instance/stage/app/src --host-overlay /input/.local/core-fix/appointment-identity-candidate/src --skill-root /tmp/qiwe-skill-root')))fail('PILOT_LAUNCH_BOUNDARY');
- if(!args.some(item=>typeof item==='string'&&item.includes('--frontagent-existing-state /tmp/qiwe-frontagent-input')))fail('PILOT_LAUNCH_BOUNDARY');
- if(!args.some(item=>typeof item==='string'&&item.includes('cp -a /input/.local/d4-skills /tmp/qiwe-skill-root')&&item.includes('cp -a /input/.local/frontagent-existing-input /tmp/qiwe-frontagent-input')))fail('PILOT_LAUNCH_BOUNDARY');
+ if(!args.some(item=>typeof item==='string'&&item.includes('exec node /input/qiwe-agent/integrations/native/verify-full-host.mjs /input/.local/full-instance/stage/app/src --host-overlay /input/.local/core-fix/appointment-identity-candidate/src --skill-root /input/.local/d4-skills')))fail('PILOT_LAUNCH_BOUNDARY');
+ if(!args.some(item=>typeof item==='string'&&item.includes('--frontagent-existing-state /input/.local/frontagent-existing-input')))fail('PILOT_LAUNCH_BOUNDARY');
+ if(args.some(item=>typeof item==='string'&&item.includes('cp -a /input/.local/frontagent-existing-input')))fail('PILOT_LAUNCH_BOUNDARY');
  if(!args.includes('HOME=/tmp')||!args.includes('TMPDIR=/tmp')||!args.includes('QIWE_EVIDENCE_ROOT=/tmp/qiwe-evidence'))fail('PILOT_LAUNCH_BOUNDARY');
  return true;
 }
@@ -112,20 +169,20 @@ function placeholderFile(directory){
  fs.writeFileSync(file,body,{mode:0o600});
  return file;
 }
-function pilotEnv(runId,network,expiresAt,nonce){
- return {QIWE_CONTROLLED_REAL_PILOT:'1',QIWE_PILOT_RUN_ID:runId,QIWE_LOCAL_DOCKER_RUN_ID:runId,QIWE_LOCAL_DOCKER_NETWORK:network,QIWE_PILOT_MODEL_REQUESTS:String(PILOT_MAX_REQUESTS),QIWE_PILOT_MODEL_OUTPUT_TOKENS:String(PILOT_MAX_OUTPUT_TOKENS),QIWE_PILOT_EXPIRES_AT:String(expiresAt),QIWE_PILOT_MODEL_EXPIRES_AT:String(expiresAt),QIWE_PILOT_READY_NONCE:nonce,WEB_PORT:'39130',MINICLAW_WEB_URL:'http://127.0.0.1:39130'};
+function pilotEnv(runId,network,expiresAt){
+ return {QIWE_CONTROLLED_REAL_PILOT:'1',QIWE_PILOT_RUN_ID:runId,QIWE_LOCAL_DOCKER_RUN_ID:runId,QIWE_LOCAL_DOCKER_NETWORK:network,QIWE_PILOT_MODEL_REQUESTS:String(PILOT_MAX_REQUESTS),QIWE_PILOT_MODEL_OUTPUT_TOKENS:String(PILOT_MAX_OUTPUT_TOKENS),QIWE_PILOT_EXPIRES_AT:String(expiresAt),QIWE_PILOT_MODEL_EXPIRES_AT:String(expiresAt),WEB_PORT:'39130',MINICLAW_WEB_URL:'http://127.0.0.1:39130'};
 }
 function assertEntry(entryArgs){
  if(!Array.isArray(entryArgs)||entryArgs.length===0||entryArgs.some(item=>typeof item!=='string'||!entryToken.test(item)||secretArg.test(item)||item.includes('\n')))fail('PILOT_LAUNCH_ENTRY_INVALID');
 }
 const readyDir='/tmp/qiwe-ready',readyFlag=readyDir+'/flag';
 function waiterLoop(){
- return `while true; do if [ -f ${readyFlag} ]; then owner=$(stat -c %u ${readyFlag}); body=$(cat ${readyFlag}); if [ "$owner" = 0 ] && [ "$body" = "$QIWE_PILOT_READY_NONCE" ]; then break; fi; fi; sleep 0.1; done`;
+ return `while true; do if [ -f ${readyFlag} ]; then owner=$(stat -c %u ${readyFlag}); mode=$(stat -c %a ${readyFlag}); if [ "$owner" = 0 ] && [ "$mode" = 644 ]; then break; fi; fi; sleep 0.1; done`;
 }
-const hostedSource='/input/.local/full-instance/stage/app/src',hostedOverlay='/input/.local/core-fix/appointment-identity-candidate/src',hostedSkillSource='/input/.local/d4-skills',hostedSkillRoot='/tmp/qiwe-skill-root',hostedExistingSource='/input/.local/frontagent-existing-input',hostedExistingInput='/tmp/qiwe-frontagent-input';
+const hostedSource='/input/.local/full-instance/stage/app/src',hostedOverlay='/input/.local/core-fix/appointment-identity-candidate/src',hostedSkillSource='/input/.local/d4-skills',hostedExistingSource='/input/.local/frontagent-existing-input';
 function realHostEntry(given){
  const extra=Array.isArray(given)?given.filter(item=>item!=='verify-full-host.mjs'&&item!=='/input/qiwe-agent/integrations/native/verify-full-host.mjs'):[];
- const base=['/input/qiwe-agent/integrations/native/verify-full-host.mjs',hostedSource,'--host-overlay',hostedOverlay,'--skill-root',hostedSkillRoot,'--full-host-conversations','--restoration-scenario','--restoration-real-container','--frontagent-existing-state',hostedExistingInput,'--typecheck','--controlled-real-pilot'];
+ const base=['/input/qiwe-agent/integrations/native/verify-full-host.mjs',hostedSource,'--host-overlay',hostedOverlay,'--skill-root',hostedSkillSource,'--full-host-conversations','--restoration-scenario','--restoration-real-container','--frontagent-existing-state',hostedExistingSource,'--typecheck','--controlled-real-pilot'];
  for(const item of extra)if(!base.includes(item))base.push(item);
  return base;
 }
@@ -134,11 +191,7 @@ function hostedPrelude(){
  return `[ -d ${hostedSource} ] || ${missing('full-instance')}
 [ -d ${hostedOverlay} ] || ${missing('core-fix')}
 [ -d ${hostedSkillSource} ] || ${missing('d4-skills')}
-[ -d ${hostedExistingSource} ] && [ -f ${hostedExistingSource}/descriptor.json ] || ${missing('existing-input')}
-rm -rf ${hostedSkillRoot} ${hostedExistingInput}
-cp -a ${hostedSkillSource} ${hostedSkillRoot} || ${missing('d4-skills')}
-cp -a ${hostedExistingSource} ${hostedExistingInput} || ${missing('existing-input')}
-[ -f ${hostedExistingInput}/descriptor.json ] && [ -d ${hostedExistingInput}/code ] && [ -d ${hostedExistingInput}/state ] && [ -f ${hostedSkillRoot}/beauty-local-content/SKILL.md ] || ${missing('existing-input')}
+[ -d ${hostedExistingSource} ] && [ -f ${hostedExistingSource}/descriptor.json ] && [ -d ${hostedExistingSource}/code ] && [ -d ${hostedExistingSource}/state ] || ${missing('existing-input')}
 `;
 }
 function waiterScript(entryArgs,prelude=''){
@@ -153,7 +206,7 @@ function rehearsalPhase(output){
 }
 function sanitizeMessage(value){
  if(typeof value!=='string')return '';
- return value.replace(/[\r\n]+/g,' ').slice(0,300).replace(/(?:api[_-]?key|token|secret|password)\s*[:=]\s*\S+/gi,'[redacted]');
+ return value.replace(/[\r\n]+/g,' ').slice(0,300).replace(/(?:api[_-]?key|token|secret|password|adminCookie|miniclaw_session)\s*[:=]\s*\S+/gi,'[redacted]');
 }
 function failureText(error){
  const stderr=Buffer.isBuffer(error?.stderr)?error.stderr.toString('utf8'):typeof error?.stderr==='string'?error.stderr:'';
@@ -167,7 +220,7 @@ function publicFailure(error){
  if(typeof error?.reason==='string'&&/^[a-z0-9-]{1,40}$/.test(error.reason))wrapped.reason=error.reason;
  throw wrapped;
 }
-const placeholderScript=`${waiterLoop()}; exec node -e 'const fs=require("fs");const flag="${readyFlag}";const st=fs.statSync(flag);const body=fs.readFileSync(flag,"utf8");if(st.uid!==0||body!==process.env.QIWE_PILOT_READY_NONCE)process.exit(1);const p="${PILOT_PRIVATE_CONFIG_PATH}";const s=fs.statSync(p);if(!s.isFile()||s.uid!==1000||(s.mode&511)!==384||s.nlink!==1)process.exit(1);process.stdout.write("CONTROLLED_REAL_READY "+process.env.QIWE_PILOT_READY_NONCE+"\\n");'`;
+const placeholderScript=`${waiterLoop()}; exec node -e 'const fs=require("fs");const flag="${readyFlag}";const st=fs.statSync(flag);const body=fs.readFileSync(flag,"utf8");if(st.uid!==0||(st.mode&511)!==420||!/^[a-f0-9]{32}$/.test(body))process.exit(1);const p="${PILOT_PRIVATE_CONFIG_PATH}";const s=fs.statSync(p);if(!s.isFile()||s.uid!==1000||(s.mode&511)!==384||s.nlink!==1)process.exit(1);process.stdout.write("CONTROLLED_REAL_READY "+body+"\\n");'`;
 function sleepMs(ms){defaultExec(process.execPath,['-e','Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,'+Number(ms)+')'],{timeout:ms+2000});}
 export function launcherPlan(platform,args=[]){
  const dash=args.indexOf('--'),cli=dash>=0?args.slice(0,dash):args,synthetic=cli.includes('--synthetic'),noCredential=cli.includes('--no-credential'),rehearsal=cli.includes('--rehearsal');
@@ -196,7 +249,7 @@ export function runSupervisedPilot(options={}){
  const scratch=createPilotScratch({platform:options.platform,homedir:options.homedir}),privateFile=mode==='real'?options.privateFile:sealWindowsPlaceholder(placeholderFile(scratch),{platform:options.platform,homedir:options.homedir,currentSid:options.currentSid,execFileSync:options.aclExec});
  const exec=options.execFileSync??defaultExec,docker='docker',prefix=context?['--context',context]:[];
  const wrapped=(command,args,opts)=>exec(command,[...prefix,...args],{stdio:['ignore','pipe','pipe'],...opts});
- const environment=pilotEnv(runId,network,expiresAt,nonce);
+ const environment=pilotEnv(runId,network,expiresAt);
  const volume=hosted?'qiwe-tmp-'+runId:undefined;
  if(hosted)Object.assign(environment,{HOME:'/tmp',TMPDIR:'/tmp',QIWE_EVIDENCE_ROOT:'/tmp/qiwe-evidence',QIWE_LOCAL_DOCKER_VOLUME:volume,QIWE_LOCAL_DOCKER_HOST:hostName,QIWE_LOCAL_DOCKER_IMAGE:image,QIWE_LOCAL_DOCKER_DRIVER_IMAGE:RUNNER_IMAGE,QIWE_RESTORATION_REAL_CONTAINER:'1'});
  const stage=hosted?resolveSealedStage(options.cwd??process.cwd()):undefined;
@@ -222,8 +275,11 @@ export function runSupervisedPilot(options={}){
    wrapped(docker,['network','create','--driver','bridge','--label','qiwe.verification-run='+runId,'--label','qiwe.controlled-real-pilot=local-test','--opt','com.docker.network.enable_ipv6=false',network]);
    wrapped(docker,['volume','create','--label','qiwe.verification-run='+runId,volume]);
    wrapped(docker,['run','--rm','--network','none','--user','0:0','--mount',`type=volume,source=${volume},target=/tmp`,'--entrypoint','chmod',image,'1777','/tmp']);
+   const existingOnHost=path.join(stage,'.local','frontagent-existing-input');
+   if(fs.existsSync(existingOnHost))wrapped(docker,['run','--rm','--network','none','--user','0:0','--mount',`type=bind,source=${existingOnHost},target=/existing`,'--entrypoint','sh',image,'-c','find /existing -type d -exec chmod 755 {} + && find /existing -type f ! -name descriptor.json -exec chmod 644 {} + && chown 1000:1000 /existing/descriptor.json && chmod 600 /existing/descriptor.json']);
   }
-  const boundary=hosted?['--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--workdir','/tmp']:[];
+  const socketGroup=hosted&&!( (options.platform??process.platform)==='win32'||Boolean(context) )?(()=>{try{const gid=fs.statSync(controls.socket).gid;if(Number.isInteger(gid)&&gid>=0)return String(gid);}catch{}return '0';})():'0';
+  const boundary=hosted?['--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','256','--memory','4g','--cpus','2','--group-add',socketGroup,'--workdir','/tmp']:[];
   const scratchTmp=mode==='no-credential'?['--tmpfs','/tmp:rw,nosuid,nodev,mode=1777']:[];
   const createArgs=['create','--name',hostName,'--network',network,'--user','1000:1000',...boundary,...scratchTmp,...realMounts.flatMap(item=>['-v',item]),...publishArgs,...envArgs,'--entrypoint','/bin/sh',image,'-c',script];
   if(hosted)assertRecordedHostBoundary(createArgs);
@@ -232,18 +288,22 @@ export function runSupervisedPilot(options={}){
   try{wrapped(docker,['exec','--user','0:0',hostName,'mkdir','-m','755',readyDir]);}catch{fail('PILOT_LAUNCH_READY_FLAG_EXISTS');}
   if(tagged(wrapped(docker,['logs',hostName])).length!==0)fail('PILOT_LAUNCH_NOT_READY');
   runContainerPrivateInstall({execFileSync:wrapped,docker,container:hostName,hostFile:privateFile,destination:PILOT_PRIVATE_CONFIG_PATH,platform:options.platform,homedir:options.homedir,acl:options.acl,user:options.user,realpath:options.realpath,aces:options.aces,currentSid:options.currentSid,reparsePoint:options.reparsePoint,aclExec:options.aclExec});
-  wrapped(docker,['exec','--user','0:0',hostName,'sh','-c',`umask 022; printf %s "$QIWE_PILOT_READY_NONCE" > ${readyFlag} && chmod 644 ${readyFlag}`]);
+  wrapped(docker,['exec','--user','0:0',hostName,'sh','-c','umask 077; printf %s "$1" > /tmp/qiwe-ready/nonce && chmod 400 /tmp/qiwe-ready/nonce; umask 022; printf %s "$1" > /tmp/qiwe-ready/flag && chmod 644 /tmp/qiwe-ready/flag','sh',nonce]);
   const attempts=options.logAttempts??Math.max(1,Math.ceil((Number(environment.QIWE_PILOT_EXPIRES_AT)-Date.now())/100));let ready='';
   const containerStatus=()=>String(wrapped(docker,['inspect','-f','{{.State.Status}}',hostName])??'');
   const stoppedHost=status=>/\b(?:exited|dead)\b/.test(status);
+  const captureHostExit=()=>{
+   let exitCode=1,logTail='';
+   try{exitCode=Number(String(wrapped(docker,['inspect','-f','{{.State.ExitCode}}',hostName])??'').trim());}catch{}
+   try{logTail=String(wrapped(docker,['logs','--tail','50',hostName])??'');}catch{}
+   const error=Error('PILOT_LAUNCH_HOST_EXITED');
+   error.exitCode=Number.isInteger(exitCode)?exitCode:1;
+   error.logTail=logTail.split(/\r?\n/).slice(-50).map(sanitizeMessage).filter(Boolean).join('\n');
+   throw error;
+  };
   for(let index=0;index<attempts;index++){
    const status=containerStatus();
-   if(stoppedHost(status)){
-    const output=String(wrapped(docker,['logs',hostName])??'');
-    const reason=/PILOT_LAUNCH_STAGE_INPUT_MISSING ([a-z0-9-]+)/.exec(output);
-    if(reason)throw stageReason('PILOT_LAUNCH_STAGE_INPUT_MISSING',reason[1]);
-    fail('PILOT_LAUNCH_NOT_READY');
-   }
+   if(stoppedHost(status))captureHostExit();
    if(mode==='rehearsal'){
     const phase=rehearsalPhase(wrapped(docker,['logs',hostName]));
     let evidence=false;
@@ -271,11 +331,11 @@ export function createRecordingDocker(){
  const files=new Map();let running=false,nonce='',flagReady=false,logsServed=false;
  const execFileSync=(command,args,options)=>{
   if(args.includes('exec')&&!running){const error=Error('container is not running');error.status=1;throw error;}
-  if(args.includes('inspect')&&args.includes('-f'))return logsServed?'exited\n':'running\n';
-  if(args.includes('create')&&args.includes('--name')){running=false;nonce=args.find(item=>item.startsWith('QIWE_PILOT_READY_NONCE='))?.split('=')[1]??'';}
+  if(args.includes('inspect')&&args.includes('-f')){const format=args[args.indexOf('-f')+1]??'';if(String(format).includes('ExitCode'))return '1\n';return logsServed?'exited\n':'running\n';}
+  if(args.includes('create')&&args.includes('--name'))running=false;
   if(args.includes('start')&&!args.includes('create')&&!args.includes('exec'))running=true;
   if(args.some(item=>String(item).includes('cat >'))){const dest=String(args.find(item=>String(item).includes('cat >'))).match(/\/tmp\/qiwe-private-[a-f0-9]{16}/)?.[0];if(dest)files.set(dest,stdinBytes(options));return '';}
-  if(args.includes('exec')&&args.some(item=>item.includes('/tmp/qiwe-ready/flag')&&item.includes('printf')))flagReady=true;
+  if(args.includes('exec')&&args.some(item=>item.includes('/tmp/qiwe-ready/flag')&&item.includes('printf'))){nonce=args.find(item=>/^[a-f0-9]{32}$/.test(item))??nonce;flagReady=true;}
   const op=args.find(item=>['cp','sha256sum','stat','ln','rm','logs'].includes(item));
   if(op==='logs'){const body=flagReady?`CONTROLLED_REAL_READY ${nonce}\n`:'waiting\n';if(body.includes('CONTROLLED_REAL_READY'))logsServed=true;return body;}
   if(op==='cp'){const host=args[args.indexOf('--')+1],dest=args.at(-1).slice(args.at(-1).indexOf(':')+1);files.set(dest,fs.readFileSync(host));return '';}
@@ -318,6 +378,13 @@ function main(){
   if(plan.mode==='synthetic')result.stop();
   else result.wait();
  }catch(error){
+  if(error?.message==='PILOT_LAUNCH_HOST_EXITED'){
+   console.error('PILOT_LAUNCH_HOST_EXITED');
+   console.error(String(error.exitCode??''));
+   if(typeof error.logTail==='string'&&error.logTail)console.error(error.logTail);
+   process.exitCode=1;
+   return;
+  }
   const code=coded(error)?error.message:'PILOT_LAUNCH_FAILED';
   console.error(code);
   if(code==='PILOT_LAUNCH_FAILED'&&error?.causeName){console.error(error.causeName);if(error.causeMessage)console.error(error.causeMessage);}

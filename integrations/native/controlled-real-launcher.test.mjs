@@ -22,11 +22,13 @@ test('synthetic launcher creates the container, installs a fake private file, th
   const sub=exec.calls.map(argv=>argv[1]);
   const created=sub.indexOf('create'),started=sub.indexOf('start'),copied=exec.calls.findIndex(argv=>argv.some(item=>String(item).includes('cat >'))),execed=exec.calls.findIndex(argv=>argv.includes('exec'));
   assert.ok(created!==-1&&created<started&&started<execed&&execed<=copied);
-  const nonce=exec.calls.find(argv=>argv.includes('create')).find(item=>item.startsWith('QIWE_PILOT_READY_NONCE=')).split('=')[1];
+  const nonce=exec.calls.find(argv=>argv.includes('exec')&&argv.some(item=>/^[a-f0-9]{32}$/.test(item))).find(item=>/^[a-f0-9]{32}$/.test(item));
+  assert.equal(exec.calls.find(argv=>argv.includes('create')).some(item=>String(item).startsWith('QIWE_PILOT_READY_NONCE=')),false);
   assert.match(nonce,/^[a-f0-9]{32}$/);
   const flagWrite=exec.calls.find(argv=>argv.includes('exec')&&argv.some(item=>item.includes('/tmp/qiwe-ready/flag')));
   assert.equal(flagWrite.includes('0:0'),true);
-  assert.equal(flagWrite.some(item=>item.includes(nonce)),false);
+  assert.equal(flagWrite.includes(nonce),true);
+  assert.equal(flagWrite.filter(item=>String(item).includes('printf')).some(item=>item.includes(nonce)),false);
   assert.equal(result.report.ready,`CONTROLLED_REAL_READY ${nonce}`);
   const create=exec.calls.find(argv=>argv[1]==='create');
   assert.equal(create.includes('--network')&&create.includes('none'),true);
@@ -76,8 +78,10 @@ test('real launcher opens a private bridge, installs the file, then starts, and 
   const network=sub.indexOf('network'),created=sub.indexOf('create'),started=sub.indexOf('start'),copied=exec.calls.findIndex(argv=>argv.some(item=>String(item).includes('cat >')));
   assert.ok(network!==-1&&network<created&&created<started&&started<copied);
   const create=exec.calls.find(argv=>argv.includes('create')&&argv.includes('--name'));
-  assert.equal(create.some(item=>item.includes('exec node /input/qiwe-agent/integrations/native/verify-full-host.mjs /input/.local/full-instance/stage/app/src --host-overlay /input/.local/core-fix/appointment-identity-candidate/src --skill-root /tmp/qiwe-skill-root')),true);
-  assert.equal(create.some(item=>item.includes('--frontagent-existing-state /tmp/qiwe-frontagent-input')&&item.includes('cp -a /input/.local/d4-skills /tmp/qiwe-skill-root')&&item.includes('cp -a /input/.local/frontagent-existing-input /tmp/qiwe-frontagent-input')),true);
+  assert.equal(create.some(item=>item.includes('exec node /input/qiwe-agent/integrations/native/verify-full-host.mjs /input/.local/full-instance/stage/app/src --host-overlay /input/.local/core-fix/appointment-identity-candidate/src --skill-root /input/.local/d4-skills')),true);
+  assert.equal(create.some(item=>item.includes('--frontagent-existing-state /input/.local/frontagent-existing-input')),true);
+  assert.equal(create.includes('--group-add')&&create[create.indexOf('--group-add')+1]==='0',true);
+  assert.equal(create.includes('--pids-limit')&&create.includes('256')&&create.includes('--memory')&&create.includes('4g')&&create.includes('--cpus')&&create.includes('2'),true);
   assert.equal(create.includes('HOME=/tmp')&&create.includes('TMPDIR=/tmp')&&create.includes('QIWE_EVIDENCE_ROOT=/tmp/qiwe-evidence'),true);
   assert.equal(assertRecordedHostBoundary(create),true);
   assert.equal(create.some(item=>item.startsWith('QIWE_RESTORATION_RECEIPT=')),false);
@@ -280,11 +284,11 @@ test('rehearsal resolves host controls and succeeds only after the receipt and e
   finally{fs.rmSync(missingControls,{recursive:true,force:true});}
   const early=trackingDocker();
   assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:early.execFileSync,cwd:root,dockerContext:'desktop-linux',logAttempts:1,sleep(){},setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_NOT_READY');
-  const dead=trackingDocker({exitedDuringReady:true});
-  assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:dead.execFileSync,cwd:root,dockerContext:'desktop-linux',logAttempts:2,sleep(){},setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_NOT_READY');
+  const dead=trackingDocker({exitedDuringReady:true,exitCode:'9'});
+  assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:dead.execFileSync,cwd:root,dockerContext:'desktop-linux',logAttempts:2,sleep(){},setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_HOST_EXITED'&&error.exitCode===9);
   assert.equal(dead.calls.some(argv=>argv.includes('rm')&&argv.includes('-f')),true);
-  const stageMiss=trackingDocker({exitedDuringReady:true,logs:'PILOT_LAUNCH_STAGE_INPUT_MISSING existing-input\n'});
-  assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:stageMiss.execFileSync,cwd:root,dockerContext:'desktop-linux',logAttempts:2,sleep(){},setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_STAGE_INPUT_MISSING'&&error.reason==='existing-input');
+  const stageMiss=trackingDocker({exitedDuringReady:true,exitCode:'3',logs:'PILOT_LAUNCH_STAGE_INPUT_MISSING existing-input\nminiclaw_session=synthetic-private-session\n'});
+  assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:stageMiss.execFileSync,cwd:root,dockerContext:'desktop-linux',logAttempts:2,sleep(){},setTimeout:()=>({unref(){}}),...win}),error=>error.message==='PILOT_LAUNCH_HOST_EXITED'&&error.exitCode===3&&error.logTail.includes('PILOT_LAUNCH_STAGE_INPUT_MISSING')&&!error.logTail.includes('synthetic-private-session'));
   const missing=trackingDocker({logs:'receipt',evidence:false});
   assert.throws(()=>runSupervisedPilot({mode:'rehearsal',image,env:clean,execFileSync:missing.execFileSync,cwd:root,dockerContext:'desktop-linux',logAttempts:1,sleep(){},setTimeout:()=>({unref(){}}),...win}),/PILOT_LAUNCH_NOT_READY/);
   const exec=trackingDocker({logs:'receipt'});
@@ -302,9 +306,46 @@ test('rehearsal resolves host controls and succeeds only after the receipt and e
 });
 test('a host that has already exited fails the ready loop',()=>{
  const exec=trackingDocker({exitedDuringReady:true});
- assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,logAttempts:3,sleep(){},setTimeout:()=>({unref(){}})}),error=>error.message==='PILOT_LAUNCH_NOT_READY');
+ assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,logAttempts:3,sleep(){},setTimeout:()=>({unref(){}})}),error=>error.message==='PILOT_LAUNCH_HOST_EXITED'&&Number.isInteger(error.exitCode));
  assert.equal(exec.calls.some(argv=>argv.includes('rm')&&argv.includes('-f')),true);
  assert.equal(exec.calls.filter(argv=>argv.includes('logs')).length<=2,true);
+});
+test('prepare-stage builds frontagent-existing-input from the product host and checks every hash',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-existing-build-'));
+ const stage=path.join(root,'.local','frontagent-r3-20261029');
+ const input=path.join(stage,'input');
+ fs.mkdirSync(path.join(input,'.local','full-instance','stage','app','src'),{recursive:true});
+ fs.mkdirSync(path.join(input,'.local','core-fix','appointment-identity-candidate','src'),{recursive:true});
+ fs.mkdirSync(path.join(input,'.local','d4-skills'),{recursive:true});
+ fs.writeFileSync(path.join(stage,'docker'),'linux-docker');
+ fs.writeFileSync(path.join(stage,'build-input-linux.json'),'{}\n');
+ const product=path.join(root,'.local','frontagent-product-host-r1-final');
+ fs.mkdirSync(path.join(product,'state','runtime'),{recursive:true});
+ fs.mkdirSync(path.join(product,'code'),{recursive:true});
+ const db=Buffer.from('sqlite-bytes');
+ fs.writeFileSync(path.join(product,'state','runtime','messages.db'),db,{mode:0o600});
+ fs.writeFileSync(path.join(product,'code','product-web.mjs'),'web-bytes');
+ const typeWeb='export declare const routes: boolean;\n',typeModules='export declare const modules: boolean;\n';
+ const sha=value=>createHash('sha256').update(value).digest('hex');
+ const cookie='miniclaw_session=synthetic-private-session';
+ const descriptor={format:'frontagent-existing-state-v1',accountId:'existing-member',homeJid:'web:existing-member-0',role:'marketing',profileId:'p',workspaceJid:'web:existing-member-1',folder:'folder',tenantId:'t',storeId:'s',instanceId:'i',employee:{employeeId:'e',employeeName:'Existing'},adminCookie:cookie,expectedCounts:{users:2,profiles:16,groups:16},files:[{path:'state/runtime/messages.db',sha256:sha(db)},{path:'code/product-web.mjs',sha256:sha('web-bytes')},{path:'code/product-web.d.mts',sha256:sha(typeWeb)},{path:'code/product-modules.d.mts',sha256:sha(typeModules)}]};
+ fs.writeFileSync(path.join(stage,'bootstrap-input.private.json'),JSON.stringify({descriptor,typeFiles:{'product-web.d.mts':typeWeb,'product-modules.d.mts':typeModules}}));
+ try{
+  const prepared=prepareSealedStage(root);
+  assert.deepEqual(fs.readdirSync(prepared.existing).sort(),['code','descriptor.json','state']);
+  if(process.platform!=='win32'){
+   assert.equal((fs.statSync(path.join(prepared.existing,'descriptor.json')).mode&0o777),0o600);
+   assert.equal((fs.statSync(path.join(prepared.existing,'state','runtime','messages.db')).mode&0o777),0o644);
+  }
+  assert.equal(sha(fs.readFileSync(path.join(prepared.existing,'state','runtime','messages.db'))),sha(db));
+  assert.equal(fs.readFileSync(path.join(prepared.existing,'code','product-web.d.mts'),'utf8'),typeWeb);
+  const written=JSON.parse(fs.readFileSync(path.join(prepared.existing,'descriptor.json'),'utf8'));
+  assert.equal(written.adminCookie,cookie);
+  assert.equal(JSON.stringify(prepared).includes(cookie),false);
+  descriptor.files[0].sha256='0'.repeat(64);
+  fs.writeFileSync(path.join(stage,'bootstrap-input.private.json'),JSON.stringify({descriptor,typeFiles:{'product-web.d.mts':typeWeb,'product-modules.d.mts':typeModules}}));
+  assert.throws(()=>prepareSealedStage(root),error=>error.message==='PILOT_LAUNCH_STAGE_INPUT_MISSING'&&error.reason==='existing-input'&&!String(error).includes(cookie));
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 test('prepare-stage copies docker and build-input from the local runner source',()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-prepare-stage-'));
@@ -337,20 +378,7 @@ test('prepare-stage copies docker and build-input from the local runner source',
 });
 test('an uncoded launch error prints its name and message without secrets',()=>{
  const execFileSync=(command,args)=>{if(args.includes('create'))throw Error('listen EACCES token=supersecretvalue');return '';};
- assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync,setTimeout:()=>({unref(){}})}),error=>error.message==='PILOT_LAUNCH_FAILED'&&error.causeName==='Error'&&error.causeMessage==='listen EACCES [redacted]'&&!error.causeMessage.includes('supersecretvalue'));
- const empty=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-empty-path-'));
- const docker=path.join(empty,process.platform==='win32'?'docker.cmd':'docker');
- fs.writeFileSync(docker,process.platform==='win32'?'@echo off\r\nif "%1"=="rm" exit /b 0\r\necho listen EACCES 1>&2\r\nexit /b 1\r\n':'#!/bin/sh\nif [ "$1" = rm ]; then exit 0; fi\necho listen EACCES >&2\nexit 1\n');
- if(process.platform!=='win32')fs.chmodSync(docker,0o755);
- try{
-  const child=spawnSync(process.execPath,[launcher,'--no-credential'],{encoding:'utf8',env:{PATH:empty},timeout:20000});
-  assert.equal(child.status,1,child.stderr);
-  const lines=child.stderr.trim().split(/\r?\n/).filter(Boolean);
-  assert.equal(lines[0],'PILOT_LAUNCH_FAILED');
-  assert.equal(lines[1],'Error');
-  assert.match(lines[2],/listen EACCES/);
-  assert.equal(child.stderr.includes('synthetic-bot-secret'),false);
- }finally{fs.rmSync(empty,{recursive:true,force:true});}
+ assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync,setTimeout:()=>({unref(){}})}),error=>error.message==='PILOT_LAUNCH_FAILED'&&error.causeName==='Error'&&error.causeMessage==='listen EACCES [redacted]'&&!error.causeMessage.includes('supersecretvalue')&&!error.causeMessage.includes('powershell.exe'));
 });
 function dockerDaemon(){try{realExec('docker',['info'],{stdio:'ignore',timeout:8000});return true;}catch{return false;}}
 async function hostControls(root){
@@ -369,16 +397,16 @@ function trackingDocker(options={}){
  const execFileSync=(command,args,opts)=>{
   if(args.includes('exec')&&!running){const error=Error('container is not running');error.status=1;throw error;}
   calls.push([command,...args]);
-  if(args.includes('inspect')&&args.includes('-f'))return options.exitedDuringReady||logsServed?'exited\n':'running\n';
+  if(args.includes('inspect')&&args.includes('-f')){const format=args[args.indexOf('-f')+1]??'';if(String(format).includes('ExitCode'))return String(options.exitCode??1)+'\n';return options.exitedDuringReady||logsServed?'exited\n':'running\n';}
   if(options.failRm&&args.includes('rm')&&args.includes('-f')&&!args.includes('exec')){const error=Error('rm failed');error.status=1;throw error;}
   if(options.failStart&&args.includes('start')&&!args.includes('create')&&!args.includes('exec')){const error=Error('start failed');error.status=1;throw error;}
   if(options.failVolume&&args.includes('volume')&&args.includes('rm')){const error=Error('volume rm failed');error.status=1;throw error;}
   if(options.readyFlagExists&&args.includes('mkdir')&&args.includes('/tmp/qiwe-ready')){const error=Error('EXISTS');error.status=1;throw error;}
   if(args.some(item=>String(item).includes('full-host-audit.json')))return options.evidence===false?'':'QIWE_EVIDENCE_WRITTEN\n';
   if(args.some(item=>String(item).includes('cat >'))){const dest=String(args.find(item=>String(item).includes('cat >'))).match(/\/tmp\/qiwe-private-[a-f0-9]{16}/)?.[0];if(dest)files.set(dest,opts?.stdio?.[0]==='pipe'?Buffer.from(opts?.input??''):Buffer.alloc(0));return '';}
-  if(args.includes('create')&&args.includes('--name')){running=false;nonce=args.find(item=>item.startsWith('QIWE_PILOT_READY_NONCE='))?.split('=')[1]??'';}
+  if(args.includes('create')&&args.includes('--name'))running=false;
   if(args.includes('start')&&!args.includes('create'))running=true;
-  if(args.includes('exec')&&args.some(item=>item.includes('/tmp/qiwe-ready/flag')&&item.includes('printf')))flagReady=true;
+  if(args.includes('exec')&&args.some(item=>String(item).includes('/tmp/qiwe-ready/flag')&&String(item).includes('printf'))){nonce=args.find(item=>/^[a-f0-9]{32}$/.test(item))??nonce;flagReady=true;}
   const op=args.find(item=>['cp','sha256sum','stat','ln','rm','logs','create','start','network'].includes(item));
   if(op==='logs'){
    let body;

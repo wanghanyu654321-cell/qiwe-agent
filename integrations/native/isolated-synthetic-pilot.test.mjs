@@ -93,7 +93,7 @@ test('typescript load is outside the audit try and a failure is a fixed code',as
  const source=fs.readFileSync(path.join(here,'verify-full-host.mjs'),'utf8');
  const runAt=source.indexOf("console.log('FULL_HOST_RUN'");
  const loadAt=source.search(/import\('typescript'\)|loadVerifierTypescript\(/);
- const auditCatch=source.indexOf('catch(error){writeAudit');
+ const auditCatch=source.indexOf('FULL_HOST_AUDIT_UNWRITTEN');
  const tryStart=source.lastIndexOf('try{',auditCatch);
  assert.ok(loadAt!==-1&&loadAt<runAt&&loadAt<tryStart);
  const {loadVerifierTypescript}=await import('./full-host-typescript.mjs');
