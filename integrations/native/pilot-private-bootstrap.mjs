@@ -10,13 +10,15 @@ const liveRelative=Object.freeze(['.local/live-model/.env','.local/live-channel/
 export const PILOT_PRIVATE_CONFIG_PATH='/tmp/qiwe-live-pilot.private.json';
 export const LIVE_CREDENTIAL_FILES=Object.freeze(liveRelative.map(relative=>path.join(projectRoot,relative)));
 export const REAL_CREDENTIAL_ENV_NAMES=Object.freeze(['ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','WECOM_BOT_ID','WECOM_BOT_SECRET','WECOM_CORP_ID']);
-const providerBaseUrls=new Set(['ANTHROPIC_BASE_URL','OPENAI_BASE_URL','DEEPSEEK_BASE_URL']);
-const credentialSuffix=/(?:API_KEY|AUTH_TOKEN|SECRET)$/;
+const credentialPrefixes=['OPENAI_','GEMINI_','GOOGLE_GEMINI_','DEEPSEEK_','AWS_','WECOM_'];
+const credentialSuffixes=['API_KEY','_TOKEN','SECRET','SECRET_KEY','ACCESS_KEY_ID','PASSWORD','_API_BASE','_BASE_URL','CUSTOM_HEADERS'];
 const syntheticQiweAllowlist=new Set(['QIWE_PILOT_ENTRY_MODE','QIWE_SYNTHETIC_DATA_DIR','QIWE_SYNTHETIC_FOLDER']);
 function credentialEnvName(name){
- if(syntheticQiweAllowlist.has(name))return false;
- if(name.startsWith('DEEPSEEK_')||providerBaseUrls.has(name)||REAL_CREDENTIAL_ENV_NAMES.includes(name)||name==='OPENAI_API_KEY')return true;
- return credentialSuffix.test(name);
+ const upper=String(name).toUpperCase();
+ if(syntheticQiweAllowlist.has(upper))return false;
+ if(upper.startsWith('ANTHROPIC_')&&upper!=='ANTHROPIC_MODEL')return true;
+ if(credentialPrefixes.some(prefix=>upper.startsWith(prefix))||REAL_CREDENTIAL_ENV_NAMES.includes(upper))return true;
+ return credentialSuffixes.some(suffix=>upper.endsWith(suffix));
 }
 const containerUser=1000,privateMode=0o600,maxBytes=16384;
 const fail=code=>{throw Error(code);};
@@ -27,7 +29,7 @@ function present(file){
 }
 /** Real pilot credentials and the isolated-synthetic entry cannot be combined. */
 export function assertIsolatedSyntheticClosed(env,privateConfigPath,options){
- if(!env||env.QIWE_CONTROLLED_REAL_PILOT==='1'||Object.entries(env).some(([name,value])=>typeof value==='string'&&value.length>0&&credentialEnvName(name)))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
+ if(!env||env.QIWE_CONTROLLED_REAL_PILOT==='1'||Object.entries(env).some(([name,value])=>typeof value==='string'&&value.trim().length>0&&credentialEnvName(name)))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
  const root=options?.root??projectRoot;
  if(options?.root!==undefined&&(typeof root!=='string'||!path.isAbsolute(root)))fail('ISOLATED_SYNTHETIC_INPUT_INVALID');
  const files=new Set([PILOT_PRIVATE_CONFIG_PATH,privateConfigPath,...liveRelative.map(relative=>path.join(root,relative))]);

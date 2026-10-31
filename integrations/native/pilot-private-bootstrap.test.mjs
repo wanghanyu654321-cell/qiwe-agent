@@ -166,6 +166,14 @@ test('model provider env names refuse isolated-synthetic without echoing values'
  }
  assert.doesNotThrow(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin',DEEPSEEK_API_KEY:'',ANTHROPIC_MODEL:'deepseek-flash',QIWE_PILOT_ENTRY_MODE:'isolated-synthetic',QIWE_SYNTHETIC_DATA_DIR:'/tmp/qiwe-synthetic'},absent,{root:os.tmpdir()}));
 });
+test('credential names are matched without case and cover provider families',()=>{
+ const absent=path.join(os.tmpdir(),'qiwe-missing-private.json'),token='mixed-case-key-not-for-logs';
+ const refused=['deepseek_api_key','Anthropic_Base_Url','ANTHROPIC_CUSTOM_HEADERS','OPENAI_API_BASE','AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','HF_TOKEN','gemini_api_key','WeCom_Bot_Secret'];
+ for(const name of refused){
+  assert.throws(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin',[name]:`  ${token}  `},absent,{root:os.tmpdir()}),error=>error.message==='ISOLATED_SYNTHETIC_REAL_CREDENTIAL'&&!error.message.includes(token)&&!error.message.includes(name));
+ }
+ assert.doesNotThrow(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin',anthropic_model:'deepseek-flash',DEEPSEEK_API_KEY:'   ',QIWE_SYNTHETIC_FOLDER:'marketing'},absent,{root:os.tmpdir()}));
+});
 test('documented live model and channel env files refuse isolated-synthetic without being read aloud',()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-live-env-'));
  try{
