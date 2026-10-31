@@ -16,6 +16,13 @@ function readPrivateInput(){
 }
 
 async function main(){
+ // Isolated-synthetic is not a production switch. A real private file, real token, or controlled-real flag refuses this path.
+ if(process.env.QIWE_PILOT_ENTRY_MODE==='isolated-synthetic'){
+  if(process.env.QIWE_CONTROLLED_REAL_PILOT==='1')throw Error('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
+  const {runIsolatedSyntheticWorker}=await import('./isolated-synthetic-pilot.mjs');
+  await runIsolatedSyntheticWorker({dataDir:process.env.QIWE_SYNTHETIC_DATA_DIR,folder:process.env.QIWE_SYNTHETIC_FOLDER,privateConfigPath:'/tmp/qiwe-live-pilot.private.json',env:process.env});
+  return;
+ }
  if(process.platform!=='linux'||process.env.QIWE_CONTROLLED_REAL_PILOT!=='1')throw Error('CONTROLLED_REAL_ENTRY_FORBIDDEN');
  const scope=JSON.parse(process.env.QIWE_CONTROLLED_REAL_SCOPE??'null');
  if(!scope||scope.mode!=='controlled-real-pilot'||scope.environment!=='local-test'||scope.runId!==process.env.QIWE_LOCAL_DOCKER_RUN_ID||scope.networkName!==process.env.QIWE_LOCAL_DOCKER_NETWORK||!Number.isSafeInteger(scope.expiresAt)||scope.expiresAt<=Date.now()||scope.expiresAt>Date.now()+1800000)throw Error('CONTROLLED_REAL_ENTRY_FORBIDDEN');
