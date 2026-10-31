@@ -1,0 +1,90 @@
+FULL_HOST_RUN {"runId":"2026-10-30T13-59-05-190Z-011d7cd8-5406-4093-a93d-4b8475278969","evidenceRoot":"/tmp/qiwe-full-host-evidence/2026-10-30T13-59-05-190Z-011d7cd8-5406-4093-a93d-4b8475278969","status":"preparing"}
+FULL_HOST_PHASE {"runId":"2026-10-30T13-59-05-190Z-011d7cd8-5406-4093-a93d-4b8475278969","phase":"boot","status":"starting"}
+
+ RUN  v4.1.12 /tmp/qiwe-full-host-PSNyM5
+
+[2026-10-30 14:02:03.788] [32mINFO[39m (266): [36mDatabase initialized[39m
+[2026-10-30 14:02:03.795] [32mINFO[39m (266): [36mState loaded[39m
+    [35mgroupCount[39m: 16
+[2026-10-30 14:02:03.795] [32mINFO[39m (266): [36mPlugin catalog auto-scan disabled by SystemSettings.pluginAutoScan[39m
+[2026-10-30 14:02:03.818] [32mINFO[39m (266): [36mWeb server started[39m
+    [35mport[39m: 45329
+[2026-10-30 14:02:17.195] [32mINFO[39m (266): [36mTask Scheduler V2 started[39m
+[2026-10-30 14:02:17.198] [32mINFO[39m (266): [36mDurable IM inbound execution resumed after recovery[39m
+[2026-10-30 14:02:17.202] [32mINFO[39m (266): [36mIPC watcher started (event-driven + 5s fallback)[39m
+[2026-10-30 14:02:17.202] [32mINFO[39m (266): [36mminiclaw running[39m
+[2026-10-30 14:02:17.389] [32mINFO[39m (266): [36mProcessing messages[39m
+    [35mgroup[39m: "内容营销"
+    [35mmessageCount[39m: 1
+    [35mdirectImReply[39m: false
+    [35mimageCount[39m: 0
+    [35misRecovery[39m: false
+[2026-10-30 14:02:17.392] [32mINFO[39m (266): [36mStreaming session creation result[39m
+    [35mchatJid[39m: "[REDACTED]"
+    [35mstreamingSessionJid[39m: "[REDACTED]"
+    [35mhasSession[39m: false
+[2026-10-30 14:02:17.502] [32mINFO[39m (266): [36mSpawning container agent[39m
+    [35mgroup[39m: "内容营销"
+    [35mcontainerName[39m: "miniclaw-[REDACTED]-1793368937445"
+    [35mmountCount[39m: 13
+    [35misMain[39m: false
+[2026-10-30 14:02:38.185] [32mINFO[39m (266): [36mWorkspace Memory snapshot retrieved for runtime turn[39m
+    [35msourceGroup[39m: "[REDACTED]"
+    [35mworkspaceJid[39m: "[REDACTED]"
+    [35mstoreRevision[39m: 0
+    [35mretrievalTrace[39m: {
+      "query": "<messages>\n<message id=\"b10433f2-72a9-4db9-9bcd-327763df0b60\" sender=\"[REDACTED]\" time=\"2026-10-30T14:02:17.376Z\">[c4-synthetic] 请根据已有批准资料，为美容门店写一段项目体验活动草稿，读取美容内容、内容策划和文案三个技能，说明每场限额与行动建议，并标明来源及尚未发布、尚未执行。</message>\n</messages>",
+      "itemRevisions": [],
+      "generatedAt": "2026-10-30T14:02:38.185Z"
+    }
+[2026-10-30 14:02:38.744] [32mINFO[39m (266): [36mAgent output: {"tag":"synthetic-c4-real-container-answer","status":"draft","executed":false,"published":false,"draft":{"topic":"项目体验介绍：每场限额 12 人","copy":"了解项目体验。每场限额 12 人。咨询核对项目。","source":"approved.txt","evidence"[39m
+    [35mgroup[39m: "内容营销"
+[2026-10-30 14:02:38.745] [32mINFO[39m (266): [36mMessage sent[39m
+    [35mjid[39m: "[REDACTED]"
+    [35mlength[39m: 420
+    [35msendToIM[39m: false
+ ❯ tests/frontagent-existing-flow.test.mts (1 test | 1 failed) 109940ms
+   × uses restored original Frontagent identity and role in the same real host with offline synthetic I/O 109939ms
+[2026-10-30 14:02:39.041] [32mINFO[39m (266): [36mContainer completed (streaming mode)[39m
+    [35mgroup[39m: "内容营销"
+    [35mduration[39m: 21628
+    [35mnewSessionId[39m: "01a18d1e-a6d3-79f9-be90-0cbfd83f4fa6"
+    [35mfinalStatus[39m: "success"
+[2026-10-30 14:02:39.209] [32mINFO[39m (266): [36mIM inbound callbacks paused[39m
+[2026-10-30 14:02:39.209] [32mINFO[39m (266): [36mShutdown signal received, cleaning up...[39m
+    [35msignal[39m: "SIGTERM"
+[2026-10-30 14:02:39.211] [32mINFO[39m (266): [36mGroupQueue shutting down, waiting for containers[39m
+    [35mactiveCount[39m: 0
+    [35mactiveContainerCount[39m: 0
+    [35mgracePeriodMs[39m: 15000
+[2026-10-30 14:02:39.211] [32mINFO[39m (266): [36mGroupQueue shutdown complete[39m
+    [35mactiveCount[39m: 0
+[2026-10-30 14:02:39.211] [32mINFO[39m (266): [36mAll streaming sessions aborted[39m
+    [35mcount[39m: 0
+[2026-10-30 14:02:39.211] [32mINFO[39m (266): [36mAll IM connections disconnected[39m
+[2026-10-30 14:02:39.212] [32mINFO[39m (266): [36mShutdown complete[39m
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  14:00:44
+   Duration  114.34s (transform 4.27s, setup 0ms, import 2.71s, tests 109.94s, environment 0ms)
+
+FULL_HOST_RETAINED_VOLUME_ROOT /tmp/qiwe-full-host-PSNyM5
+(node:1) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:266) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/frontagent-existing-flow.test.mts > uses restored original Frontagent identity and role in the same real host with offline synthetic I/O
+AssertionError: retained original workspace_agent_profiles row: expected 'dca2ce041e99c71304260a19f2a1af22fa4f9…' to be '6a0b02839ca303bfe47e73b4090d7cd67e1bb…' // Object.is equality
+
+Expected: "6a0b02839ca303bfe47e73b4090d7cd67e1bb14919545a22378503921364ee54"
+Received: "dca2ce041e99c71304260a19f2a1af22fa4f9b56f89d9a1cb15fa85b43f3aad3"
+
+ ❯ assertRetained tests/frontagent-existing-flow.test.mts:41:238
+
+ ❯ tests/frontagent-existing-flow.test.mts:172:3
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯

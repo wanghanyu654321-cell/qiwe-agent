@@ -1,5 +1,7 @@
 # qiwe-agent
 
+2026-10-31 接手入口：[完整工程交接、当前阻塞与复现日志](docs/handoff-20261031/README.md)。受控真实启动装配为 WIP，真实企微业务及真实会话重启查回尚未验收。
+
 当前已实现本地单成员真实试点装配 `createControlledRealWecomBotPilot`，复用 D1–D5、可信身份、SDK 和持久回复；原 `createWecomBotPilot` 合成入口继续保持隔离限制。真实装配仍需接入具体宿主与当前员工授权，不能仅填密钥就开放。已分别完成一次原 Pi 的 DeepSeek 真实连通测试和新建个人测试机器人的 SDK 认证；认证后已断开，未发送业务消息。员工实际执行和手机查回尚待验收，见[受控真实试点](docs/controlled-real-pilot.md)。此前的完整宿主与真实容器离线闭环证据见[同宿主验收](docs/t7a-fullhost-conversation-acceptance.md)。
 
 2026-10-25 已锁定原 Frontagent Claw 源码、功能锚点及本地管理员/数据来源，保存凭据与原数据库匹配，默认助手与七岗保留。最新部署包的 213 个制品和 29 个来源哈希匹配，但 HR 合成配置不能直接用于 B 店。原本地库没有指定员工和 D1–D5 记录，完整产品与企微还需重接；详见[最小修正计划](docs/frontagent-baseline-and-reconnect-plan.md)。此前旧基座页面与新空库试点已停止，不再新建账号或重装岗位。本轮仅核实、计划与 39 项相关增量验证，未启动完整组合或真实业务。
