@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {randomBytes,createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {validatePilotPrivateInput} from './frontagent-controlled-live-entry.mjs';
@@ -41,19 +42,38 @@ function readExact(fd,size){
  if(offset!==raw.length)fail('PILOT_PRIVATE_FILE_UNSAFE');
  return raw;
 }
-function snapshotHostFile(hostFile){
+/** Windows node reports NTFS mode 0666. Accept a regular file that is not a symlink or other reparse point, is inside the current user home, and whose ACL names that user without granting Everyone, Authenticated Users, or BUILTIN\\Users. Linux still requires mode 0600. */
+function windowsPrivateFileAccepted(hostFile,stat,options={}){
+ if((options.platform??process.platform)!=='win32'||!stat.isFile()||stat.nlink!==1||stat.size<=0||stat.size>maxBytes)return false;
+ let listed;try{listed=fs.lstatSync(hostFile);}catch{return false;}
+ if(!listed.isFile()||listed.isSymbolicLink()||listed.nlink!==1)return false;
+ const home=options.homedir??os.homedir();
+ if(typeof home!=='string'||!path.isAbsolute(home))return false;
+ let real;try{real=(options.realpath??fs.realpathSync)(hostFile);}catch{return false;}
+ const parent=path.dirname(real),prefix=home.endsWith(path.sep)?home:home+path.sep;
+ if(parent!==home&&!parent.startsWith(prefix))return false;
+ const user=options.user??os.userInfo().username;
+ if(typeof user!=='string'||user.length<1||user.length>120)return false;
+ let acl=options.acl;
+ if(acl===undefined){if(process.platform!=='win32')return false;try{acl=execFileSync('icacls',[hostFile],{encoding:'utf8',timeout:10000,windowsHide:true});}catch{return false;}}
+ if(typeof acl!=='string'||acl.includes('\0'))return false;
+ acl=acl.replaceAll('\r','');
+ if(/\b(?:everyone|authenticated users|builtin\\users)\b/i.test(acl)||!acl.toLowerCase().includes(user.toLowerCase()))return false;
+ return true;
+}
+function snapshotHostFile(hostFile,options={}){
  if(typeof hostFile!=='string'||!path.isAbsolute(hostFile))fail('PILOT_PRIVATE_FILE_UNSAFE');
  let fd;try{fd=fs.openSync(hostFile,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);}catch{fail('PILOT_PRIVATE_FILE_UNSAFE');}
  try{
   const stat=fs.fstatSync(fd);
-  if(!stat.isFile()||stat.nlink!==1||stat.size<=0||stat.size>maxBytes||(stat.mode&0o777)!==privateMode)fail('PILOT_PRIVATE_FILE_UNSAFE');
+  if(!stat.isFile()||stat.nlink!==1||stat.size<=0||stat.size>maxBytes||(stat.mode&0o777)!==privateMode&&!windowsPrivateFileAccepted(hostFile,stat,options))fail('PILOT_PRIVATE_FILE_UNSAFE');
   const raw=readExact(fd,stat.size);
   let parsed;try{parsed=JSON.parse(raw.toString('utf8'));}catch{fail('CONTROLLED_REAL_PRIVATE_INPUT_INVALID');}
   return {fd,raw,accepted:validatePilotPrivateInput(parsed)};
  }catch(error){fs.closeSync(fd);throw error;}
 }
-export function readHostPilotPrivateFile(hostFile){
- const opened=snapshotHostFile(hostFile);
+export function readHostPilotPrivateFile(hostFile,options){
+ const opened=snapshotHostFile(hostFile,options);
  try{return freeze(structuredClone(opened.accepted));}
  finally{fs.closeSync(opened.fd);}
 }
@@ -163,7 +183,7 @@ function linkContainerFile(execFileSync,docker,container,containerTemp,destinati
  }
 }
 export function runContainerPrivateInstall(options){
- const opened=snapshotHostFile(options?.hostFile);
+ const opened=snapshotHostFile(options?.hostFile,options);
  let snapshot;
  try{
   if(!reread(opened.fd,opened.raw))fail('PILOT_PRIVATE_INPUT_CHANGED');
@@ -183,7 +203,7 @@ export function runContainerPrivateInstall(options){
    }
    const hashed=/^([a-f0-9]{64})(?:\s|$)/.exec(hashText),measured=/^1000 1000 600 1 (\d+)\n?$/.exec(statText);
    if(!hashed||hashed[1]!==hash||!measured||Number(measured[1])!==opened.raw.length)fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
-   const again=snapshotHostFile(options.hostFile);
+   const again=snapshotHostFile(options.hostFile,options);
    try{if(!again.raw.equals(opened.raw))fail('PILOT_PRIVATE_INPUT_CHANGED');}
    finally{fs.closeSync(again.fd);}
    linkContainerFile(execFileSync,commands[0][0],options.container,containerTemp,options.destination);

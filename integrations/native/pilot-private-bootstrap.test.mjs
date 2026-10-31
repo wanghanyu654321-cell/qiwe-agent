@@ -42,6 +42,19 @@ test('install writes uid 1000 mode 0600 from the host file and drops a late host
  }finally{f.cleanup();}
 });
 
+test('windows mode 0666 is accepted only for a regular file in the user home with a user-only ACL',()=>{
+ const f=scratch();try{
+  const file=writeHost(f.root);fs.chmodSync(file,0o666);
+  const home=f.root,acl=`DESKTOP\\pilot:(R)\n`;
+  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'linux',homedir:home,acl,user:'DESKTOP\\pilot'}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes(secret));
+  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'win32',homedir:'/home/other',acl,user:'DESKTOP\\pilot',realpath:()=>file}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes(secret));
+  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'win32',homedir:home,acl:'Everyone:(R)\nDESKTOP\\pilot:(R)\n',user:'DESKTOP\\pilot',realpath:()=>file}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes(secret));
+  const link=path.join(f.root,'link.json');fs.symlinkSync(file,link);
+  assert.throws(()=>readHostPilotPrivateFile(link,{platform:'win32',homedir:home,acl,user:'DESKTOP\\pilot',realpath:()=>file}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes(secret));
+  const accepted=readHostPilotPrivateFile(file,{platform:'win32',homedir:home,acl,user:'DESKTOP\\pilot',realpath:()=>file});
+  assert.equal(accepted.bot.botId,'bot-id-example');
+ }finally{f.cleanup();}
+});
 test('symlink, extra link, loose mode and bad shape are refused without echoing secrets',()=>{
  const f=scratch();try{
   const file=writeHost(f.root),destination=path.join(f.root,'dest.json'),link=path.join(f.root,'link.json');

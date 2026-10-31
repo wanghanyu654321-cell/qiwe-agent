@@ -2,20 +2,35 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
-export function windowsIncrementalSkip(platform){
- if(platform!=='win32')return '';
- return 'SKIP incremental: Windows node returns EPERM for directory fsync and symlink creation. CONTROLLED_REAL_TRANSPORT_SCOPE in that Windows run is the linux uid and realpath(cwd) gate failing in the test harness when the temp directory is reached through a symlink such as D:\\tmp. Inside the Linux container the same check is fail-closed scope enforcement, not a missing launch switch.';
+export function windowsEpermCase(output){
+ if(typeof output!=='string'||!output.includes('EPERM'))return false;
+ const blocks=output.split(/\n(?=# Subtest: )/);let failed=0;
+ for(const block of blocks){
+  if(!/not ok /.test(block))continue;
+  failed++;
+  if(!/EPERM/.test(block)||!/fsync|symlink/i.test(block))return false;
+ }
+ return failed>0;
 }
+const scopeNote='NOTE CONTROLLED_REAL_TRANSPORT_SCOPE: that code is the linux uid and realpath(cwd) gate. A Windows temp directory reached through a symlink such as D:\\tmp can fail it in the test harness. Inside the Linux container it is fail-closed scope enforcement, not a missing launch switch.';
 const here=path.dirname(fileURLToPath(import.meta.url)),root=path.resolve(here,'../..');
 const names=['controlled-real-container-boundary','controlled-real-container-transport','controlled-real-preload','controlled-real-web','controlled-real-pi-retry','frontagent-controlled-live-entry','frontagent-controlled-live-worker','frontagent-controlled-pilot','frontagent-pilot-restoration','full-host-controlled-real-pilot','full-host-local-docker','real-container-boundary','controlled-real-env-disposition','controlled-real-run-budget','pi-session-recovery','full-host-local-residue'];
 const commands=[['incremental',['--test',...names.map(n=>'integrations/native/'+n+'.test.mjs')]],['model',['node_modules/vitest/vitest.mjs','run','tests/native/controlled-real-model.test.ts']],['typecheck',['node_modules/typescript/bin/tsc','--noEmit']],['build',['node_modules/typescript/bin/tsc','-p','tsconfig.build.json']]];
-const skip=windowsIncrementalSkip(process.platform);
+function record(name,args,result){const output='Command: node '+args.join(' ')+'\nExit: '+result.status+'\n'+(result.stdout??'')+(result.stderr??'');fs.writeFileSync(path.join(here,'logs','verification-'+name+'.txt'),output.replaceAll('\r\n','\n').replace(/[ \t]+$/gm,'').trimEnd()+'\n');return output;}
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
- if(skip)console.log(skip);
- fs.mkdirSync(path.join(here,'logs'),{recursive:true});let failed=false;
- for(const [name,args]of commands){
-  if(skip&&name==='incremental'){console.log('incremental: SKIP');continue;}
-  const r=spawnSync(process.execPath,args,{cwd:root,encoding:'utf8',timeout:120000});const output='Command: node '+args.join(' ')+'\nExit: '+r.status+'\n'+(r.stdout??'')+(r.stderr??'');fs.writeFileSync(path.join(here,'logs','verification-'+name+'.txt'),output.replaceAll('\r\n','\n').replace(/[ \t]+$/gm,'').trimEnd()+'\n');console.log(name+': '+(r.status===0?'PASS':'FAIL'));if(r.status!==0){failed=true;break;}
+ fs.mkdirSync(path.join(here,'logs'),{recursive:true});let failed=false,skipped=false;
+ if(process.platform==='win32'){
+  for(const name of names){
+   const file='integrations/native/'+name+'.test.mjs',args=['--test',file],result=spawnSync(process.execPath,args,{cwd:root,encoding:'utf8',timeout:120000});
+   const output=record(name.replaceAll('/','-'),args,result);
+   if(result.status===0){console.log(file+': PASS');continue;}
+   if(windowsEpermCase(output)){skipped=true;console.log(file+': SKIP EPERM filesystem');continue;}
+   console.log(file+': FAIL');failed=true;break;
+  }
+  if(skipped)console.log(scopeNote);
+ }else{
+  const [name,args]=commands[0],result=spawnSync(process.execPath,args,{cwd:root,encoding:'utf8',timeout:120000});record(name,args,result);console.log(name+': '+(result.status===0?'PASS':'FAIL'));failed=result.status!==0;
  }
+ if(!failed)for(const [name,args]of commands.slice(1)){const result=spawnSync(process.execPath,args,{cwd:root,encoding:'utf8',timeout:120000});record(name,args,result);console.log(name+': '+(result.status===0?'PASS':'FAIL'));if(result.status!==0){failed=true;break;}}
  process.exitCode=failed?1:0;
 }
