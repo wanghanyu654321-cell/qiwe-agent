@@ -32,7 +32,9 @@ async function main(){
   transportOptions:{root,folder:descriptor.folder,accountId:descriptor.accountId,image:process.env.MINICLAW_CONTAINER_IMAGE,originalShell:JSON.parse(process.env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL),controlledRealPilot:scope,manifest:process.env.QIWE_REAL_CONTAINER_OWNED_MANIFEST,preload:path.join(root,'controlled-real-preload.mjs'),modelModule:path.join(root,'controlled-real-model.ts')}});
  try{
   if(worker.activate()!==true)throw Error('CONTROLLED_REAL_ACTIVATION_FAILED');
-  console.log('CONTROLLED_REAL_READY');
+  const readyNonce=process.env.QIWE_PILOT_READY_NONCE??'';
+  if(readyNonce!==''&&!/^[a-f0-9]{32}$/.test(readyNonce))throw Error('CONTROLLED_REAL_ENTRY_FORBIDDEN');
+  console.log(readyNonce?`CONTROLLED_REAL_READY ${readyNonce}`:'CONTROLLED_REAL_READY');
   await new Promise(resolve=>{const stop=()=>{clearTimeout(timer);process.off('SIGINT',stop);process.off('SIGTERM',stop);resolve();};const timer=setTimeout(stop,Math.max(1,scope.expiresAt-Date.now()));process.once('SIGINT',stop);process.once('SIGTERM',stop);});
  }finally{await worker.close();}
 }

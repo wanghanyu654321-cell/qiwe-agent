@@ -17,7 +17,13 @@ test('synthetic launcher creates the container, installs a fake private file, th
  try{
   const sub=exec.calls.map(argv=>argv[1]);
   const created=sub.indexOf('create'),started=sub.indexOf('start'),copied=sub.indexOf('cp'),execed=exec.calls.findIndex(argv=>argv.includes('exec'));
-  assert.ok(created!==-1&&created<started&&started<copied&&copied<=execed);
+  assert.ok(created!==-1&&created<started&&started<execed&&started<copied);
+  const nonce=exec.calls.find(argv=>argv.includes('create')).find(item=>item.startsWith('QIWE_PILOT_READY_NONCE=')).split('=')[1];
+  assert.match(nonce,/^[a-f0-9]{32}$/);
+  const flagWrite=exec.calls.find(argv=>argv.includes('exec')&&argv.some(item=>item.includes('/run/qiwe-ready/flag')));
+  assert.equal(flagWrite.includes('0:0'),true);
+  assert.equal(flagWrite.some(item=>item.includes(nonce)),false);
+  assert.equal(result.report.ready,`CONTROLLED_REAL_READY ${nonce}`);
   const create=exec.calls.find(argv=>argv[1]==='create');
   assert.equal(create.includes('--network')&&create.includes('none'),true);
   assert.equal(create.includes('-p')||create.includes('--publish'),false);
@@ -26,7 +32,6 @@ test('synthetic launcher creates the container, installs a fake private file, th
   assert.equal(create.includes('QIWE_PILOT_MODEL_REQUESTS=8'),true);
   assert.equal(create.includes('QIWE_PILOT_MODEL_OUTPUT_TOKENS=1024'),true);
   assert.equal(create.some(item=>item.startsWith('ANTHROPIC_API_KEY=')||item.startsWith('DEEPSEEK_')),false);
-  assert.equal(result.report.ready,'CONTROLLED_REAL_READY');
   assert.equal(result.report.network,'none');
   assert.equal(result.report.caps.requests,8);
   assert.equal(result.report.caps.outputTokens,1024);
@@ -74,7 +79,7 @@ test('synthetic cli prints the ready line, run id, expiry, and stop command',()=
  assert.match(child.stdout,/CONTROLLED_REAL_READY/);
  assert.equal(child.stdout.includes('synthetic-bot-secret'),false);
  const report=JSON.parse(child.stdout.trim().split('\n').filter(line=>line.startsWith('{')).at(-1));
- assert.equal(report.ready,'CONTROLLED_REAL_READY');
+ assert.match(report.ready,/^CONTROLLED_REAL_READY [a-f0-9]{32}$/);
  assert.equal(report.mode,'synthetic');
  assert.equal(report.network,'none');
  assert.equal(report.caps.requests,8);
@@ -109,8 +114,9 @@ test('ready is taken from container logs and the container is stopped at expiry'
  const result=runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,now:()=>1_700_000_000_000,setTimeout:(fn,ms)=>{fired={fn,ms};return {unref(){}};}});
  try{
   assert.equal(exec.calls.some(argv=>argv.includes('logs')),true);
-  assert.equal(result.report.ready,'CONTROLLED_REAL_READY');
-  assert.equal(fired.ms,1800000);
+  assert.match(result.report.ready,/^CONTROLLED_REAL_READY [a-f0-9]{32}$/);
+  const deadline=Number(exec.calls.find(argv=>argv.includes('create')).find(item=>item.startsWith('QIWE_PILOT_EXPIRES_AT=')).split('=')[1]);
+  assert.equal(fired.ms,deadline-1_700_000_000_000);
   const before=exec.calls.length;
   fired.fn();
   assert.ok(exec.calls.length>before&&exec.calls.some(argv=>argv.includes('rm')&&argv.includes('-f')));
@@ -157,21 +163,42 @@ test('SIGINT after create removes the container',()=>{
  assert.ok(exec.calls.filter(argv=>argv.includes('rm')&&argv.includes('-f')).length>before);
  result.stop();
 });
+test('a ready flag that already exists refuses the launch before install',()=>{
+ const exec=trackingDocker({readyFlagExists:true});
+ assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,setTimeout:()=>({unref(){}})}),/PILOT_LAUNCH_READY_FLAG_EXISTS/);
+ assert.equal(exec.calls.some(argv=>argv.includes('cp')),false);
+ assert.equal(exec.calls.some(argv=>argv.includes('rm')&&argv.includes('-f')&&!argv.includes('exec')),true);
+});
+test('an untagged or repeated ready line is not accepted',()=>{
+ const bare=trackingDocker({logs:'CONTROLLED_REAL_READY\n'});
+ assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:bare.execFileSync,logAttempts:1,sleep(){},setTimeout:()=>({unref(){}})}),error=>error.message==='PILOT_LAUNCH_NOT_READY');
+ const twice=trackingDocker({logs:'duplicate'});
+ assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:twice.execFileSync,logAttempts:1,sleep(){},setTimeout:()=>({unref(){}})}),/PILOT_LAUNCH_NOT_READY/);
+});
+test('a failed container remove is retried and reported with the cleanup command',()=>{
+ const exec=trackingDocker({failRm:true});
+ const result=runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,setTimeout:()=>({unref(){}})});
+ assert.throws(()=>result.stop(),error=>error.message==='PILOT_LAUNCH_CLEANUP_FAILED'&&error.stopCommand.startsWith('docker rm -f ')&&!error.stopCommand.includes('synthetic-bot-secret'));
+ assert.equal(exec.calls.filter(argv=>argv[1]==='rm'&&argv.includes('-f')).length,3);
+});
 test('entry arguments that assign a secret are refused',()=>{
  const exec=trackingDocker();
  assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,entryArgs:['DEEPSEEK_API_KEY=not-for-logs']}),error=>error.message==='PILOT_LAUNCH_ENTRY_INVALID'&&!error.message.includes('not-for-logs'));
  assert.equal(exec.calls.length,0);
 });
 function trackingDocker(options={}){
- const calls=[],files=new Map();let running=false;
+ const calls=[],files=new Map();let running=false,nonce='',flagReady=false;
  const execFileSync=(command,args)=>{
   if(args.includes('exec')&&!running){const error=Error('container is not running');error.status=1;throw error;}
   calls.push([command,...args]);
+  if(options.failRm&&args[0]==='rm'&&args.includes('-f')){const error=Error('rm failed');error.status=1;throw error;}
   if(options.failStart&&args.includes('start')&&!args.includes('create')){const error=Error('start failed');error.status=1;throw error;}
-  if(args.includes('create')&&args.includes('--name'))running=false;
+  if(options.readyFlagExists&&args.includes('exec')&&args.some(item=>item.includes('[ -e /run/qiwe-ready ]'))){const error=Error('EXISTS');error.status=1;throw error;}
+  if(args.includes('create')&&args.includes('--name')){running=false;nonce=args.find(item=>item.startsWith('QIWE_PILOT_READY_NONCE='))?.split('=')[1]??'';}
   if(args.includes('start')&&!args.includes('create'))running=true;
+  if(args.includes('exec')&&args.some(item=>item.includes('/run/qiwe-ready/flag')&&item.includes('printf')))flagReady=true;
   const op=args.find(item=>['cp','sha256sum','stat','ln','rm','logs','create','start','network'].includes(item));
-  if(op==='logs')return options.logs??(files.has('/tmp/qiwe-live-pilot.private.json')?'CONTROLLED_REAL_READY\n':'waiting\n');
+  if(op==='logs'){if(options.logs==='duplicate')return flagReady?`CONTROLLED_REAL_READY ${nonce}\nCONTROLLED_REAL_READY ${nonce}\n`:'waiting\n';if(options.logs!==undefined)return options.logs;return flagReady?`CONTROLLED_REAL_READY ${nonce}\n`:'waiting\n';}
   if(op==='cp'){const host=args[args.indexOf('--')+1],spec=args.at(-1),dest=spec.slice(spec.indexOf(':')+1);files.set(dest,fs.readFileSync(host));return '';}
   if(op==='sha256sum'||op==='stat'){const target=args.at(-1),data=files.get(target);if(!data){const error=Error('missing');error.status=1;throw error;}if(op==='stat')return `1000 1000 600 1 ${data.length}\n`;return createHash('sha256').update(data).digest('hex')+'  '+target+'\n';}
   if(op==='ln'){const dest=args.at(-1),src=args.at(-2);if(files.has(dest)){const error=Error('File exists');error.status=1;throw error;}files.set(dest,Buffer.from(files.get(src)??''));return '';}

@@ -42,7 +42,32 @@ function readExact(fd,size){
  if(offset!==raw.length)fail('PILOT_PRIVATE_FILE_UNSAFE');
  return raw;
 }
-/** Windows node reports NTFS mode 0666. Accept a regular file that is not a symlink or other reparse point, is inside the current user home, and whose ACL names that user without granting Everyone, Authenticated Users, or BUILTIN\\Users. Linux still requires mode 0600. */
+const windowsForbiddenSids=new Set(['S-1-1-0','S-1-5-11','S-1-5-32-545']);
+const windowsSystemSid='S-1-5-18',windowsAdministratorsSid='S-1-5-32-544';
+/** Allow ACEs may name only the current user SID, SYSTEM, or Administrators. Names are ignored so a localized path cannot satisfy the check. */
+export function windowsAllowAces(aces,currentSid){
+ if(typeof currentSid!=='string'||!/^S-1-[0-9-]+$/.test(currentSid)||windowsForbiddenSids.has(currentSid))return false;
+ if(!Array.isArray(aces)||aces.length<1||aces.length>16)return false;
+ const allowed=new Set([currentSid,windowsSystemSid,windowsAdministratorsSid]);
+ let userAllow=false;
+ for(const ace of aces){
+  if(!ace||ace.inherited===true||ace.type!=='Allow'||typeof ace.sid!=='string'||!/^S-1-[0-9-]+$/.test(ace.sid)||!allowed.has(ace.sid))return false;
+  if(ace.sid===currentSid)userAllow=true;
+ }
+ return userAllow;
+}
+function readWindowsAcl(hostFile){
+ try{
+  const script="$ErrorActionPreference='Stop'; $p=$env:QIWE_ACL_PATH; $acl=Get-Acl -LiteralPath $p; $item=Get-Item -LiteralPath $p -Force; $reparse=[bool](($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0); $rows=foreach($ace in @($acl.Access)){ $sid=$ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value; [pscustomobject]@{sid=$sid; type=[string]$ace.AccessControlType; inherited=[bool]$ace.IsInherited} }; @{reparse=$reparse; aces=@($rows)} | ConvertTo-Json -Compress";
+  const env={SystemRoot:process.env.SystemRoot??'',WINDIR:process.env.WINDIR??'',PATH:process.env.PATH??'',QIWE_ACL_PATH:hostFile};
+  const output=execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:15000,windowsHide:true,env});
+  const who=execFileSync('whoami.exe',['/user','/fo','csv','/nh'],{encoding:'utf8',timeout:10000,windowsHide:true,env});
+  const currentSid=/"(S-1-[0-9-]+)"/.exec(who)?.[1],parsed=JSON.parse(output);
+  const aces=Array.isArray(parsed.aces)?parsed.aces:parsed.aces?[parsed.aces]:[];
+  return {aces,currentSid,reparsePoint:parsed.reparse===true};
+ }catch{return null;}
+}
+/** Windows node reports NTFS mode 0666. Accept a regular file inside the user home when every explicit Allow ACE SID is the current user, SYSTEM, or Administrators. Linux still requires mode 0600. */
 function windowsPrivateFileAccepted(hostFile,stat,options={}){
  if((options.platform??process.platform)!=='win32'||!stat.isFile()||stat.nlink!==1||stat.size<=0||stat.size>maxBytes)return false;
  let listed;try{listed=fs.lstatSync(hostFile);}catch{return false;}
@@ -52,14 +77,10 @@ function windowsPrivateFileAccepted(hostFile,stat,options={}){
  let real;try{real=(options.realpath??fs.realpathSync)(hostFile);}catch{return false;}
  const parent=path.dirname(real),prefix=home.endsWith(path.sep)?home:home+path.sep;
  if(parent!==home&&!parent.startsWith(prefix))return false;
- const user=options.user??os.userInfo().username;
- if(typeof user!=='string'||user.length<1||user.length>120)return false;
- let acl=options.acl;
- if(acl===undefined){if(process.platform!=='win32')return false;try{acl=execFileSync('icacls',[hostFile],{encoding:'utf8',timeout:10000,windowsHide:true});}catch{return false;}}
- if(typeof acl!=='string'||acl.includes('\0'))return false;
- acl=acl.replaceAll('\r','');
- if(/\b(?:everyone|authenticated users|builtin\\users)\b/i.test(acl)||!acl.toLowerCase().includes(user.toLowerCase()))return false;
- return true;
+ let aces=options.aces,currentSid=options.currentSid,reparsePoint=options.reparsePoint===true;
+ if(aces===undefined){if(process.platform!=='win32')return false;const probed=readWindowsAcl(hostFile);if(!probed)return false;aces=probed.aces;currentSid=probed.currentSid;reparsePoint=probed.reparsePoint;}
+ if(reparsePoint)return false;
+ return windowsAllowAces(aces,currentSid);
 }
 function snapshotHostFile(hostFile,options={}){
  if(typeof hostFile!=='string'||!path.isAbsolute(hostFile))fail('PILOT_PRIVATE_FILE_UNSAFE');

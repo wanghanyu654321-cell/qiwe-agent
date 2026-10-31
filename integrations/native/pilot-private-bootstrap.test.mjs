@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {assertIsolatedSyntheticClosed,installVerifiedPilotPrivateConfig,readHostPilotPrivateFile,runContainerPrivateInstall} from './pilot-private-bootstrap.mjs';
+import {assertIsolatedSyntheticClosed,installVerifiedPilotPrivateConfig,readHostPilotPrivateFile,runContainerPrivateInstall,windowsAllowAces} from './pilot-private-bootstrap.mjs';
 
 const secret='host-file-secret-value';
 const modelKey='host-file-model-key';
@@ -42,17 +42,26 @@ test('install writes uid 1000 mode 0600 from the host file and drops a late host
  }finally{f.cleanup();}
 });
 
-test('windows mode 0666 is accepted only for a regular file in the user home with a user-only ACL',()=>{
+test('windows mode 0666 is accepted only for explicit allow SIDs, not a name inside the path',()=>{
+ const userSid='S-1-5-21-100-200-300-1001',allow=sid=>({sid,type:'Allow',inherited:false});
  const f=scratch();try{
-  const file=writeHost(f.root);fs.chmodSync(file,0o666);
-  const home=f.root,acl=`DESKTOP\\pilot:(R)\n`;
-  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'linux',homedir:home,acl,user:'DESKTOP\\pilot'}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes(secret));
-  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'win32',homedir:'/home/other',acl,user:'DESKTOP\\pilot',realpath:()=>file}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes(secret));
-  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'win32',homedir:home,acl:'Everyone:(R)\nDESKTOP\\pilot:(R)\n',user:'DESKTOP\\pilot',realpath:()=>file}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes(secret));
-  const link=path.join(f.root,'link.json');fs.symlinkSync(file,link);
-  assert.throws(()=>readHostPilotPrivateFile(link,{platform:'win32',homedir:home,acl,user:'DESKTOP\\pilot',realpath:()=>file}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes(secret));
-  const accepted=readHostPilotPrivateFile(file,{platform:'win32',homedir:home,acl,user:'DESKTOP\\pilot',realpath:()=>file});
+  const home=path.join(f.root,'张伟');fs.mkdirSync(home);
+  const file=writeHost(home);fs.chmodSync(file,0o666);
+  const base={platform:'win32',homedir:home,realpath:()=>file,currentSid:userSid,reparsePoint:false};
+  assert.equal(windowsAllowAces([allow(userSid),allow('S-1-5-18'),allow('S-1-5-32-544')],userSid),true);
+  assert.equal(windowsAllowAces([allow('S-1-5-18'),allow('S-1-5-32-544')],userSid),false);
+  assert.equal(windowsAllowAces([allow(userSid),allow('S-1-1-0')],userSid),false);
+  assert.equal(windowsAllowAces([allow(userSid),allow('S-1-5-11')],userSid),false);
+  assert.equal(windowsAllowAces([allow(userSid),allow('S-1-5-32-545')],userSid),false);
+  assert.equal(windowsAllowAces([allow(userSid),allow('S-1-5-32-546')],userSid),false);
+  assert.equal(windowsAllowAces([{sid:userSid,type:'Allow',inherited:true}],userSid),false);
+  assert.equal(windowsAllowAces([{sid:userSid,type:'Deny',inherited:false}],userSid),false);
+  assert.throws(()=>readHostPilotPrivateFile(file,{...base,user:'张伟',aces:[allow('S-1-1-0')]}),error=>error.message==='PILOT_PRIVATE_FILE_UNSAFE'&&!error.message.includes('张伟'));
+  assert.throws(()=>readHostPilotPrivateFile(file,{...base,user:'Müller',aces:[allow(userSid)],reparsePoint:true}),/PILOT_PRIVATE_FILE_UNSAFE/);
+  assert.throws(()=>readHostPilotPrivateFile(file,{platform:'linux',homedir:home,currentSid:userSid,aces:[allow(userSid)],realpath:()=>file}),/PILOT_PRIVATE_FILE_UNSAFE/);
+  const accepted=readHostPilotPrivateFile(file,{...base,user:'Müller',aces:[allow(userSid),allow('S-1-5-18'),allow('S-1-5-32-544')]});
   assert.equal(accepted.bot.botId,'bot-id-example');
+  assert.equal(JSON.stringify(accepted).includes('Müller')||JSON.stringify(accepted).includes('张伟'),false);
  }finally{f.cleanup();}
 });
 test('symlink, extra link, loose mode and bad shape are refused without echoing secrets',()=>{
