@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {installVerifiedPilotPrivateConfig,readHostPilotPrivateFile,runContainerPrivateInstall} from './pilot-private-bootstrap.mjs';
+import {createHash} from 'node:crypto';
+import {assertIsolatedSyntheticClosed,installVerifiedPilotPrivateConfig,readHostPilotPrivateFile,runContainerPrivateInstall} from './pilot-private-bootstrap.mjs';
 
 const secret='host-file-secret-value';
 const modelKey='host-file-model-key';
@@ -57,21 +58,89 @@ test('symlink, extra link, loose mode and bad shape are refused without echoing 
  }finally{f.cleanup();}
 });
 
-test('container install plan copies by path and verifies uid 1000 mode 0600 without putting bytes on argv',()=>{
+const digestOf=text=>createHash('sha256').update(text).digest('hex');
+function containerExec(file,text,onCp){
+ const calls=[],digest=digestOf(text);
+ const execFileSync=(command,args)=>{
+  calls.push([command,...args]);
+  if(args.includes('cp')){onCp?.(args);return '';}
+  if(args.includes('sha256sum'))return `${digest}  /tmp/qiwe-live-pilot.private.json\n`;
+  if(args.includes('stat'))return `1000 1000 600 1 ${Buffer.byteLength(text)}\n`;
+  return '';
+ };
+ return {calls,execFileSync};
+}
+test('container install copies the verified snapshot and checks the in-container hash',()=>{
  const f=scratch();try{
-  const file=writeHost(f.root);
-  const calls=[];
-  const installed=runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync(command,args){
-   calls.push([command,...args]);
-   if(args.includes('stat'))return `1000 1000 600 1 ${Buffer.byteLength(body())}\n`;
-   return '';
-  }});
-  assert.deepEqual(installed,{uid:1000,gid:1000,mode:0o600,nlink:1,bytes:Buffer.byteLength(body())});
+  const file=writeHost(f.root),text=body();
+  const {calls,execFileSync}=containerExec(file,text,args=>{
+   const source=args[args.indexOf('--')+1];
+   assert.notEqual(path.resolve(source),path.resolve(file));
+   assert.equal(fs.readFileSync(source).equals(Buffer.from(text)),true);
+  });
+  const installed=runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync});
+  assert.deepEqual(installed,{uid:1000,gid:1000,mode:0o600,nlink:1,bytes:Buffer.byteLength(text)});
   const flat=JSON.stringify(calls);
-  assert.equal(flat.includes(secret)||flat.includes(modelKey),false);
-  assert.equal(calls.some(argv=>argv.includes('cp')&&argv.includes(file)&&argv.includes('qiwe-pilot-host:/tmp/qiwe-live-pilot.private.json')),true);
-  assert.equal(calls.some(argv=>argv.includes('chown')&&argv.includes('1000:1000')),true);
-  assert.equal(calls.some(argv=>argv.includes('chmod')&&argv.includes('600')),true);
-  assert.equal(calls.some(argv=>['sh','bash','node'].includes(argv[0])||argv.includes(body())),false);
+  assert.equal(flat.includes(secret)||flat.includes(modelKey)||flat.includes(file),false);
+  assert.equal(calls.some(argv=>argv.includes('cp')&&argv.includes('qiwe-pilot-host:/tmp/qiwe-live-pilot.private.json')),true);
+  assert.equal(calls.some(argv=>argv.includes('sha256sum')&&argv.includes('/tmp/qiwe-live-pilot.private.json')),true);
+  assert.equal(calls.some(argv=>['sh','bash','node'].includes(argv[0])||argv.includes(text)),false);
  }finally{f.cleanup();}
+});
+test('container install keeps the snapshot when the host file is swapped for the copy and restored',()=>{
+ const f=scratch();try{
+  const file=writeHost(f.root),text=body(),swapped=text.replace(secret,'host-file-secret-other');
+  assert.equal(Buffer.byteLength(swapped),Buffer.byteLength(text));
+  const {execFileSync}=containerExec(file,text,args=>{
+   fs.writeFileSync(file,swapped,{mode:0o600});
+   const source=args[args.indexOf('--')+1];
+   assert.equal(fs.readFileSync(source).equals(Buffer.from(text)),true);
+   fs.writeFileSync(file,text,{mode:0o600});
+  });
+  const installed=runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync});
+  assert.equal(installed.bytes,Buffer.byteLength(text));
+ }finally{f.cleanup();}
+});
+test('container install removes the destination after chown, stat, or post-copy snapshot failure',()=>{
+ const f=scratch();try{
+  const file=writeHost(f.root),text=body();
+  for(const kind of ['chown','stat','snapshot']){
+   let copied=0,removed=0;
+   assert.throws(()=>runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync(command,args){
+    if(args.includes('rm')){removed++;return '';}
+    if(args.includes('cp')){copied++;return '';}
+    if(kind==='chown'&&args.includes('chown'))throw Error('boom '+secret);
+    if(kind==='snapshot'&&args.includes('sha256sum'))fs.chmodSync(file,0o644);
+    if(args.includes('sha256sum'))return `${digestOf(text)}  /tmp/qiwe-live-pilot.private.json\n`;
+    if(args.includes('stat'))return kind==='stat'?`1000 1000 644 1 ${Buffer.byteLength(text)}\n`:`1000 1000 600 1 ${Buffer.byteLength(text)}\n`;
+    return '';
+   }}),error=>!String(error.message).includes(secret)&&(error.message==='PILOT_PRIVATE_CONTAINER_UNVERIFIED'||error.message==='PILOT_PRIVATE_FILE_UNSAFE'));
+   assert.equal(copied,1,kind);assert.equal(removed,1,kind);
+   fs.chmodSync(file,0o600);
+  }
+ }finally{f.cleanup();}
+});
+test('install rejects a symlink in an ancestor and does not write the target',()=>{
+ const f=scratch();try{
+  const target=path.join(f.root,'evil-target','sub');
+  fs.mkdirSync(target,{recursive:true});
+  fs.symlinkSync(path.join(f.root,'evil-target'),path.join(f.root,'pilot-link'));
+  const destination=path.join(f.root,'pilot-link','sub','secret.json');
+  assert.throws(()=>installVerifiedPilotPrivateConfig({hostFile:writeHost(f.root),destination}),/PILOT_PRIVATE_DESTINATION_INVALID/);
+  assert.equal(fs.existsSync(path.join(target,'secret.json')),false);
+ }finally{f.cleanup();}
+});
+test('documented live model and channel env files refuse isolated-synthetic without being read aloud',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-live-env-'));
+ try{
+  const absent=path.join(root,'missing-private.json'),token='not-printed-live-token';
+  assert.doesNotThrow(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin'},absent,{root}));
+  for(const relative of ['.local/live-model/.env','.local/live-channel/.env']){
+   const file=path.join(root,relative);
+   fs.mkdirSync(path.dirname(file),{recursive:true});
+   fs.writeFileSync(file,`TOKEN=${token}\n`,{mode:0o600});
+   assert.throws(()=>assertIsolatedSyntheticClosed({PATH:'/usr/bin'},absent,{root}),error=>error.message==='ISOLATED_SYNTHETIC_REAL_CREDENTIAL'&&!error.message.includes(token));
+   fs.rmSync(file);
+  }
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
