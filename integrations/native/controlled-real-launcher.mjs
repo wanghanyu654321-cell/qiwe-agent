@@ -17,7 +17,7 @@ function inside(root,target){
 export function resolveSealedStage(cwd){
  const root=path.resolve(cwd);
  let rootReal;try{rootReal=fs.realpathSync(root);}catch{fail('PILOT_LAUNCH_STAGE_UNSAFE');}
- const stage=path.resolve(root,sealedStage);
+ const stage=path.resolve(root,sealedStage,'input');
  if(!inside(root,stage))fail('PILOT_LAUNCH_STAGE_UNSAFE');
  let listed;try{listed=fs.lstatSync(stage);}catch{fail('PILOT_LAUNCH_STAGE_UNSAFE');}
  if(listed.isSymbolicLink()||!listed.isDirectory())fail('PILOT_LAUNCH_STAGE_UNSAFE');
@@ -30,8 +30,10 @@ function controlFile(file,socket){
  if(listed.isSymbolicLink()||(socket?!listed.isSocket():!listed.isFile()))fail('PILOT_LAUNCH_CONTROL_UNSAFE');
  return fs.realpathSync(file);
 }
-function resolveHostControls(stage,options){
- return {socket:controlFile(options.dockerSocket??'/var/run/docker.sock',true),docker:controlFile(options.dockerBin??'/usr/bin/docker',false),buildInput:controlFile(options.buildInput??path.join(stage,'rebuilt-runner','build-input.json'),false)};
+function resolveHostControls(stageInput,options){
+ const stageRoot=path.dirname(stageInput),remote=(options.platform??process.platform)==='win32'||Boolean(options.dockerContext);
+ const socket=options.dockerSocket??'/var/run/docker.sock';
+ return {socket:remote&&options.dockerSocket===undefined?socket:controlFile(socket,true),docker:controlFile(options.dockerBin??path.join(stageRoot,'docker'),false),buildInput:controlFile(options.buildInput??path.join(stageRoot,'build-input-linux.json'),false)};
 }
 export function assertRecordedHostBoundary(args){
  const at=(flag,value)=>{const index=args.indexOf(flag);if(args[index+1]!==value)fail('PILOT_LAUNCH_BOUNDARY');};
@@ -45,7 +47,8 @@ export function assertRecordedHostBoundary(args){
  if(JSON.stringify([...byDest.keys()].sort())!==JSON.stringify([...wanted].sort()))fail('PILOT_LAUNCH_BOUNDARY');
  if(!byDest.get('/input').endsWith(':/input:ro')||!byDest.get('/qiwe-control/build-input.json').endsWith(':ro')||!byDest.get('/qiwe-control/docker').endsWith(':/qiwe-control/docker:ro'))fail('PILOT_LAUNCH_BOUNDARY');
  if(!/^qiwe-tmp-[a-z0-9-]+:\/tmp$/.test(byDest.get('/tmp'))||byDest.get('/tmp').endsWith(':ro'))fail('PILOT_LAUNCH_BOUNDARY');
- if(!args.some(item=>typeof item==='string'&&item.includes('exec node /input/integrations/native/verify-full-host.mjs ')))fail('PILOT_LAUNCH_BOUNDARY');
+ if(!args.some(item=>typeof item==='string'&&item.includes('exec node /input/qiwe-agent/integrations/native/verify-full-host.mjs /input/full-instance/stage/app/src --host-overlay /input/core-fix/appointment-identity-candidate/src --skill-root /input/d4-skills')))fail('PILOT_LAUNCH_BOUNDARY');
+ if(!args.includes('HOME=/tmp')||!args.includes('TMPDIR=/tmp')||!args.includes('QIWE_EVIDENCE_ROOT=/tmp/qiwe-evidence'))fail('PILOT_LAUNCH_BOUNDARY');
  return true;
 }
 const noCredentialImage='node:22.19.0-alpine';
@@ -71,8 +74,8 @@ function waiterLoop(){
  return `while true; do if [ -f ${readyFlag} ]; then owner=$(stat -c %u ${readyFlag}); body=$(cat ${readyFlag}); if [ "$owner" = 0 ] && [ "$body" = "$QIWE_PILOT_READY_NONCE" ]; then break; fi; fi; sleep 0.1; done`;
 }
 function realHostEntry(given){
- const extra=Array.isArray(given)?given.filter(item=>item!=='verify-full-host.mjs'):[];
- const base=['/input/integrations/native/verify-full-host.mjs','/input/.local/full-instance/stage/app/src','--host-overlay','/input/.local/core-fix/appointment-identity-candidate/src','--skill-root','/input/.local/skills','--full-host-conversations','--restoration-scenario','--restoration-real-container','--typecheck','--controlled-real-pilot'];
+ const extra=Array.isArray(given)?given.filter(item=>item!=='verify-full-host.mjs'&&item!=='/input/qiwe-agent/integrations/native/verify-full-host.mjs'):[];
+ const base=['/input/qiwe-agent/integrations/native/verify-full-host.mjs','/input/full-instance/stage/app/src','--host-overlay','/input/core-fix/appointment-identity-candidate/src','--skill-root','/input/d4-skills','--full-host-conversations','--restoration-scenario','--restoration-real-container','--frontagent-existing-state','/input/existing-state','--typecheck','--controlled-real-pilot'];
  for(const item of extra)if(!base.includes(item))base.push(item);
  return base;
 }
@@ -82,18 +85,19 @@ function waiterScript(entryArgs){
 const placeholderScript=`${waiterLoop()}; exec node -e 'const fs=require("fs");const flag="${readyFlag}";const st=fs.statSync(flag);const body=fs.readFileSync(flag,"utf8");if(st.uid!==0||body!==process.env.QIWE_PILOT_READY_NONCE)process.exit(1);const p="${PILOT_PRIVATE_CONFIG_PATH}";const s=fs.statSync(p);if(!s.isFile()||s.uid!==1000||(s.mode&511)!==384||s.nlink!==1)process.exit(1);process.stdout.write("CONTROLLED_REAL_READY "+process.env.QIWE_PILOT_READY_NONCE+"\\n");'`;
 function sleepMs(ms){defaultExec(process.execPath,['-e','Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,'+Number(ms)+')'],{timeout:ms+2000});}
 export function launcherPlan(platform,args=[]){
- const dash=args.indexOf('--'),cli=dash>=0?args.slice(0,dash):args,synthetic=cli.includes('--synthetic'),noCredential=cli.includes('--no-credential');
- return {incremental:platform==='win32'?'per-file':'suite',mode:noCredential?'no-credential':synthetic?'synthetic':'real',useRecordingDocker:synthetic&&!noCredential};
+ const dash=args.indexOf('--'),cli=dash>=0?args.slice(0,dash):args,synthetic=cli.includes('--synthetic'),noCredential=cli.includes('--no-credential'),rehearsal=cli.includes('--rehearsal');
+ return {incremental:platform==='win32'?'per-file':'suite',mode:rehearsal?'rehearsal':noCredential?'no-credential':synthetic?'synthetic':'real',useRecordingDocker:synthetic&&!noCredential&&!rehearsal};
 }
 /** The container starts a waiter that has not read the private file. Install uses exec only after start. Domain allowlisting is not performed. 127.0.0.1 in MINICLAW_WEB_URL is the container loopback. */
 export function runSupervisedPilot(options={}){
  const mode=options.mode;
- if(mode!=='synthetic'&&mode!=='no-credential'&&mode!=='real')fail('PILOT_LAUNCH_MODE_INVALID');
+ if(!['synthetic','no-credential','real','rehearsal'].includes(mode))fail('PILOT_LAUNCH_MODE_INVALID');
  const env=options.env??process.env;
  if(options.requests!=null&&options.requests!==PILOT_MAX_REQUESTS||options.outputTokens!=null&&options.outputTokens!==PILOT_MAX_OUTPUT_TOKENS)fail('PILOT_LAUNCH_BUDGET_CAP');
  if(options.durationMs!=null&&(!Number.isSafeInteger(options.durationMs)||options.durationMs<1||options.durationMs>PILOT_MAX_DURATION_MS))fail('PILOT_LAUNCH_BUDGET_CAP');
  if(mode!=='real')assertIsolatedSyntheticClosed(env,path.join(os.tmpdir(),'qiwe-launcher-absent-private.json'));
- if(mode==='real'&&(typeof options.privateFile!=='string'||!path.isAbsolute(options.privateFile)||!/^sha256:[a-f0-9]{64}$/.test(options.image??'')))fail('PILOT_LAUNCH_INPUT_REQUIRED');
+ if(options.mounts!=null)fail('PILOT_LAUNCH_MOUNTS_FORBIDDEN');
+ if((mode==='real'||mode==='rehearsal')&&(mode==='real'&&(typeof options.privateFile!=='string'||!path.isAbsolute(options.privateFile))||!/^sha256:[a-f0-9]{64}$/.test(options.image??'')))fail('PILOT_LAUNCH_INPUT_REQUIRED');
  const entryArgs=options.entryArgs??['verify-full-host.mjs','--controlled-real-pilot'];
  if(mode==='no-credential'?options.entryArgs!==undefined:false)fail('PILOT_LAUNCH_ENTRY_INVALID');
  if(mode!=='no-credential')assertEntry(entryArgs);
@@ -102,47 +106,48 @@ export function runSupervisedPilot(options={}){
  if(options.publishWeb!==undefined&&options.publishWeb!==true)fail('PILOT_LAUNCH_PUBLISH_INVALID');
  const now=options.now??Date.now,started=now(),duration=options.durationMs??PILOT_MAX_DURATION_MS,expiresAt=started+duration,runId=options.runId??randomUUID(),nonce=randomBytes(16).toString('hex');
  if(!runIdOk(runId)||!/^[a-f0-9]{32}$/.test(nonce))fail('PILOT_LAUNCH_RUN_ID');
- const network=mode==='real'?'qiwe-pilot-'+runId:'none',hostName='qiwe-pilot-host-'+runId;
- const image=mode==='real'?options.image:mode==='no-credential'?noCredentialImage:'sha256:'+'ab'.repeat(32);
+ const hosted=mode==='real'||mode==='rehearsal',network=hosted?'qiwe-pilot-'+runId:'none',hostName='qiwe-pilot-host-'+runId;
+ const image=hosted?options.image:mode==='no-credential'?noCredentialImage:'sha256:'+'ab'.repeat(32);
  const scratch=createPilotScratch({platform:options.platform,homedir:options.homedir}),privateFile=mode==='real'?options.privateFile:sealWindowsPlaceholder(placeholderFile(scratch),{platform:options.platform,homedir:options.homedir,currentSid:options.currentSid,execFileSync:options.aclExec});
  const exec=options.execFileSync??defaultExec,docker='docker',prefix=context?['--context',context]:[];
  const wrapped=(command,args,opts)=>exec(command,[...prefix,...args],opts);
  const environment=pilotEnv(runId,network,expiresAt,nonce);
- const volume=mode==='real'?'qiwe-tmp-'+runId:undefined;
- if(mode==='real')Object.assign(environment,{QIWE_LOCAL_DOCKER_VOLUME:volume,QIWE_LOCAL_DOCKER_HOST:hostName,QIWE_LOCAL_DOCKER_IMAGE:image,QIWE_LOCAL_DOCKER_DRIVER_IMAGE:RUNNER_IMAGE,QIWE_RESTORATION_REAL_CONTAINER:'1'});
- const stage=mode==='real'?resolveSealedStage(options.cwd??process.cwd()):undefined;
+ const volume=hosted?'qiwe-tmp-'+runId:undefined;
+ if(hosted)Object.assign(environment,{HOME:'/tmp',TMPDIR:'/tmp',QIWE_EVIDENCE_ROOT:'/tmp/qiwe-evidence',QIWE_LOCAL_DOCKER_VOLUME:volume,QIWE_LOCAL_DOCKER_HOST:hostName,QIWE_LOCAL_DOCKER_IMAGE:image,QIWE_LOCAL_DOCKER_DRIVER_IMAGE:RUNNER_IMAGE,QIWE_RESTORATION_REAL_CONTAINER:'1'});
+ const stage=hosted?resolveSealedStage(options.cwd??process.cwd()):undefined;
  const controls=mode==='real'?resolveHostControls(stage,options):undefined;
- const realMounts=mode==='real'?[`${stage}:/input:ro`,`${volume}:/tmp`,`${controls.socket}:/qiwe-control/docker.sock`,`${controls.docker}:/qiwe-control/docker:ro`,`${controls.buildInput}:/qiwe-control/build-input.json:ro`]:[];
+ const realMounts=hosted?[`${stage}:/input:ro`,`${volume}:/tmp`,`${controls.socket}:/qiwe-control/docker.sock`,`${controls.docker}:/qiwe-control/docker:ro`,`${controls.buildInput}:/qiwe-control/build-input.json:ro`]:[];
  const envArgs=Object.entries(environment).flatMap(([key,value])=>['-e',key+'='+value]);
  const publishArgs=options.publishWeb?['-p','127.0.0.1:39130:39130']:[];
- const script=mode==='no-credential'?placeholderScript:waiterScript(mode==='real'?realHostEntry(options.entryArgs):entryArgs);
+ const script=mode==='no-credential'?placeholderScript:waiterScript(hosted?realHostEntry(options.entryArgs):entryArgs);
  const tagged=output=>String(output??'').split(/\r?\n/).filter(line=>line===`CONTROLLED_REAL_READY ${nonce}`);
  const dockerBin=context?`docker --context ${context}`:'docker';
- const stopCommand=mode==='real'?`${dockerBin} rm -f ${hostName} && ${dockerBin} volume rm ${volume} && ${dockerBin} network rm ${network}`:`${dockerBin} rm -f ${hostName}`;
+ const stopCommand=hosted?`${dockerBin} rm -f ${hostName} && ${dockerBin} volume rm ${volume} && ${dockerBin} network rm ${network}`:`${dockerBin} rm -f ${hostName}`;
  let stopped=false,timer;
  const detach=()=>{process.off('SIGINT',onSigInt);process.off('SIGTERM',onSigTerm);if(timer!==undefined)clearTimeout(timer);};
  const removeOnce=(args)=>{let failed=false;for(let attempt=0;attempt<3;attempt++){try{wrapped(docker,args);return;}catch{failed=true;}}if(failed){const error=Error('PILOT_LAUNCH_CLEANUP_FAILED');error.stopCommand=stopCommand;throw error;}};
- const cleanup=()=>{if(stopped)return;stopped=true;detach();let failure;try{removeOnce(['rm','-f',hostName]);if(mode==='real'){removeOnce(['volume','rm',volume]);removeOnce(['network','rm',network]);}}catch(error){failure=error;}fs.rmSync(scratch,{recursive:true,force:true});if(failure)throw failure;};
+ const cleanup=()=>{if(stopped)return;stopped=true;detach();let failure;try{removeOnce(['rm','-f',hostName]);if(hosted){removeOnce(['volume','rm',volume]);removeOnce(['network','rm',network]);}}catch(error){failure=error;}fs.rmSync(scratch,{recursive:true,force:true});if(failure)throw failure;};
  const reportFailure=error=>{const text=`${error.message}\n${error.stopCommand??stopCommand}`;if(typeof options.report==='function')options.report(text);else console.error(text);};
  const finish=(code)=>{try{cleanup();(options.exit??process.exit)(code);}catch(error){reportFailure(error);(options.exit??process.exit)(1);}};
  const onSigInt=()=>finish(130);
  const onSigTerm=()=>finish(143);
  process.on('SIGINT',onSigInt);process.on('SIGTERM',onSigTerm);
  try{
-  if(mode==='real'){
+  if(hosted){
    wrapped(docker,['network','create','--driver','bridge','--label','qiwe.verification-run='+runId,'--label','qiwe.controlled-real-pilot=local-test','--opt','com.docker.network.enable_ipv6=false',network]);
    wrapped(docker,['volume','create','--label','qiwe.verification-run='+runId,volume]);
+   wrapped(docker,['run','--rm','--network','none','--user','0:0','--mount',`type=volume,source=${volume},target=/tmp`,'--entrypoint','chmod',image,'1777','/tmp']);
   }
-  const boundary=mode==='real'?['--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--workdir','/tmp']:[];
-  const scratchTmp=mode==='no-credential'?['--tmpfs','/tmp:rw,nosuid,nodev,uid=0,mode=0755']:[];
-  wrapped(docker,['create','--name',hostName,'--network',network,'--user','1000:1000',...boundary,...scratchTmp,...[...realMounts,...(options.mounts??[])].flatMap(item=>['-v',item]),...publishArgs,...envArgs,'--entrypoint','/bin/sh',image,'-c',script]);
+  const boundary=hosted?['--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--workdir','/tmp']:[];
+  const scratchTmp=mode==='no-credential'?['--tmpfs','/tmp:rw,nosuid,nodev,mode=1777']:[];
+  const createArgs=['create','--name',hostName,'--network',network,'--user','1000:1000',...boundary,...scratchTmp,...realMounts.flatMap(item=>['-v',item]),...publishArgs,...envArgs,'--entrypoint','/bin/sh',image,'-c',script];
+  if(hosted)assertRecordedHostBoundary(createArgs);
+  wrapped(docker,createArgs);
   try{wrapped(docker,['start',hostName]);}catch(error){if(coded(error))throw error;fail('PILOT_LAUNCH_FAILED');}
-  try{wrapped(docker,['exec','--user','0:0',hostName,'sh','-c',`if [ -e ${readyDir} ]; then echo EXISTS; exit 1; fi`]);}catch{fail('PILOT_LAUNCH_READY_FLAG_EXISTS');}
-  wrapped(docker,['exec','--user','0:0',hostName,'mkdir','-m','755',readyDir]);
-  wrapped(docker,['exec','--user','0:0',hostName,'chown','0:0',readyDir]);
+  try{wrapped(docker,['exec','--user','0:0',hostName,'mkdir','-m','755',readyDir]);}catch{fail('PILOT_LAUNCH_READY_FLAG_EXISTS');}
   if(tagged(wrapped(docker,['logs',hostName])).length!==0)fail('PILOT_LAUNCH_NOT_READY');
   runContainerPrivateInstall({execFileSync:wrapped,docker,container:hostName,hostFile:privateFile,destination:PILOT_PRIVATE_CONFIG_PATH,platform:options.platform,homedir:options.homedir,acl:options.acl,user:options.user,realpath:options.realpath,aces:options.aces,currentSid:options.currentSid,reparsePoint:options.reparsePoint,aclExec:options.aclExec});
-  wrapped(docker,['exec','--user','0:0',hostName,'sh','-c',`umask 022; printf %s "$QIWE_PILOT_READY_NONCE" > ${readyFlag} && chown 0:0 ${readyFlag} && chmod 644 ${readyFlag}`]);
+  wrapped(docker,['exec','--user','0:0',hostName,'sh','-c',`umask 022; printf %s "$QIWE_PILOT_READY_NONCE" > ${readyFlag} && chmod 644 ${readyFlag}`]);
   const attempts=options.logAttempts??Math.max(1,Math.ceil((Number(environment.QIWE_PILOT_EXPIRES_AT)-Date.now())/100));let ready='';
   for(let index=0;index<attempts;index++){
    const lines=tagged(wrapped(docker,['logs',hostName]));
@@ -154,16 +159,19 @@ export function runSupervisedPilot(options={}){
   const delay=Number(environment.QIWE_PILOT_EXPIRES_AT)-now();
   if(!Number.isSafeInteger(delay)||delay<1)fail('PILOT_LAUNCH_EXPIRED');
   timer=schedule(()=>{try{cleanup();}catch(error){reportFailure(error);(options.exit??process.exit)(1);}},delay);
+  const wait=()=>{const deadline=Number(environment.QIWE_PILOT_EXPIRES_AT);while((options.now??Date.now)()<deadline){const status=String(wrapped(docker,['inspect','-f','{{.State.Status}}',hostName])??'');if(/exited|dead/.test(status)){cleanup();return 'exited';}(options.sleep??sleepMs)(200);}cleanup();return 'expired';};
   const report={status:'controlled-real-launcher',mode,ready,runId,expiresAt,network,stopCommand,caps:{requests:PILOT_MAX_REQUESTS,outputTokens:PILOT_MAX_OUTPUT_TOKENS,durationMs:PILOT_MAX_DURATION_MS},web:{scope:'container-loopback',url:'http://127.0.0.1:39130',hostPublished:options.publishWeb===true,hostUrl:options.publishWeb?'http://127.0.0.1:39130':null}};
-  return {report,stop:cleanup,privateFile};
+  return {report,stop:cleanup,wait,privateFile};
  }catch(error){if(!stopped){try{cleanup();}catch(failure){if(failure?.message==='PILOT_LAUNCH_CLEANUP_FAILED')throw failure;}}if(coded(error))throw error;fail('PILOT_LAUNCH_FAILED');}
 }
 export function createRecordingDocker(){
  const files=new Map();let running=false,nonce='',flagReady=false;
- const execFileSync=(command,args)=>{
+ const execFileSync=(command,args,options)=>{
   if(args.includes('exec')&&!running){const error=Error('container is not running');error.status=1;throw error;}
+  if(args[0]==='inspect')return 'exited\n';
   if(args.includes('create')&&args.includes('--name')){running=false;nonce=args.find(item=>item.startsWith('QIWE_PILOT_READY_NONCE='))?.split('=')[1]??'';}
-  if(args.includes('start')&&!args.includes('create'))running=true;
+  if(args.includes('start')&&!args.includes('create')&&!args.includes('exec'))running=true;
+  if(args.some(item=>String(item).includes('cat >'))){const dest=String(args.find(item=>String(item).includes('cat >'))).match(/\/tmp\/qiwe-private-[a-f0-9]{16}/)?.[0];if(dest)files.set(dest,Buffer.from(options?.input??''));return '';}
   if(args.includes('exec')&&args.some(item=>item.includes('/tmp/qiwe-ready/flag')&&item.includes('printf')))flagReady=true;
   const op=args.find(item=>['cp','sha256sum','stat','ln','rm','logs'].includes(item));
   if(op==='logs')return flagReady?`CONTROLLED_REAL_READY ${nonce}\n`:'waiting\n';
@@ -189,10 +197,12 @@ function main(){
   }
   if(plan.mode==='synthetic'&&(fileAt>=0||imageAt>=0))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
   if(plan.mode==='no-credential'&&(fileAt>=0||imageAt>=0||dash>=0))fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
+  if(plan.mode==='rehearsal'&&fileAt>=0)fail('ISOLATED_SYNTHETIC_REAL_CREDENTIAL');
   const result=runSupervisedPilot({mode:plan.mode,env:process.env,privateFile:fileAt>=0?path.resolve(value(fileAt)):undefined,image:imageAt>=0?value(imageAt):undefined,dockerContext:contextAt>=0?value(contextAt):undefined,entryArgs:dash>=0?args.slice(dash+1):undefined,publishWeb:cli.includes('--publish-web')?true:undefined,keepAlive:plan.mode!=='synthetic',...(plan.useRecordingDocker?{execFileSync:createRecordingDocker().execFileSync}:{})});
   console.log(result.report.ready);
   console.log(JSON.stringify(result.report));
   if(plan.mode==='synthetic')result.stop();
+  else result.wait();
  }catch(error){
   const code=coded(error)?error.message:'PILOT_LAUNCH_FAILED';
   console.error(code);

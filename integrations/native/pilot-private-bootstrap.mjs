@@ -265,19 +265,19 @@ function writeSnapshotCopy(raw){
  }catch(error){fs.rmSync(dir,{recursive:true,force:true});throw error;}
  finally{if(fd!==undefined)try{fs.closeSync(fd);}catch{}}
 }
-function invoke(execFileSync,command,args){
- try{return execFileSync(command,args,{encoding:'utf8',timeout:20000,env:{PATH:process.env.PATH??''},stdio:['ignore','pipe','pipe']});}
+function invoke(execFileSync,command,args,input){
+ try{return execFileSync(command,args,{encoding:'utf8',timeout:20000,env:{PATH:process.env.PATH??''},stdio:['ignore','pipe','pipe'],...(input===undefined?{}:{input})});}
  catch{fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');}
 }
-export function containerPrivateInstallPlan({docker,container,snapshotFile,containerTemp,destination}={}){
+export function containerPrivateInstallPlan({docker,container,containerTemp,destination}={}){
  if(docker!=='docker'&&(typeof docker!=='string'||!path.isAbsolute(docker)))fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
  if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(container??'')||destination!==PILOT_PRIVATE_CONFIG_PATH)fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
- if(!/^\/tmp\/qiwe-private-[a-f0-9]{16}$/.test(containerTemp??'')||typeof snapshotFile!=='string'||!path.isAbsolute(snapshotFile))fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
- return [[docker,'cp','--',snapshotFile,container+':'+containerTemp],[docker,'exec','--user','0:0',container,'chown','1000:1000',containerTemp],[docker,'exec','--user','0:0',container,'chmod','600',containerTemp],[docker,'exec','--user','1000:1000',container,'sha256sum',containerTemp],[docker,'exec','--user','1000:1000',container,'stat','-c','%u %g %a %h %s',containerTemp]];
+ if(!/^\/tmp\/qiwe-private-[a-f0-9]{16}$/.test(containerTemp??''))fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
+ return [[docker,'exec','-i','--user','1000:1000',container,'sh','-c',`umask 077; cat > ${containerTemp}`],[docker,'exec','--user','1000:1000',container,'sha256sum',containerTemp],[docker,'exec','--user','1000:1000',container,'stat','-c','%u %g %a %h %s',containerTemp]];
 }
 function linkContainerFile(execFileSync,docker,container,containerTemp,destination){
  const options={encoding:'utf8',timeout:20000,env:{PATH:process.env.PATH??''},stdio:['ignore','pipe','pipe']};
- try{execFileSync(docker,['exec','--user','0:0',container,'ln','-T',containerTemp,destination],options);}
+ try{execFileSync(docker,['exec','--user','1000:1000',container,'ln','-T',containerTemp,destination],options);}
  catch(error){
   const detail=`${error?.stderr??''}\n${error?.message??''}`;
   if(/directory/i.test(detail))fail('PILOT_PRIVATE_DESTINATION_DIRECTORY');
@@ -292,15 +292,15 @@ export function runContainerPrivateInstall(options){
   if(!reread(opened.fd,opened.raw))fail('PILOT_PRIVATE_INPUT_CHANGED');
   snapshot=writeSnapshotCopy(opened.raw);
   const containerTemp=`/tmp/qiwe-private-${randomBytes(8).toString('hex')}`;
-  const commands=containerPrivateInstallPlan({docker:options?.docker,container:options?.container,snapshotFile:snapshot.file,containerTemp,destination:options?.destination});
+  const commands=containerPrivateInstallPlan({docker:options?.docker,container:options?.container,containerTemp,destination:options?.destination});
   const execFileSync=options?.execFileSync;if(typeof execFileSync!=='function')fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
   const hash=createHash('sha256').update(opened.raw).digest('hex');
   let copied=false;
   try{
    let statText='',hashText='';
    for(const [command,...args] of commands){
-    const output=invoke(execFileSync,command,args);
-    if(args.includes('cp'))copied=true;
+    const output=invoke(execFileSync,command,args,args.some(item=>String(item).includes('cat >'))?opened.raw:undefined);
+    if(args.some(item=>String(item).includes('cat >')))copied=true;
     if(args.includes('sha256sum'))hashText=String(output??'');
     if(args.includes('stat'))statText=String(output??'');
    }
@@ -310,14 +310,16 @@ export function runContainerPrivateInstall(options){
    try{if(!again.raw.equals(opened.raw))fail('PILOT_PRIVATE_INPUT_CHANGED');}
    finally{fs.closeSync(again.fd);}
    linkContainerFile(execFileSync,commands[0][0],options.container,containerTemp,options.destination);
-   invoke(execFileSync,commands[0][0],['exec','--user','0:0',options.container,'rm','-f',containerTemp]);
+   invoke(execFileSync,commands[0][0],['exec','--user','1000:1000',options.container,'rm','-f',containerTemp]);
+   const rootStat=String(invoke(execFileSync,commands[0][0],['exec','--user','0:0',options.container,'stat','-c','%u %g %a %h %s',options.destination])??'');
+   if(!/^1000 1000 600 \d+ \d+\n?$/.test(rootStat))fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
    const finalStat=String(invoke(execFileSync,commands[0][0],['exec','--user','1000:1000',options.container,'stat','-c','%u %g %a %h %s',options.destination])??'');
    const finalHash=String(invoke(execFileSync,commands[0][0],['exec','--user','1000:1000',options.container,'sha256sum',options.destination])??'');
    const published=/^1000 1000 600 (\d+) (\d+)\n?$/.exec(finalStat),sum=/^([a-f0-9]{64})(?:\s|$)/.exec(finalHash);
    if(!published||Number(published[1])!==1||Number(published[2])!==opened.raw.length||!sum||sum[1]!==hash)fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
    return freeze({uid:containerUser,gid:containerUser,mode:privateMode,nlink:Number(published[1]),bytes:Number(published[2])});
   }catch(error){
-   if(copied)invoke(execFileSync,commands[0][0],['exec','--user','0:0',options.container,'rm','-f',containerTemp]);
+   if(copied)invoke(execFileSync,commands[0][0],['exec','--user','1000:1000',options.container,'rm','-f',containerTemp]);
    throw error;
   }
  }finally{fs.closeSync(opened.fd);if(snapshot)fs.rmSync(snapshot.dir,{recursive:true,force:true});}

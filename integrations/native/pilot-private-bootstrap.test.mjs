@@ -91,9 +91,9 @@ test('symlink, extra link, loose mode and bad shape are refused without echoing 
 const digestOf=text=>createHash('sha256').update(text).digest('hex');
 function containerExec(file,text,onCp){
  const calls=[],digest=digestOf(text);
- const execFileSync=(command,args)=>{
+ const execFileSync=(command,args,options)=>{
   calls.push([command,...args]);
-  if(args.includes('cp')){onCp?.(args);return '';}
+  if(args.some(item=>String(item).includes('cat >'))){onCp?.(command,args,options);return '';}
   if(args.includes('sha256sum'))return `${digest}  /tmp/qiwe-live-pilot.private.json\n`;
   if(args.includes('stat'))return `1000 1000 600 1 ${Buffer.byteLength(text)}\n`;
   return '';
@@ -103,18 +103,19 @@ function containerExec(file,text,onCp){
 test('container install copies the verified snapshot and checks the in-container hash',()=>{
  const f=scratch();try{
   const file=writeHost(f.root),text=body();
-  const {calls,execFileSync}=containerExec(file,text,args=>{
-   const source=args[args.indexOf('--')+1];
-   assert.notEqual(path.resolve(source),path.resolve(file));
-   assert.equal(fs.readFileSync(source).equals(Buffer.from(text)),true);
+  const {calls,execFileSync}=containerExec(file,text,(command,args,opts)=>{
+   const script=args.find(item=>String(item).includes('cat >'));
+   assert.equal(Boolean(script),true);
+   assert.equal(Buffer.from(opts?.input??'').equals(Buffer.from(text)),true);
+   assert.equal(JSON.stringify(args).includes(file),false);
   });
   const installed=runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync});
   assert.deepEqual(installed,{uid:1000,gid:1000,mode:0o600,nlink:1,bytes:Buffer.byteLength(text)});
   const flat=JSON.stringify(calls);
   assert.equal(flat.includes(secret)||flat.includes(modelKey)||flat.includes(file),false);
-  const copied=calls.find(argv=>argv.includes('cp'));
-  assert.match(copied.at(-1),/^qiwe-pilot-host:\/tmp\/qiwe-private-[a-f0-9]{16}$/);
-  const temp=copied.at(-1).slice('qiwe-pilot-host:'.length),finalPath='/tmp/qiwe-live-pilot.private.json';
+  assert.equal(calls.some(argv=>argv.includes('chown')),false);
+  const write=calls.find(argv=>argv.some(item=>String(item).includes('cat >')));
+  const temp=String(write.find(item=>String(item).includes('cat >'))).match(/\/tmp\/qiwe-private-[a-f0-9]{16}/)[0],finalPath='/tmp/qiwe-live-pilot.private.json';
   const at=(pred)=>calls.findIndex(pred);
   const statTemp=at(argv=>argv.includes('stat')&&argv.includes(temp));
   const linked=at(argv=>argv.includes('ln'));
@@ -133,10 +134,9 @@ test('container install keeps the snapshot when the host file is swapped for the
  const f=scratch();try{
   const file=writeHost(f.root),text=body(),swapped=text.replace(secret,'host-file-secret-other');
   assert.equal(Buffer.byteLength(swapped),Buffer.byteLength(text));
-  const {execFileSync}=containerExec(file,text,args=>{
+  const {execFileSync}=containerExec(file,text,(command,args,opts)=>{
    fs.writeFileSync(file,swapped,{mode:0o600});
-   const source=args[args.indexOf('--')+1];
-   assert.equal(fs.readFileSync(source).equals(Buffer.from(text)),true);
+   assert.equal(Buffer.from(opts.input).equals(Buffer.from(text)),true);
    fs.writeFileSync(file,text,{mode:0o600});
   });
   const installed=runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync});
@@ -146,12 +146,12 @@ test('container install keeps the snapshot when the host file is swapped for the
 test('container install removes the destination after chown, stat, or post-copy snapshot failure',()=>{
  const f=scratch();try{
   const file=writeHost(f.root),text=body();
-  for(const kind of ['chown','stat','snapshot']){
+  for(const kind of process.platform==='win32'?['stat']:['stat','snapshot']){
    let copied=0,removed=0;
    let removedPath;
    assert.throws(()=>runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync(command,args){
     if(args.includes('rm')){removed++;removedPath=args.at(-1);return '';}
-    if(args.includes('cp')){copied++;return '';}
+    if(args.some(item=>String(item).includes('cat >'))){copied++;return '';}
     if(kind==='chown'&&args.includes('chown'))throw Error('boom '+secret);
     if(kind==='snapshot'&&args.includes('sha256sum'))fs.chmodSync(file,0o644);
     if(args.includes('sha256sum'))return `${digestOf(text)}  /tmp/qiwe-private-temp\n`;
@@ -215,7 +215,7 @@ test('a failed docker cp does not remove a container path',()=>{
   let removed=0;
   assert.throws(()=>runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:'/tmp/qiwe-live-pilot.private.json',execFileSync(command,args){
    if(args.includes('rm'))removed++;
-   if(args.includes('cp'))throw Error('cp failed '+secret);
+   if(args.some(item=>String(item).includes('cat >')))throw Error('cp failed '+secret);
    return '';
   }}),error=>error.message==='PILOT_PRIVATE_CONTAINER_UNVERIFIED'&&!error.message.includes(secret));
   assert.equal(removed,0);

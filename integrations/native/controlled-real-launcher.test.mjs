@@ -20,8 +20,8 @@ test('synthetic launcher creates the container, installs a fake private file, th
  const result=runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,now:()=>1_700_000_000_000});
  try{
   const sub=exec.calls.map(argv=>argv[1]);
-  const created=sub.indexOf('create'),started=sub.indexOf('start'),copied=sub.indexOf('cp'),execed=exec.calls.findIndex(argv=>argv.includes('exec'));
-  assert.ok(created!==-1&&created<started&&started<execed&&started<copied);
+  const created=sub.indexOf('create'),started=sub.indexOf('start'),copied=exec.calls.findIndex(argv=>argv.some(item=>String(item).includes('cat >'))),execed=exec.calls.findIndex(argv=>argv.includes('exec'));
+  assert.ok(created!==-1&&created<started&&started<execed&&execed<=copied);
   const nonce=exec.calls.find(argv=>argv.includes('create')).find(item=>item.startsWith('QIWE_PILOT_READY_NONCE=')).split('=')[1];
   assert.match(nonce,/^[a-f0-9]{32}$/);
   const flagWrite=exec.calls.find(argv=>argv.includes('exec')&&argv.some(item=>item.includes('/tmp/qiwe-ready/flag')));
@@ -72,10 +72,11 @@ test('real launcher opens a private bridge, installs the file, then starts, and 
   assert.throws(()=>runSupervisedPilot({mode:'real',privateFile,image:'sha256:'+'ab'.repeat(32),env:clean,requests:9,execFileSync:exec.execFileSync,cwd:root,...controls}),/PILOT_LAUNCH_BUDGET_CAP/);
   const result=runSupervisedPilot({mode:'real',privateFile,image:'sha256:'+'ab'.repeat(32),env:clean,execFileSync:exec.execFileSync,now:()=>1_700_000_000_000,dockerContext:'desktop-linux',entryArgs:['verify-full-host.mjs','--controlled-real-pilot','--full-host-conversations'],cwd:root,...controls,...win});
   const sub=exec.calls.map(argv=>argv.find((item,index)=>index>0&&!item.startsWith('--')&&item!=='desktop-linux'));
-  const network=sub.indexOf('network'),created=sub.indexOf('create'),started=sub.indexOf('start'),copied=sub.indexOf('cp');
+  const network=sub.indexOf('network'),created=sub.indexOf('create'),started=sub.indexOf('start'),copied=exec.calls.findIndex(argv=>argv.some(item=>String(item).includes('cat >')));
   assert.ok(network!==-1&&network<created&&created<started&&started<copied);
   const create=exec.calls.find(argv=>argv.includes('create')&&argv.includes('--name'));
-  assert.equal(create.some(item=>item.includes('exec node /input/integrations/native/verify-full-host.mjs /input/.local/full-instance/stage/app/src --host-overlay /input/.local/core-fix/appointment-identity-candidate/src --skill-root /input/.local/skills')),true);
+  assert.equal(create.some(item=>item.includes('exec node /input/qiwe-agent/integrations/native/verify-full-host.mjs /input/full-instance/stage/app/src --host-overlay /input/core-fix/appointment-identity-candidate/src --skill-root /input/d4-skills')),true);
+  assert.equal(create.includes('HOME=/tmp')&&create.includes('TMPDIR=/tmp')&&create.includes('QIWE_EVIDENCE_ROOT=/tmp/qiwe-evidence'),true);
   assert.equal(assertRecordedHostBoundary(create),true);
   assert.equal(create.some(item=>item.startsWith('QIWE_RESTORATION_RECEIPT=')),false);
   assert.equal(create.some(item=>item.startsWith('QIWE_LOCAL_DOCKER_DRIVER_IMAGE=sha256:092853e7')),true);
@@ -142,6 +143,9 @@ test('windows verify skips only an EPERM fsync or symlink failure and still runs
  assert.equal(windowsEpermCase(tap),true);
  assert.equal(windowsEpermCase('not ok 1 - scope\n  error: CONTROLLED_REAL_TRANSPORT_SCOPE\n'),false);
  assert.equal(windowsEpermCase('not ok 1 - fsync\n  error: EPERM: operation not permitted, fsync\n  code: CONTROLLED_REAL_TRANSPORT_SCOPE\n'),false);
+ const listed='✖ fsync parent (1.2ms)\n✖ failing tests:\n\n✖ fsync parent (1.2ms)\n  Error: EPERM: operation not permitted, fsync\n';
+ assert.equal(windowsEpermCase(listed),true);
+ assert.equal(windowsEpermCase('✖ fsync parent (1.2ms)\n  AssertionError: expected\n  Error: EPERM: operation not permitted, fsync\n'),false);
  const plan=launcherPlan('win32');
  assert.equal(plan.incremental,'per-file');
  assert.equal(launcherPlan('linux').incremental,'suite');
@@ -248,6 +252,12 @@ test('windows no-credential scratch is created inside the profile and granted by
   result.stop();
  }finally{fs.rmSync(home,{recursive:true,force:true});}
 });
+test('no-credential wait returns when the container has exited',()=>{
+ const exec=trackingDocker();
+ const result=runSupervisedPilot({mode:'no-credential',env:clean,execFileSync:exec.execFileSync,setTimeout:()=>({unref(){}})});
+ assert.equal(result.wait(),'exited');
+ assert.equal(exec.calls.some(argv=>argv[1]==='rm'&&argv.includes('-f')),true);
+});
 test('entry arguments that assign a secret are refused',()=>{
  const exec=trackingDocker();
  assert.throws(()=>runSupervisedPilot({mode:'synthetic',env:clean,execFileSync:exec.execFileSync,entryArgs:['DEEPSEEK_API_KEY=not-for-logs']}),error=>error.message==='PILOT_LAUNCH_ENTRY_INVALID'&&!error.message.includes('not-for-logs'));
@@ -255,10 +265,10 @@ test('entry arguments that assign a secret are refused',()=>{
 });
 function dockerDaemon(){try{realExec('docker',['info'],{stdio:'ignore',timeout:8000});return true;}catch{return false;}}
 async function hostControls(root){
- const stage=path.join(root,'.local','frontagent-r3-20261029','rebuilt-runner');
- fs.mkdirSync(stage,{recursive:true});
- fs.writeFileSync(path.join(stage,'build-input.json'),'{}');
- const dockerBin=path.join(root,'docker-bin');
+ const stage=path.join(root,'.local','frontagent-r3-20261029');
+ fs.mkdirSync(path.join(stage,'input'),{recursive:true});
+ fs.writeFileSync(path.join(stage,'build-input-linux.json'),'{}');
+ const dockerBin=path.join(stage,'docker');
  fs.writeFileSync(dockerBin,'');
  const dockerSocket=path.join(root,'docker.sock');
  const server=net.createServer();
@@ -267,13 +277,15 @@ async function hostControls(root){
 }
 function trackingDocker(options={}){
  const calls=[],files=new Map();let running=false,nonce='',flagReady=false;
- const execFileSync=(command,args)=>{
+ const execFileSync=(command,args,opts)=>{
   if(args.includes('exec')&&!running){const error=Error('container is not running');error.status=1;throw error;}
   calls.push([command,...args]);
+  if(args[0]==='inspect')return 'exited\n';
   if(options.failRm&&args[0]==='rm'&&args.includes('-f')){const error=Error('rm failed');error.status=1;throw error;}
-  if(options.failStart&&args.includes('start')&&!args.includes('create')){const error=Error('start failed');error.status=1;throw error;}
+  if(options.failStart&&args.includes('start')&&!args.includes('create')&&!args.includes('exec')){const error=Error('start failed');error.status=1;throw error;}
   if(options.failVolume&&args[0]==='volume'&&args.includes('rm')){const error=Error('volume rm failed');error.status=1;throw error;}
-  if(options.readyFlagExists&&args.includes('exec')&&args.some(item=>item.includes('[ -e /tmp/qiwe-ready ]'))){const error=Error('EXISTS');error.status=1;throw error;}
+  if(options.readyFlagExists&&args.includes('mkdir')&&args.includes('/tmp/qiwe-ready')){const error=Error('EXISTS');error.status=1;throw error;}
+  if(args.some(item=>String(item).includes('cat >'))){const dest=String(args.find(item=>String(item).includes('cat >'))).match(/\/tmp\/qiwe-private-[a-f0-9]{16}/)?.[0];if(dest)files.set(dest,Buffer.from(opts?.input??''));return '';}
   if(args.includes('create')&&args.includes('--name')){running=false;nonce=args.find(item=>item.startsWith('QIWE_PILOT_READY_NONCE='))?.split('=')[1]??'';}
   if(args.includes('start')&&!args.includes('create'))running=true;
   if(args.includes('exec')&&args.some(item=>item.includes('/tmp/qiwe-ready/flag')&&item.includes('printf')))flagReady=true;

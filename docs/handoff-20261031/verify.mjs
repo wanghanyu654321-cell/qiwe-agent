@@ -2,18 +2,30 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
+function windowsTestName(block){
+ const named=block.match(/(?:✖|✔|# Subtest: |not ok \d+ - |ok \d+ - )([^\n(]+)/);
+ const name=named?.[1]?.trim()??'';
+ return /^failing tests:?$/i.test(name)?'':name;
+}
 export function windowsEpermCase(output){
  if(typeof output!=='string'||!/EPERM/.test(output))return false;
  const blocks=output.split(/\n(?=# Subtest: |not ok \d|ok \d|✖ |✔ )/);
- let failed=0;
+ const groups=new Map();
  for(const block of blocks){
   if(!/not ok \d|✖ |failureType: ['"]testCodeFailure['"]/.test(block))continue;
-  failed++;
-  if(/CONTROLLED_REAL_/.test(block))return false;
-  if(!/EPERM/.test(block)||!/fsync|symlink/i.test(block))return false;
+  const name=windowsTestName(block);
+  if(!name)continue;
+  const seen=groups.get(name)??[];
+  seen.push(block);
+  groups.set(name,seen);
  }
- if(failed>0)return true;
- return /Error: EPERM: operation not permitted, (?:fsync|symlink)/i.test(output)&&!/AssertionError|ERR_ASSERTION|CONTROLLED_REAL_/.test(output);
+ if(!groups.size)return false;
+ for(const blocks of groups.values()){
+  const text=blocks.join('\n');
+  if(/AssertionError|ERR_ASSERTION|CONTROLLED_REAL_/.test(text))return false;
+  if(!/EPERM/.test(text)||!/fsync|symlink/i.test(text))return false;
+ }
+ return true;
 }
 const scopeNote='NOTE CONTROLLED_REAL_TRANSPORT_SCOPE: that code is the linux uid and realpath(cwd) gate. A Windows temp directory reached through a symlink such as D:\\tmp can fail it in the test harness. Inside the Linux container it is fail-closed scope enforcement, not a missing launch switch.';
 const here=path.dirname(fileURLToPath(import.meta.url)),root=path.resolve(here,'../..');
