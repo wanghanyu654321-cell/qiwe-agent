@@ -84,12 +84,18 @@ test('container install copies the verified snapshot and checks the in-container
   assert.equal(flat.includes(secret)||flat.includes(modelKey)||flat.includes(file),false);
   const copied=calls.find(argv=>argv.includes('cp'));
   assert.match(copied.at(-1),/^qiwe-pilot-host:\/tmp\/qiwe-private-[a-f0-9]{16}$/);
-  const temp=copied.at(-1).slice('qiwe-pilot-host:'.length);
-  assert.equal(calls.some(argv=>argv.includes('sha256sum')&&argv.includes(temp)),true);
-  assert.equal(calls.some(argv=>argv.includes('ln')&&argv.includes(temp)&&argv.includes('/tmp/qiwe-live-pilot.private.json')),true);
+  const temp=copied.at(-1).slice('qiwe-pilot-host:'.length),finalPath='/tmp/qiwe-live-pilot.private.json';
+  const at=(pred)=>calls.findIndex(pred);
+  const statTemp=at(argv=>argv.includes('stat')&&argv.includes(temp));
+  const linked=at(argv=>argv.includes('ln'));
+  const removedTemp=at(argv=>argv.includes('rm')&&argv.includes(temp));
+  const statFinal=at(argv=>argv.includes('stat')&&argv.includes(finalPath)&&argv.includes('1000:1000'));
+  assert.ok(statTemp!==-1&&statTemp<linked&&linked<removedTemp&&removedTemp<statFinal);
+  assert.equal(calls[linked].includes('-T'),true);
+  assert.equal(calls[linked].includes('-f'),false);
+  assert.equal(calls.some(argv=>argv.includes('sha256sum')&&argv.includes(finalPath)&&argv.includes('1000:1000')&&argv.includes(temp)===false),true);
   assert.equal(calls.some(argv=>argv.includes('mv')),false);
-  assert.equal(calls.some(argv=>argv.includes('rm')&&argv.includes(temp)),true);
-  assert.equal(calls.some(argv=>argv.includes('rm')&&argv.includes('/tmp/qiwe-live-pilot.private.json')),false);
+  assert.equal(calls.some(argv=>argv.includes('rm')&&argv.includes(finalPath)),false);
   assert.equal(calls.some(argv=>['sh','bash','node'].includes(argv[0])||argv.includes(text)),false);
  }finally{f.cleanup();}
 });
@@ -127,6 +133,28 @@ test('container install removes the destination after chown, stat, or post-copy 
    assert.notEqual(removedPath,'/tmp/qiwe-live-pilot.private.json');
    fs.chmodSync(file,0o600);
   }
+ }finally{f.cleanup();}
+});
+test('a directory at the container destination is refused and not linked inside',()=>{
+ const f=scratch();try{
+  const file=writeHost(f.root),text=body(),finalPath='/tmp/qiwe-live-pilot.private.json';
+  let innerLink=false,removedFinal=0;
+  assert.throws(()=>runContainerPrivateInstall({docker:'docker',container:'qiwe-pilot-host',hostFile:file,destination:finalPath,execFileSync(command,args){
+   if(args.includes('sha256sum')&&args.includes(finalPath))return `${digestOf('directory')}\n`;
+   if(args.includes('sha256sum'))return `${digestOf(text)}  temp\n`;
+   if(args.includes('stat')&&args.includes(finalPath))return '1000 1000 755 2 4096\n';
+   if(args.includes('stat'))return `1000 1000 600 1 ${Buffer.byteLength(text)}\n`;
+   if(args.includes('ln')){
+    assert.equal(args.includes('-f'),false);
+    if(!args.includes('-T')){innerLink=true;return '';}
+    const error=Error("'/tmp/qiwe-live-pilot.private.json' is a directory");
+    error.status=1;error.stderr=error.message;throw error;
+   }
+   if(args.includes('rm')&&args.includes(finalPath))removedFinal++;
+   return '';
+  }}),error=>error.message==='PILOT_PRIVATE_DESTINATION_DIRECTORY'&&!error.message.includes(secret)&&!error.message.includes('directory'));
+  assert.equal(innerLink,false);
+  assert.equal(removedFinal,0);
  }finally{f.cleanup();}
 });
 test('a second container install refuses an existing destination without replacing it',()=>{

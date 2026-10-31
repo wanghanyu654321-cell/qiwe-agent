@@ -154,8 +154,13 @@ export function containerPrivateInstallPlan({docker,container,snapshotFile,conta
 }
 function linkContainerFile(execFileSync,docker,container,containerTemp,destination){
  const options={encoding:'utf8',timeout:20000,env:{PATH:process.env.PATH??''},stdio:['ignore','pipe','pipe']};
- try{execFileSync(docker,['exec','--user','0:0',container,'ln',containerTemp,destination],options);}
- catch(error){if(error?.status===1)fail('PILOT_PRIVATE_DESTINATION_INVALID');fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');}
+ try{execFileSync(docker,['exec','--user','0:0',container,'ln','-T',containerTemp,destination],options);}
+ catch(error){
+  const detail=`${error?.stderr??''}\n${error?.message??''}`;
+  if(/directory/i.test(detail))fail('PILOT_PRIVATE_DESTINATION_DIRECTORY');
+  if(error?.status===1&&/file exists/i.test(detail))fail('PILOT_PRIVATE_DESTINATION_INVALID');
+  fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
+ }
 }
 export function runContainerPrivateInstall(options){
  const opened=snapshotHostFile(options?.hostFile);
@@ -183,7 +188,11 @@ export function runContainerPrivateInstall(options){
    finally{fs.closeSync(again.fd);}
    linkContainerFile(execFileSync,commands[0][0],options.container,containerTemp,options.destination);
    invoke(execFileSync,commands[0][0],['exec','--user','0:0',options.container,'rm','-f',containerTemp]);
-   return freeze({uid:containerUser,gid:containerUser,mode:privateMode,nlink:1,bytes:opened.raw.length});
+   const finalStat=String(invoke(execFileSync,commands[0][0],['exec','--user','1000:1000',options.container,'stat','-c','%u %g %a %h %s',options.destination])??'');
+   const finalHash=String(invoke(execFileSync,commands[0][0],['exec','--user','1000:1000',options.container,'sha256sum',options.destination])??'');
+   const published=/^1000 1000 600 (\d+) (\d+)\n?$/.exec(finalStat),sum=/^([a-f0-9]{64})(?:\s|$)/.exec(finalHash);
+   if(!published||Number(published[1])!==1||Number(published[2])!==opened.raw.length||!sum||sum[1]!==hash)fail('PILOT_PRIVATE_CONTAINER_UNVERIFIED');
+   return freeze({uid:containerUser,gid:containerUser,mode:privateMode,nlink:Number(published[1]),bytes:Number(published[2])});
   }catch(error){
    if(copied)invoke(execFileSync,commands[0][0],['exec','--user','0:0',options.container,'rm','-f',containerTemp]);
    throw error;
