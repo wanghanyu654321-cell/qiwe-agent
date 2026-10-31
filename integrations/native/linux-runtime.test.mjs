@@ -106,6 +106,34 @@ test('controlled copy admits only the exact public offline SDK fixture under tes
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 
+test('controlled copy seals the frontagent existing input as its own unit',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-existing-'));
+  try{
+    const existing=path.join(root,'.local/frontagent-existing-input');
+    fs.mkdirSync(path.join(existing,'state/shadow/node_modules/.bin'),{recursive:true});
+    fs.mkdirSync(path.join(existing,'state/.git'),{recursive:true});
+    fs.mkdirSync(path.join(existing,'code/.vite'),{recursive:true});
+    fs.writeFileSync(path.join(existing,'state/shadow/node_modules/.bin/tool'),'#!/bin/sh\n');
+    fs.writeFileSync(path.join(existing,'state/.git/config'),'synthetic\n');
+    fs.writeFileSync(path.join(existing,'state/.env.local'),'NAME=synthetic\n');
+    fs.writeFileSync(path.join(existing,'code/.vite/deps.json'),'{}\n');
+    fs.writeFileSync(path.join(existing,'state','messages.db'),'synthetic');
+    fs.writeFileSync(path.join(existing,'descriptor.json'),'{}\n');
+    if(process.platform!=='win32'){
+      fs.symlinkSync('tool',path.join(existing,'state/shadow/node_modules/.bin/link'));
+      assert.throws(()=>sealControlledLinuxCopy(root),/symlinks are forbidden/);
+      fs.unlinkSync(path.join(existing,'state/shadow/node_modules/.bin/link'));
+    }
+    sealControlledLinuxCopy(root);
+    assert.equal(verifyControlledLinuxCopy(root).files,1);
+    const manifest=JSON.parse(fs.readFileSync(path.join(root,'.local/frontagent-existing-input.manifest.json'),'utf8'));
+    assert.equal(manifest.format,'qiwe-existing-input-v1');
+    for(const relative of ['state/shadow/node_modules/.bin/tool','state/.git/config','state/.env.local','code/.vite/deps.json','state/messages.db'])assert.match(manifest.files[relative].sha256,/^[a-f0-9]{64}$/);
+    fs.mkdirSync(path.join(root,'qiwe-agent'),{recursive:true});
+    fs.writeFileSync(path.join(root,'qiwe-agent/.env'),'synthetic');
+    assert.throws(()=>sealControlledLinuxCopy(root),/Unapproved stage path/);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
 test('controlled copy admits the three existing D4 skill definitions without other skill payloads',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-linux-skills-test-'));
   try{

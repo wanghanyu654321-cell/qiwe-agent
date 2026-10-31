@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 
-const script=path.join(path.dirname(new URL(import.meta.url).pathname),'run-live-preflight.mts');
+const script=path.join(path.dirname(fileURLToPath(import.meta.url)),'run-live-preflight.mts');
+const linuxOnly={skip:process.platform!=='linux'&&'Linux uid mode 0600 and isolated-synthetic platform gate'};
 const cleanEnv={PATH:process.env.PATH??''};
 const secret='preflight-host-secret-value';
 const modelKey='preflight-host-model-key';
@@ -16,7 +18,7 @@ function hostFile(root){
 }
 function run(args,env=cleanEnv){return spawnSync(process.execPath,[script,...args],{encoding:'utf8',env,timeout:20000});}
 
-test('credential-free preflight runs the formal isolated-synthetic order',()=>{
+test('credential-free preflight runs the formal isolated-synthetic order',linuxOnly,()=>{
  const child=run(['--isolated-synthetic']);
  assert.equal(child.status,0,child.stderr);
  const report=JSON.parse(child.stdout.trim().split('\n').at(-1));
@@ -47,7 +49,7 @@ test('preflight refuses to mix isolated-synthetic with a private file or a real 
  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 
-test('preflight installs a host file as uid 1000 mode 0600 and does not print it',()=>{
+test('preflight installs a host file as uid 1000 mode 0600 and does not print it',linuxOnly,()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-preflight-install-'));
  try{
   const file=hostFile(root),destination=path.join(root,'container-private.json');

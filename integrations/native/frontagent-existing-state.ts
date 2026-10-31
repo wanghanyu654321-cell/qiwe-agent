@@ -3,10 +3,11 @@ import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 
+export const existingStateBudgetMs=15*60*1000;
 const primaryDatabase='state/runtime/data/db/messages.db';
 const requiredAccessFiles=['frontagent-workbench-access.sqlite','frontagent-wecom-bindings.json','frontagent-approved-roles.json'];
 const persistentDirectories=['drafts','manager','shadow','training','training-runs','training-sessions','training-pi','training-request-ledger-20261015','workbook-runner'];
-type Entry={path:string;sha256:string};
+type Entry={path:string;sha256:string;size:number};
 interface Descriptor {
  format:'frontagent-existing-state-v1';accountId:string;homeJid:string;role:'marketing';profileId:string;workspaceJid:string;folder:string;
  tenantId:string;storeId:string;instanceId:string;employee:{employeeId:string;employeeName:string};adminCookie:string;
@@ -66,14 +67,31 @@ export function disableExistingPilotPluginScan(hostRoot:string){
  try{fs.writeFileSync(temporary,bytes,{flag:'wx',mode:stat.mode&0o777});fs.chmodSync(temporary,stat.mode&0o777);fs.renameSync(temporary,file);}finally{if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
  return {beforeSha256:digest(original),afterSha256:digest(bytes),changed:true};
 }
-function inventory(root:string){
- const entries:Entry[]=[],directories:string[]=[];
+type SealFile={sha256:string;size:number};
+function loadExistingSeal(inputRoot:string){
+ const manifest=path.join(path.dirname(inputRoot),'frontagent-existing-input.manifest.json');
+ if(!fs.existsSync(manifest))return undefined;
+ let parsed:unknown;try{parsed=JSON.parse(fs.readFileSync(manifest,'utf8'));}catch{throw Error('FRONTAGENT_EXISTING_SEAL_INVALID');}
+ const files=(parsed as {format?:string;files?:Record<string,SealFile>}).files;
+ if((parsed as {format?:string}).format!=='qiwe-existing-input-v1'||!files||typeof files!=='object')throw Error('FRONTAGENT_EXISTING_SEAL_INVALID');
+ return new Map(Object.entries(files));
+}
+function inventory(root:string,seal:Map<string,SealFile>|undefined,progress?:(event:{phase:'inventory'|'copy';count:number})=>void){
+ const entries:Entry[]=[],directories:string[]=[];let count=0;
  function visit(relative:string){
   const absolute=path.join(root,relative);noLinks(absolute);const stat=fs.lstatSync(absolute);
-  if(stat.isDirectory()){directories.push(relative);for(const name of fs.readdirSync(absolute).sort())visit(relative?relative+'/'+name:name);}
-  else {requireState(stat.isFile()&&stat.nlink===1,'FILE_LINK_REFUSED');entries.push({path:relative,sha256:fileHash(absolute)});}
+  if(stat.isDirectory()){directories.push(relative);for(const name of fs.readdirSync(absolute).sort())visit(relative?relative+'/'+name:name);return;}
+  if(stat.isFIFO()||stat.isSocket()||!stat.isFile())requireState(false,'FILE_TYPE_REFUSED');
+  requireState(stat.nlink===1,'FILE_LINK_REFUSED');
+  const known=seal?.get(relative);
+  const sha256=known?known.sha256:fileHash(absolute);
+  if(known&&(known.size!==stat.size||!/^[a-f0-9]{64}$/.test(known.sha256)))requireState(false,'SEAL_SIZE_MISMATCH');
+  if(seal&&!known)requireState(false,'SEAL_FILE_UNEXPECTED');
+  entries.push({path:relative,sha256,size:stat.size});count++;progress?.({phase:'inventory',count});
  }
- visit('state');visit('code');return {entries:entries.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0),directories};
+ visit('state');visit('code');
+ if(seal&&seal.size!==entries.length)requireState(false,'SEAL_FILE_MISMATCH');
+ return {entries:entries.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0),directories};
 }
 function descriptor(bytes:Buffer):Descriptor {
  let value:unknown;try{value=JSON.parse(bytes.toString('utf8'));}catch{throw Error('FRONTAGENT_EXISTING_DESCRIPTOR_INVALID');}
@@ -109,7 +127,23 @@ export function parseExistingFrontagentStateOption(args:readonly string[],platfo
  * grant writer, binding writer, alternate database, or account creation runs here.
  * Runtime readers remain responsible for authorizing the descriptor's requested identity.
  */
-export function prepareExistingFrontagentState(options:{inputRoot:string;hostRoot:string}){
+function copyExclusive(source:string,target:string,size:number,tick?:()=>void){
+ if(size<=1024*1024){fs.copyFileSync(source,target,fs.constants.COPYFILE_EXCL);tick?.();return;}
+ const input=fs.openSync(source,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+ const output=fs.openSync(target,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL,0o644);
+ const buffer=Buffer.alloc(1024*1024);
+ try{
+  let offset=0;
+  while(offset<size){
+   const read=fs.readSync(input,buffer,0,buffer.length,offset);
+   if(read<=0)break;
+   let written=0;while(written<read)written+=fs.writeSync(output,buffer,written,read-written);
+   offset+=read;tick?.();
+  }
+  requireState(offset===size,'FILE_COPY_SIZE_MISMATCH');
+ }finally{fs.closeSync(input);fs.closeSync(output);}
+}
+export function prepareExistingFrontagentState(options:{inputRoot:string;hostRoot:string;budgetMs?:number;now?:()=>number;progress?:(event:{phase:'inventory'|'copy';count:number})=>void}){
  requireState(path.isAbsolute(options.inputRoot)&&path.isAbsolute(options.hostRoot),'ABSOLUTE_ROOT_REQUIRED');
  noLinks(options.inputRoot);noLinks(options.hostRoot);
  const inputRoot=fs.realpathSync(options.inputRoot),hostRoot=fs.realpathSync(options.hostRoot);
@@ -117,7 +151,13 @@ export function prepareExistingFrontagentState(options:{inputRoot:string;hostRoo
  requireState(fs.lstatSync(inputRoot).isDirectory()&&fs.lstatSync(hostRoot).isDirectory(),'ROOT_INVALID');
  requireState(fs.readdirSync(inputRoot).sort().join('\0')===['code','descriptor.json','state'].join('\0'),'INPUT_FILE_SET_INVALID');
  const descriptorFile=path.join(inputRoot,'descriptor.json');fileHash(descriptorFile);
- const descriptorBytes=fs.readFileSync(descriptorFile),d=descriptor(descriptorBytes),before=inventory(inputRoot);
+ const seal=loadExistingSeal(inputRoot);
+ const clock=options.now??Date.now,started=clock();
+ const note=(event:{phase:'inventory'|'copy';count:number})=>{
+  if(options.budgetMs!=null&&clock()-started>options.budgetMs){const error=Error('FULL_HOST_STEP_TIMEOUT') as Error&{step:string};error.step='existing-state';throw error;}
+  options.progress?.(event);
+ };
+ const descriptorBytes=fs.readFileSync(descriptorFile),d=descriptor(descriptorBytes),before=inventory(inputRoot,seal,note);
  requireState(before.entries.length===d.files.length&&before.entries.every(entry=>d.files.some(f=>f.path===entry.path&&f.sha256===entry.sha256)),'FILE_HASH_INVENTORY_MISMATCH');
  const names=new Set(before.entries.map(e=>e.path));requireState(names.has(primaryDatabase)&&fs.statSync(path.join(inputRoot,primaryDatabase)).size>0,'DATABASE_MISSING');
  for(const name of requiredAccessFiles)requireState(names.has('state/runtime/data/'+name),'ACCESS_FILE_MISSING');
@@ -138,9 +178,14 @@ export function prepareExistingFrontagentState(options:{inputRoot:string;hostRoo
  const destinations=[...before.directories,...before.entries.map(e=>e.path)].map(name=>({name,target:mapped(name)})).filter((e):e is {name:string;target:string}=>e.target!==undefined);
  requireState(!fs.existsSync(path.join(hostRoot,'frontagent-product'))&&destinations.every(e=>inside(hostRoot,path.join(hostRoot,e.target))&&!fs.existsSync(path.join(hostRoot,e.target))),'TARGET_ALREADY_EXISTS');
  for(const entry of destinations.filter(e=>before.directories.includes(e.name)))fs.mkdirSync(path.join(hostRoot,entry.target),{recursive:true});
+ let copied=0;
  for(const entry of destinations.filter(e=>names.has(e.name))){
-  const target=path.join(hostRoot,entry.target);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(inputRoot,entry.name),target,fs.constants.COPYFILE_EXCL);
-  requireState(fileHash(target)===before.entries.find(e=>e.path===entry.name)!.sha256,'FILE_COPY_HASH_MISMATCH');
+  const recorded=before.entries.find(e=>e.path===entry.name)!;
+  const source=path.join(inputRoot,entry.name),target=path.join(hostRoot,entry.target);fs.mkdirSync(path.dirname(target),{recursive:true});
+  copyExclusive(source,target,recorded.size,()=>note({phase:'copy',count:copied+1}));
+  if(seal)requireState(fs.statSync(target).size===recorded.size,'FILE_COPY_SIZE_MISMATCH');
+  else requireState(fileHash(target)===recorded.sha256,'FILE_COPY_HASH_MISMATCH');
+  copied++;
  }
  let ownerId:string,counts:{users:number;profiles:number;groups:number};
  const db=new DatabaseSync(path.join(hostRoot,'data/db/messages.db'),{readOnly:true});
@@ -162,6 +207,6 @@ export function prepareExistingFrontagentState(options:{inputRoot:string;hostRoo
   requireState(group?.folder===d.folder&&group.created_by===d.accountId&&group.is_home===0&&group.execution_mode==='container'&&profile?.owner_user_id===d.accountId&&profile.status==='active'&&links.length===1&&links[0]?.agent_profile_id===d.profileId,'IDENTITY_RESOURCE_MAPPING_INVALID');
   db.exec('COMMIT');
  }catch{throw Error('FRONTAGENT_EXISTING_IDENTITY_DATABASE_MAPPING_INVALID');}finally{db.close();}
- requireState(digest(fs.readFileSync(descriptorFile))===digest(descriptorBytes)&&digest(JSON.stringify(inventory(inputRoot).entries))===digest(JSON.stringify(before.entries)),'INPUT_CHANGED_DURING_COPY');
+ requireState(digest(fs.readFileSync(descriptorFile))===digest(descriptorBytes)&&digest(JSON.stringify(inventory(inputRoot,seal,note).entries))===digest(JSON.stringify(before.entries)),'INPUT_CHANGED_DURING_COPY');
  return {codeRoot:path.join(hostRoot,'frontagent-product'),jobRoot:hostRoot,ownerId,containerPrefix:'miniclaw-'+d.folder+'-',audit:{format:1,descriptorSha256:digest(descriptorBytes),inputSha256:digest(JSON.stringify(before.entries)),files:before.entries.length,counts}};
 }

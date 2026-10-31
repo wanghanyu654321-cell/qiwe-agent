@@ -36,35 +36,128 @@ export function runLinuxContainer(copyRoot,entryArguments,{execute=spawnSync,non
   }
 }
 const stageMarker='.qiwe-linux-stage.json';
-const stageTrees=['qiwe-agent/src/','qiwe-agent/integrations/native/','qiwe-agent/node_modules/','.local/full-instance/stage/app/src/','.local/full-instance/stage/app/node_modules/','.local/core-fix/appointment-identity-candidate/src/'];
+const stageTrees=['qiwe-agent/src/','qiwe-agent/integrations/native/','qiwe-agent/node_modules/','.local/full-instance/stage/app/src/','.local/full-instance/stage/app/node_modules/','.local/core-fix/appointment-identity-candidate/src/','.local/frontagent-existing-input/'];
 const stageFiles=['qiwe-agent/package.json','qiwe-agent/package-lock.json','qiwe-agent/tsconfig.json','qiwe-agent/tsconfig.build.json','qiwe-agent/tests/fixtures/offline-bot-sdk.ts','.local/full-instance/stage/app/package.json','.local/full-instance/stage/app/package-lock.json','.local/full-instance/stage/app/tsconfig.json'];
 const runnerStage='.local/full-instance/stage/app/container/agent-runner/';
 stageTrees.push(...['src/','prompts/','node_modules/'].map(name=>runnerStage+name));
 stageFiles.push(runnerStage+'package.json',runnerStage+'package-lock.json',runnerStage+'tsconfig.json');
 stageFiles.push(...['Dockerfile','.dockerignore','entrypoint.sh','session-generated-paths.mjs','session-permissions-mount.mjs','session-permissions-watcher.mjs','session-permissions.sh','session-prompts-copy.mjs'].map(name=>'.local/full-instance/stage/app/container/'+name));
 stageFiles.push(...['beauty-local-content','vendor-content-strategy','vendor-copywriting'].map(id=>`.local/d4-skills/${id}/SKILL.md`));
+const existingUnit='.local/frontagent-existing-input';
+export const existingInputManifest='.local/frontagent-existing-input.manifest.json';
+stageFiles.push(existingInputManifest);
+const codeRestage=[['src','qiwe-agent/src'],['integrations/native','qiwe-agent/integrations/native'],['package.json','qiwe-agent/package.json'],['package-lock.json','qiwe-agent/package-lock.json'],['tsconfig.json','qiwe-agent/tsconfig.json'],['tsconfig.build.json','qiwe-agent/tsconfig.build.json'],['tests/fixtures/offline-bot-sdk.ts','qiwe-agent/tests/fixtures/offline-bot-sdk.ts']];
+function rejectLinked(target){const stat=fs.lstatSync(target);if(stat.isSymbolicLink())throw Error('Stage symlinks are forbidden');if(stat.isFIFO()||stat.isSocket())throw Error('Stage special files are forbidden');return stat;}
+const existingRoot=['code','descriptor.json','state'];
+function assertExistingUnitRoot(dir){
+  const names=fs.readdirSync(dir).sort();
+  if(names.join('\0')!==existingRoot.join('\0'))throw Error('Unapproved stage path: '+existingUnit);
+  const descriptor=path.join(dir,'descriptor.json'),stat=rejectLinked(descriptor);
+  if(!stat.isFile()||stat.nlink!==1)throw Error('Unapproved stage path: '+existingUnit+'/descriptor.json');
+  return descriptor;
+}
+function walkExistingUnit(dir,visit){
+  const walk=relative=>{const absolute=path.join(dir,relative),stat=rejectLinked(absolute);
+    if(stat.isDirectory()){for(const name of fs.readdirSync(absolute).sort())walk(relative?relative+'/'+name:name);return;}
+    if(!stat.isFile()||stat.nlink!==1)throw Error('Unapproved stage path: '+existingUnit+'/'+relative);
+    visit(relative,absolute,stat);
+  };
+  for(const name of ['state','code'])walk(name);
+}
+export function writeExistingInputManifest(copyRoot){
+  const dir=path.join(copyRoot,existingUnit);
+  if(!fs.existsSync(dir))return null;
+  const descriptor=assertExistingUnitRoot(dir),files={};
+  walkExistingUnit(dir,(relative,absolute,stat)=>{files[relative]={sha256:sha256(fs.readFileSync(absolute)),size:stat.size};});
+  const body={format:'qiwe-existing-input-v1',files,descriptorSha256:sha256(fs.readFileSync(descriptor))};
+  const manifest=path.join(copyRoot,existingInputManifest);
+  fs.writeFileSync(manifest,JSON.stringify(body,null,2)+'\n');
+  return manifest;
+}
+function verifyExistingInputUnit(copyRoot){
+  const dir=path.join(copyRoot,existingUnit),manifestPath=path.join(copyRoot,existingInputManifest);
+  if(!fs.existsSync(dir))return;
+  if(!fs.existsSync(manifestPath))throw Error('Existing input manifest required');
+  const manifest=JSON.parse(fs.readFileSync(manifestPath,'utf8'));
+  if(manifest.format!=='qiwe-existing-input-v1'||!manifest.files||typeof manifest.files!=='object'||typeof manifest.descriptorSha256!=='string')throw Error('Existing input manifest required');
+  const descriptor=assertExistingUnitRoot(dir);
+  if(sha256(fs.readFileSync(descriptor))!==manifest.descriptorSha256)throw Error('Controlled copy inventory changed');
+  const found=[];
+  walkExistingUnit(dir,(relative,absolute,stat)=>{
+    const recorded=manifest.files[relative];
+    if(!recorded||recorded.size!==stat.size||sha256(fs.readFileSync(absolute))!==recorded.sha256)throw Error('Controlled copy inventory changed');
+    found.push(relative);
+  });
+  if(found.sort().join('\0')!==Object.keys(manifest.files).sort().join('\0'))throw Error('Controlled copy inventory changed');
+}
 function stageInventory(copyRoot){
   const files={};
   const walk=(directory,prefix='')=>{for(const entry of fs.readdirSync(directory,{withFileTypes:true})){
     const name=prefix+entry.name;
     if(entry.isSymbolicLink())throw Error('Stage symlinks are forbidden');
     if(name===stageMarker){if(!entry.isFile())throw Error('Stage marker must be a regular file');continue;}
+    if(name===existingUnit&&entry.isDirectory())continue;
     if(name.split('/').some(part=>/^\.env(?:\.|$)/.test(part)||['.git','.bin','.vite','.vite-temp'].includes(part)))throw Error('Unapproved stage path: '+name);
     const allowed=entry.isDirectory()?stageTrees.some(tree=>tree.startsWith(name+'/')||(name+'/').startsWith(tree))||stageFiles.some(file=>file.startsWith(name+'/')):stageFiles.includes(name)||stageTrees.some(tree=>name.startsWith(tree));
     if(!allowed||!entry.isFile()&&!entry.isDirectory())throw Error('Unapproved stage path: '+name);
     const target=path.join(directory,entry.name);if(entry.isDirectory())walk(target,name+'/');else files[name]=sha256(fs.readFileSync(target));
   }};walk(copyRoot);return Object.fromEntries(Object.entries(files).sort(([a],[b])=>a.localeCompare(b,'en')));
 }
-export function sealControlledLinuxCopy(copyRoot){
-  const files=stageInventory(copyRoot);
-  fs.writeFileSync(path.join(copyRoot,stageMarker),JSON.stringify({format:'qiwe-linux-controlled-copy-v1',files},null,2)+'\n');
-  return {files:Object.keys(files).length};
+function codeDigest(target){
+  if(!fs.existsSync(target))return null;
+  const files={};
+  const walk=(absolute,relative)=>{
+    const stat=fs.lstatSync(absolute);
+    if(stat.isSymbolicLink()||stat.isFIFO()||stat.isSocket())throw Error('Stage symlinks are forbidden');
+    if(stat.isDirectory()){
+      for(const name of fs.readdirSync(absolute).sort()){
+        if(name==='node_modules')continue;
+        walk(path.join(absolute,name),relative?relative+'/'+name:name);
+      }
+      return;
+    }
+    if(!stat.isFile()||stat.nlink!==1)throw Error('Unapproved stage path: '+relative);
+    files[relative]=sha256(fs.readFileSync(absolute));
+  };
+  const stat=fs.lstatSync(target);
+  if(stat.isDirectory())walk(target,'');
+  else walk(target,'.');
+  return files;
 }
-export function verifyControlledLinuxCopy(copyRoot){
+export function restageControlledCode(repoRoot,copyRoot){
+  let copied=0;
+  for(const [from,to] of codeRestage){
+    const source=path.join(repoRoot,from);
+    if(!fs.existsSync(source))continue;
+    const dest=path.join(copyRoot,to);
+    fs.rmSync(dest,{recursive:true,force:true});
+    fs.mkdirSync(path.dirname(dest),{recursive:true});
+    fs.cpSync(source,dest,{recursive:true,filter:src=>!src.split(path.sep).includes('node_modules')});
+    copied++;
+  }
+  return copied;
+}
+export function assertRestagedCode(repoRoot,copyRoot){
+  for(const [from,to] of codeRestage){
+    if(JSON.stringify(codeDigest(path.join(repoRoot,from)))!==JSON.stringify(codeDigest(path.join(copyRoot,to)))){
+      const error=Error('PILOT_LAUNCH_STAGE_SEAL');error.reason='contents';throw error;
+    }
+  }
+}
+export function sealControlledLinuxCopy(copyRoot,commit){
+  writeExistingInputManifest(copyRoot);
+  const files=stageInventory(copyRoot);
+  const marker={format:'qiwe-linux-controlled-copy-v1',files,...(commit?{commit}:{})};
+  fs.writeFileSync(path.join(copyRoot,stageMarker),JSON.stringify(marker,null,2)+'\n');
+  return {files:Object.keys(files).length,commit:commit??null};
+}
+export function verifyControlledLinuxCopy(copyRoot,commit){
+  verifyExistingInputUnit(copyRoot);
   const files=stageInventory(copyRoot);
   const marker=JSON.parse(fs.readFileSync(path.join(copyRoot,stageMarker),'utf8'));
   if(marker.format!=='qiwe-linux-controlled-copy-v1'||JSON.stringify(marker.files)!==JSON.stringify(files))throw Error('Controlled copy inventory changed');
-  return {files:Object.keys(files).length};
+  if(commit&&marker.commit!==commit){const error=Error('PILOT_LAUNCH_STAGE_SEAL');error.reason='commit';throw error;}
+  return {files:Object.keys(files).length,commit:marker.commit??null};
 }
 
 export function linuxContainerArguments(copyRoot,entryArguments){

@@ -4,14 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {runIsolatedSyntheticFormalPath,runIsolatedSyntheticWorker} from './isolated-synthetic-pilot.mjs';
 import {openPilotRunLedger} from './controlled-real-run-budget.mjs';
 
-const here=path.dirname(new URL(import.meta.url).pathname);
+const here=path.dirname(fileURLToPath(import.meta.url));
+const linuxOnly={skip:process.platform!=='linux'&&'Linux ledger fsync and isolated-synthetic platform gate'};
 const cleanEnv={PATH:process.env.PATH??''};
 function scratch(){const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-synthetic-pilot-'));const data=path.join(root,'data');fs.mkdirSync(data);return {root,data,privateConfig:path.join(root,'absent-private.json'),cleanup:()=>fs.rmSync(root,{recursive:true,force:true})};}
 
-test('worker order writes the placeholder env from the runner and disposes it after exit',async()=>{
+test('worker order writes the placeholder env from the runner and disposes it after exit',linuxOnly,async()=>{
  const f=scratch();try{
   let spawnEnv;
   const result=await runIsolatedSyntheticWorker({dataDir:f.data,folder:'marketing',privateConfigPath:f.privateConfig,env:{...cleanEnv,OTHER_MARKER:'should-not-forward'},spawnImpl(command,args,options){
@@ -42,7 +44,7 @@ test('a real private file or real token refuses the worker before spawn and does
  }finally{f.cleanup();}
 });
 
-test('formal path runs ledger, entry worker, dispose and restart refusal without a real credential',async()=>{
+test('formal path runs ledger, entry worker, dispose and restart refusal without a real credential',linuxOnly,async()=>{
  const f=scratch();let result;try{
   result=await runIsolatedSyntheticFormalPath({args:['--isolated-synthetic'],env:cleanEnv,privateConfigPath:f.privateConfig});
   assert.deepEqual(result.order,['ledger-create','env-witness','runner-spawn','runner-exit','env-dispose','restart-lookup']);
@@ -71,7 +73,7 @@ test('formal path fails closed when real pilot mode, a private file, or a token 
  }finally{f.cleanup();}
 });
 
-test('verify-full-host isolated-synthetic flag completes the formal order and does not open the real pilot',()=>{
+test('verify-full-host isolated-synthetic flag completes the formal order and does not open the real pilot',linuxOnly,()=>{
  const child=spawnSync(process.execPath,[path.join(here,'verify-full-host.mjs'),'--isolated-synthetic'],{encoding:'utf8',env:cleanEnv,timeout:20000});
  assert.equal(child.status,0,child.stderr);
  const line=child.stdout.trim().split('\n').at(-1);
@@ -91,7 +93,7 @@ test('typescript load is outside the audit try and a failure is a fixed code',as
  const source=fs.readFileSync(path.join(here,'verify-full-host.mjs'),'utf8');
  const runAt=source.indexOf("console.log('FULL_HOST_RUN'");
  const loadAt=source.search(/import\('typescript'\)|loadVerifierTypescript\(/);
- const auditCatch=source.indexOf('catch(error){writeAudit');
+ const auditCatch=source.indexOf('FULL_HOST_AUDIT_UNWRITTEN');
  const tryStart=source.lastIndexOf('try{',auditCatch);
  assert.ok(loadAt!==-1&&loadAt<runAt&&loadAt<tryStart);
  const {loadVerifierTypescript}=await import('./full-host-typescript.mjs');

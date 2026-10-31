@@ -52,7 +52,7 @@ try{
  const runtime=path.join(runner.runnerTarget,'src/runtime/pi/pi-runner.ts');
  fs.writeFileSync(runtime,applyFullHostPiAbort(fs.readFileSync(runtime,'utf8')));
  if(originalShellImage){
-  audit.originalShell=verifyOriginalShellImage({source,buildInput:originalShellBuildInput,image:originalShellImage,docker,endpoint:localEndpoint,runId,manifest:ownedManifest,runnerHashes:runner.runnerSourceHashes});
+  audit.originalShell=await verifyOriginalShellImage({source,buildInput:originalShellBuildInput,image:originalShellImage,docker,endpoint:localEndpoint,runId,manifest:ownedManifest,runnerHashes:runner.runnerSourceHashes});
   prepareOriginalShellCandidate(runner);save();
  }
  for(const [name,value] of candidate.files){const target=path.join(root,'src',name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,value);}

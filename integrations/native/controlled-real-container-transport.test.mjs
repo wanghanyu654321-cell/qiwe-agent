@@ -62,8 +62,8 @@ test('unknown stop retains the deny-by-default process routing until exit',async
  assert.throws(()=>f.actual.spawn('docker',args,options),/FORBIDDEN/);
  assert.throws(()=>f.actual.execFileSync('docker',['stop','miniclaw-marketing-999']),/CONTROL/);
 });
-test('real close disposes a witnessed new env file through the real disposition function',async()=>{
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-real-close-')),data=path.join(root,'data');
+test('real close disposes a witnessed new env file through the real disposition function',{skip:process.platform==='win32'&&'path.posix rejects a Windows temp root as CONTROLLED_REAL_TRANSPORT_SCOPE'},async()=>{
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-real-close-'))),data=path.join(root,'data');
  fs.mkdirSync(data);
  const runId='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
  const scope={mode:'controlled-real-pilot',environment:'local-test',runId,networkName:'qiwe-pilot-'+runId,expiresAt:Date.now()+60000};

@@ -4,6 +4,20 @@ import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
+function reportFullHostExit(error){
+ if(reportFullHostExit.reported)return;
+ reportFullHostExit.reported=true;
+ const message=typeof error?.message==='string'?error.message:'';
+ const matched=/^([A-Z0-9_]{1,80})(?:[:\s]+([\s\S]*))?$/.exec(message);
+ const code=matched?matched[1]:'FULL_HOST_FAILED';
+ console.error(code);
+ if(typeof error?.step==='string'&&/^[a-z0-9-]{1,40}$/.test(error.step))console.error(error.step);
+ const detail=(matched?matched[2]:message).replace(/[\r\n]+/g,' ').slice(0,300).replace(/(?:api[_-]?key|token|secret|password|adminCookie|miniclaw_session)\s*[:=]\s*\S+/gi,'[redacted]');
+ if(detail&&detail!==code)console.error(detail);
+ else if(!matched)console.error(/^[A-Za-z][A-Za-z0-9_]*$/.test(error?.name??'')?error.name:'Error');
+}
+process.on('uncaughtException',error=>{reportFullHostExit(error);process.exit(1);});
+process.on('unhandledRejection',error=>{reportFullHostExit(error);process.exit(1);});
 if(process.argv.slice(2).includes('--isolated-synthetic')){
  const {runIsolatedSyntheticFormalPath}=await import('./isolated-synthetic-pilot.mjs');
  try{
@@ -24,7 +38,7 @@ const {d4OriginalHashes,d4SkillHashes}=await import('./role-capabilities-overlay
 const {applyFullHostPiDrain,applyFullHostPiAbort}=await import('./full-host-restoration-pi-overlay.mjs');
 const {verifyOriginalShellImage,prepareOriginalShellCandidate}=await import('./original-shell.mjs');
 const {cleanupOwnedContainers}=await import('./real-container-cleanup.mjs');
-const {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disableExistingPilotPluginScan,restrictExistingPilotSessionKey,restrictExistingPilotSettings}=await import('./frontagent-existing-state.ts');
+const {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disableExistingPilotPluginScan,restrictExistingPilotSessionKey,restrictExistingPilotSettings,existingStateBudgetMs}=await import('./frontagent-existing-state.ts');
 const {originalProductWeb}=await import('./local-pilot-host.mjs');
 const {restrictPilotWebLoopback}=await import('./controlled-real-web.mjs');
 const {validateControlledRealPilotScope}=await import('./full-host-local-docker.mjs');
@@ -64,14 +78,26 @@ let candidate,directory,ownedManifest,frontagentExistingState;
 const writeAudit=value=>fs.writeFileSync(path.join(evidenceRoot,'full-host-audit.json'),JSON.stringify({runId,...value,...(frontagentExistingState?{frontagentExistingState:frontagentExistingState.audit}:{})},null,2));
 writeAudit({status:'preparing',events:[]});
 console.log('FULL_HOST_RUN',JSON.stringify({runId,evidenceRoot,status:'preparing'}));
+const mark=(step,phase)=>console.log('FULL_HOST_STEP',JSON.stringify({step,phase}));
 try{
 if(!overlay||options.unpatched)throw Error('FULL_HOST_EXPLICIT_OVERLAY_REQUIRED');
+mark('sqlite','start');
 if(driver){const {verifyPreparedNativeSqlite}=await import('./prepare-native-sqlite.mjs');verifyPreparedNativeSqlite(source,driver);}
 else{const {verifyOriginalLinuxSqlite}=await import('./linux-runtime.mjs');verifyOriginalLinuxSqlite(source);}
+mark('sqlite','done');
+mark('candidate','start');
 candidate=await createFullHostCandidate(source,overlay,options.fullHostConversations?{conversationIntake:true,fullHostConversationExecution:true}:undefined);
+mark('candidate','done');
+mark('retained-volume','start');
 directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
+mark('retained-volume','done');
  if(options.frontagentExistingInput){
-  frontagentExistingState=prepareExistingFrontagentState({inputRoot:options.frontagentExistingInput,hostRoot:directory});
+  mark('existing-state','start');
+  let existingMarked=0;
+  frontagentExistingState=prepareExistingFrontagentState({inputRoot:options.frontagentExistingInput,hostRoot:directory,budgetMs:existingStateBudgetMs,progress(event){
+   const now=Date.now();
+   if(event.count===1||event.count%200===0||now-existingMarked>=15000){console.log('FULL_HOST_STEP',JSON.stringify({step:'existing-state',phase:event.phase,count:event.count}));existingMarked=now;}
+  }});
   frontagentExistingState.audit.localSessionKeyMode=restrictExistingPilotSessionKey(directory);
   writeAudit({status:'preparing',events:['local_session_key_permissions']});
   frontagentExistingState.audit.localPluginScan=disableExistingPilotPluginScan(directory);
@@ -81,15 +107,20 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   let web=originalProductWeb(candidate.files.get('web.ts'),frontagentExistingState.ownerId,{codeRoot:frontagentExistingState.codeRoot,jobRoot:frontagentExistingState.jobRoot});
   if(options.controlledRealPilot)web=restrictPilotWebLoopback(web);
   candidate.files.set('web.ts',web);candidate.audit.composedHashes['web.ts']=createHash('sha256').update(web).digest('hex');
+  mark('existing-state','done');
  }
+ mark('pi-runner','start');
  const piRunner=options.restorationPiScenario||options.restorationRealContainer?prepareOriginalPiRunner({source,root:directory,skillRoot,trueMain:options.restorationRealContainer}):undefined;
  if(piRunner)fs.writeFileSync(piRunner.entryFile,applyFullHostPiDrain(fs.readFileSync(piRunner.entryFile,'utf8')));
  if(piRunner){const runtimeFile=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runner.ts');fs.writeFileSync(runtimeFile,applyFullHostPiAbort(fs.readFileSync(runtimeFile,'utf8')));}
  if(options.controlledRealPilot){const runtime=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runtime.ts');fs.writeFileSync(runtime,disableControlledRealPiRetries(fs.readFileSync(runtime,'utf8')));}
+ mark('pi-runner','done');
  let originalShell;
  if(options.restorationRealContainer){
   ownedManifest=path.join(directory,'owned-containers.txt');
-  originalShell=verifyOriginalShellImage({source,buildInput:'/qiwe-control/build-input.json',image:process.env.QIWE_LOCAL_DOCKER_IMAGE,docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,manifest:ownedManifest,runnerHashes:piRunner.runnerSourceHashes});
+  mark('docker-preflight','start');
+  originalShell=await verifyOriginalShellImage({source,buildInput:'/qiwe-control/build-input.json',image:process.env.QIWE_LOCAL_DOCKER_IMAGE,docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,manifest:ownedManifest,runnerHashes:piRunner.runnerSourceHashes});
+  mark('docker-preflight','done');
   if(options.controlledRealPilot){
    fs.writeFileSync(piRunner.entryFile,"await (await import('/verification/controlled-real-preload.mjs' as string)).installControlledRealModelFetch();\n"+fs.readFileSync(piRunner.entryFile,'utf8'));
    for(const name of ['controlled-real-preload.mjs','controlled-real-model.ts'])fs.copyFileSync(path.join(here,name),path.join(directory,name));
@@ -333,7 +364,11 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   fs.writeFileSync(path.join(evidenceRoot,'full-host-evidence.json'),JSON.stringify(evidence,null,2));console.log('FULL_HOST_EVIDENCE',JSON.stringify(evidence));
  }
  }
-}catch(error){writeAudit({...JSON.parse(fs.readFileSync(path.join(evidenceRoot,'full-host-audit.json'),'utf8')),...candidate?.audit,status:'failed',error:String(error)});throw error;
+}catch(error){
+ const failed=/^[A-Z0-9_]{1,80}/.exec(error?.message??'')?.[0]??'FULL_HOST_FAILED';
+ try{writeAudit({...JSON.parse(fs.readFileSync(path.join(evidenceRoot,'full-host-audit.json'),'utf8')),...candidate?.audit,status:'failed',error:failed});}
+ catch{try{fs.writeFileSync(path.join(evidenceRoot,'full-host-audit.json'),JSON.stringify({runId,status:'failed',error:failed},null,2));}catch{console.error('FULL_HOST_AUDIT_UNWRITTEN');}}
+ throw error;
 }finally{
  if(directory){
  if(ownedManifest)cleanupOwnedContainers({docker:'/qiwe-control/docker',endpoint:'unix:///qiwe-control/docker.sock',manifest:ownedManifest,runId:process.env.QIWE_LOCAL_DOCKER_RUN_ID,...(frontagentExistingState?{ownedContainerPrefix:frontagentExistingState.containerPrefix}:{})});

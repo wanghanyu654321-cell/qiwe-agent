@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import * as existingState from './frontagent-existing-state.ts';
@@ -147,4 +148,44 @@ for(const name of ['frontagent-workbench-access.sqlite','frontagent-wecom-bindin
 });
 for(const name of ['product-web.d.mts','product-modules.d.mts'])test('requires product declaration '+name+' before creating host data',t=>{
  const f=fixture(t);fs.unlinkSync(path.join(f.inputRoot,'code',name));f.descriptor.files=files(f.inputRoot);f.seal();assert.throws(f.invoke,/CODE.*FILE/i);assert.equal(fs.existsSync(path.join(f.hostRoot,'data')),false);
+});
+test('existing-state reports progress and stops when its budget is exhausted',t=>{
+ const f=fixture(t);
+ assert.equal(existingState.existingStateBudgetMs,15*60*1000);
+ const events:Array<{phase:string;count:number}>=[];
+ prepareExistingFrontagentState({inputRoot:f.inputRoot,hostRoot:f.hostRoot,progress(event){events.push(event);}});
+ assert.equal(events[0]?.phase,'inventory');assert.equal(events[0]?.count,1);
+ assert.ok(events.some(event=>event.phase==='copy'&&event.count>=1));
+ const budget=fixture(t);let now=0;
+ assert.throws(()=>prepareExistingFrontagentState({inputRoot:budget.inputRoot,hostRoot:budget.hostRoot,budgetMs:1000,now:()=>now,progress(){now+=1001;}}),error=>(error as Error).message==='FULL_HOST_STEP_TIMEOUT'&&(error as {step?:string}).step==='existing-state');
+ assert.equal(fs.existsSync(path.join(budget.hostRoot,'data')),false);
+});
+test('a matching existing-input seal skips content hashing for a same-length swap',t=>{
+ const sealed=fixture(t),plain=fixture(t),relative='state/drafts/retained.txt';
+ const manifest={format:'qiwe-existing-input-v1',files:Object.fromEntries(sealed.descriptor.files.map(entry=>({path:entry.path,sha256:entry.sha256,size:fs.statSync(path.join(sealed.inputRoot,entry.path)).size})).map(entry=>[entry.path,{sha256:entry.sha256,size:entry.size}]))};
+ fs.writeFileSync(path.join(sealed.root,'frontagent-existing-input.manifest.json'),JSON.stringify(manifest));
+ const original=fs.readFileSync(path.join(sealed.inputRoot,relative));
+ const swapped=Buffer.from('X'.repeat(original.length));
+ fs.writeFileSync(path.join(sealed.inputRoot,relative),swapped);
+ const result=sealed.invoke() as {jobRoot:string};
+ assert.equal(fs.readFileSync(path.join(result.jobRoot,'drafts/retained.txt')).equals(swapped),true);
+ fs.writeFileSync(path.join(plain.inputRoot,relative),swapped);
+ assert.throws(plain.invoke,/HASH/);
+ assert.equal(fs.existsSync(path.join(plain.hostRoot,'data')),false);
+});
+test('refuses a symlink loop before copying',t=>{
+ const f=fixture(t);
+ fs.symlinkSync(path.join(f.inputRoot,'state/drafts'),path.join(f.inputRoot,'state/drafts/loop'),process.platform==='win32'?'junction':'dir');
+ const started=Date.now();
+ assert.throws(f.invoke,/LINK/);
+ assert.ok(Date.now()-started<2000);
+ assert.equal(fs.existsSync(path.join(f.hostRoot,'data')),false);
+});
+test('refuses a fifo before reading it',{skip:process.platform==='win32'},t=>{
+ const f=fixture(t);
+ execFileSync('mkfifo',[path.join(f.inputRoot,'state/drafts/wait.fifo')]);
+ const started=Date.now();
+ assert.throws(f.invoke,/FILE_TYPE_REFUSED/);
+ assert.ok(Date.now()-started<2000);
+ assert.equal(fs.existsSync(path.join(f.hostRoot,'data')),false);
 });
