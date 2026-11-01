@@ -10,11 +10,20 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
-    "demo": "npm run build && node examples/local-identity.mjs"
+    "demo": "npm run build && node examples/local-identity.mjs",
+    "demo:report": "npm run build && node examples/local-report.mjs",
+    "demo:delivery": "npm run build && node examples/local-delivery.mjs",
+    "demo:operations": "npm run build && node examples/local-operations.mjs",
+    "demo:tasks": "npm run build && node examples/local-tasks.mjs",
+    "benchmark:local": "npm run build && node examples/local-performance.mjs"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
     "typescript": "5.9.3",
     "vitest": "4.1.12"
+  },
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "1.0.7",
+    "adm-zip": "0.6.1"
   }
 }

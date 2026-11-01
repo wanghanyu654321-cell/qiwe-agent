@@ -1,0 +1,10 @@
+Command: node node_modules/vitest/vitest.mjs run tests/native/controlled-real-model.test.ts
+Exit: 0
+
+ RUN  v4.1.12 D:/Desktop/agent付费资料/qiwe-agent
+
+
+ Test Files  1 passed (1)
+      Tests  34 passed (34)
+   Start at  17:21:05
+   Duration  485ms (transform 46ms, setup 0ms, import 70ms, tests 239ms, environment 0ms)

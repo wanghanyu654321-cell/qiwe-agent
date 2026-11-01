@@ -1,0 +1,116 @@
+{
+  "baseline": "6786f95e8f6579f29eee84f3acc8ba341bb4310c",
+  "scope": "WIP handoff; not real-channel acceptance",
+  "files": [
+    {
+      "path": "integrations/native/controlled-real-container-boundary.test.mjs",
+      "sha256": "fc59281a4286b80ce263e2f20207a169d8c154ced597ddc6c29478e56872cf43"
+    },
+    {
+      "path": "integrations/native/controlled-real-container-transport.mjs",
+      "sha256": "ab8eee033fe88af93571ff92dbab70e63c6fa70683512607310e9cb9468e8bb6"
+    },
+    {
+      "path": "integrations/native/controlled-real-container-transport.test.mjs",
+      "sha256": "5dab6286db25b99435c37908e34a473f290de4324f9155efa71359dec4ad7a16"
+    },
+    {
+      "path": "integrations/native/controlled-real-model.ts",
+      "sha256": "90a5bc56f4b497ed47363fef5a50101a4a86393bdaed2b3c7cbc51028686d3f1"
+    },
+    {
+      "path": "integrations/native/controlled-real-pi-retry.mjs",
+      "sha256": "5870ac869ba26cab6d2f5b9a1ed700bd1c806a38029b208a59f7f1eca7890b55"
+    },
+    {
+      "path": "integrations/native/controlled-real-pi-retry.test.mjs",
+      "sha256": "faf7285ffb78e84154d8d3e4ba1db56a09ac6381028cf7e1073bb607e56e7f3d"
+    },
+    {
+      "path": "integrations/native/controlled-real-preload.mjs",
+      "sha256": "1d8c989183878a0724ea2c7cad041c41ff302c11b6905ce786e2b224c842f565"
+    },
+    {
+      "path": "integrations/native/controlled-real-preload.test.mjs",
+      "sha256": "916409d7e92725716c34c32e540fc4e968fcc464a35733a7411dcd2c7cd21718"
+    },
+    {
+      "path": "integrations/native/controlled-real-web.mjs",
+      "sha256": "8c8c0f2e3f7989884f3bc2afddd0883b2ba1788ef61e427f2af8fe8f9bd0a195"
+    },
+    {
+      "path": "integrations/native/controlled-real-web.test.mjs",
+      "sha256": "ac56f9eebfdd14843e153686fc1638b76394bf7b8ab69bafe0a50c1bfce5bd52"
+    },
+    {
+      "path": "integrations/native/frontagent-controlled-live-entry.mjs",
+      "sha256": "b3d2fab4487957dcc85365e27af46f0b2a8e45600202c195b1afe33d46eedbe9"
+    },
+    {
+      "path": "integrations/native/frontagent-controlled-live-entry.test.mjs",
+      "sha256": "07969c2ff7291506017e1fd01b6a1d8fd9e3300a19c7d9e4530d93cacd55b3aa"
+    },
+    {
+      "path": "integrations/native/frontagent-controlled-live-worker.mjs",
+      "sha256": "b4d39fda367a8e314ca55507967d359a70a302cb0fe5a225a910370bda05c7f5"
+    },
+    {
+      "path": "integrations/native/frontagent-controlled-live-worker.test.mjs",
+      "sha256": "66a254b215842b21f0c8ec8d609fa22e76ee21e45d9d07df72de546bca949f33"
+    },
+    {
+      "path": "integrations/native/frontagent-controlled-pilot.mjs",
+      "sha256": "2eb7bd453e4da409c85277939eb691e8d49e9c4361339465fb0ac2dfc0a78e6a"
+    },
+    {
+      "path": "integrations/native/frontagent-controlled-pilot.test.mjs",
+      "sha256": "17bd8f2dc8e37f8e5750c326e89b2c636d0b0da5b30d56c53a7b19299dd4f560"
+    },
+    {
+      "path": "integrations/native/frontagent-pilot-restoration.mjs",
+      "sha256": "086b34d3fe767e724ee97c4e9fe5cbc6688f5835307405acbc5375cb3a9014c7"
+    },
+    {
+      "path": "integrations/native/frontagent-pilot-restoration.test.mjs",
+      "sha256": "c7c9ad760649e92d3f2d5b37efdbd051f139883671d1bf2ddfeb3b981196c825"
+    },
+    {
+      "path": "integrations/native/full-host-controlled-real-pilot.test.mjs",
+      "sha256": "a1f72cf892f6c959dd03eff71beb481a947d5f04dd2d38a92f7b3af6410b89ac"
+    },
+    {
+      "path": "tests/native/controlled-real-model.test.ts",
+      "sha256": "214b62fbdd0f05287e81e024a520233531f879594ede68f5df2d7e326011998e"
+    },
+    {
+      "path": "integrations/native/full-host-local-docker.d.mts",
+      "sha256": "2248a90bfa0854a2d95bb7fa36bab0f67053d842b10e2ab1e6e31aefbe3f522d"
+    },
+    {
+      "path": "integrations/native/full-host-local-docker.mjs",
+      "sha256": "e5d56326a3976b9ff476dcb631bb73e42d100a8285bff11b1bdf2dcb81b95548"
+    },
+    {
+      "path": "integrations/native/full-host-local-docker.test.mjs",
+      "sha256": "cba65b0369903bf58f37a9f6821bbb6fc38c57829b662efe5f42634729a36fbe"
+    },
+    {
+      "path": "integrations/native/full-host-restoration-boundary.ts",
+      "sha256": "72146048f0868d4e05c470e1c8a0794ed46978c2851d64e7436fab3e716ff79d"
+    },
+    {
+      "path": "integrations/native/full-host-restoration-supervisor.mjs",
+      "sha256": "14a81ff5eec185c3310433e0af5baac2270602721240a12c2840c32f9afe37b1"
+    },
+    {
+      "path": "integrations/native/real-container-boundary.mjs",
+      "sha256": "fecc80c4ce7e371ec26c2ed31b8c762e8206cb451288960d06e8407af08bf5c2"
+    },
+    {
+      "path": "integrations/native/verify-full-host.mjs",
+      "sha256": "fbf0605e9b1cc105f9b2a97b1a1446ea5c5fab97c0a6f239a05b3166a60e28d3"
+    }
+  ],
+  "codeCommit": "3d55559f66ad46412f75ea9864c6ec7752b48024",
+  "hashInput": "Git blob bytes at codeCommit (independent of Windows checkout line endings)"
+}

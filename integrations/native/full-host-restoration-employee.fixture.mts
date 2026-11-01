@@ -1,0 +1,115 @@
+import {expect} from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import {createBotConversationNativePort} from '../test-support/conversation-overlay.mjs';
+import {createRoleWorkspaceNativePort} from '../test-support/role-workspace-overlay.mjs';
+import {prepareOwnProfiles} from '../test-support/workbench-opening.mjs';
+import {WorkbenchAccessStore} from '../test-support/workbench-access.mjs';
+import {ManagerStore} from '../test-support/manager-store.mjs';
+import {BotTaskStore} from '../test-support/wecom-bot-task-store.mjs';
+import {createWecomBotPilot} from '../test-support/wecom-bot-pilot.mjs';
+import {offlineBotSdk} from '../test-support/offline-bot-sdk.mjs';
+import {actor,business,employee,staff,digest,workspaceJid,completedContent,receiptId,factFile,grantFile,retainedSnapshot} from './full-host-restoration.fixture.mts';
+
+export async function exerciseEmployeeRestoration({host,db,config,sql,boundary,seed,transportCalls,pi,events,expectedAnswer='合成恢复后答案',request='请为同一岗位生成这条新的合成需求答案。',c4Case}:any){
+ const restarting=process.env.QIWE_FULL_HOST_PHASE==='restart';
+ const grants=new WorkbenchAccessStore(grantFile(config.DATA_DIR)),ledger=new ManagerStore(factFile(config.DATA_DIR)),tasks=new BotTaskStore(factFile(config.DATA_DIR));
+ const offline=offlineBotSdk();offline.lifecycle('disconnected');
+ const scope=()=>({signal:new AbortController().signal,deadline:performance.now()+10000,correlationId:'restoration-result-delivery'});
+ const identity={tenantId:actor.tenantId,stores:[{id:actor.storeId}],roles:['marketing'],store:grants,
+  readBinding:async()=>({botId:actor.botId,corpId:actor.corpId,memberId:actor.memberId,accountId:actor.accountId,active:true,version:1}),
+  readNative:async()=>({user:db.getUserById(actor.accountId),workspaceJid:'web:home-'+actor.accountId})};
+ let piEvidence:any,deliveryRecovery:any,completedDeliveries:any[]=[];
+ const {createOwnedRoleProfile}=await import('../src/routes/agent-profiles.js'),{createOwnedRoleWorkspace}=await import('../src/routes/groups.js');
+ const native={...db,createOwnedRoleProfile,createOwnedRoleWorkspace,listAvailableSkills:async()=>[]};
+ const manager=Reflect.get(offline.client,'wsManager') as any;
+ const pilot=createWecomBotPilot({mode:'isolated-synthetic',botId:actor.botId,corpId:actor.corpId,identity,
+  readSubject:async()=>({botId:actor.botId,memberId:actor.memberId}),business:{scope:business,employees:[employee],ledger,store:tasks},
+  initializeExecution:(options:any)=>{const execution=host.initializeFullHostConversationExecution(options);expect(execution.queue).toBe(host.fullHostQueue);expect(execution.gate).toBe(host.fullHostBootGate);return execution;},
+  authorize:(receipt:any)=>{
+   if(!receipt)return false;const grant=grants.get(receipt.actor.accountId);
+   return !!grant?.active&&grant.version===receipt.actor.grantVersion&&grant.storeId===receipt.actor.storeId&&grant.roles.includes(receipt.role)&&Object.entries(actor).every(([key,value])=>receipt.actor[key]===value);
+  },
+  onDelivery:(_id:string,result:any)=>{completedDeliveries.push(result);},
+  createIntake:(execution:any)=>createBotConversationNativePort({mode:'isolated-synthetic',gate:execution.gate,native,readActor:async()=>({...actor}),execution}),
+  createRoles:(gate:any)=>createRoleWorkspaceNativePort({mode:'isolated-synthetic',gate,native,templates:[{key:'marketing',name:'Synthetic marketing',skills:[],payload:{name:'Synthetic marketing',prompt_schema_version:2}}],prepareOwnProfiles,journalDirectory:path.join(config.DATA_DIR,'restoration-unused-role-journal'),readActor:async()=>({...actor,role:'marketing'})}),
+  createClient:()=>offline.client,
+  connect:()=>{offline.lifecycle('connected');manager.handleFrame({headers:{req_id:'aibot_subscribe_restoration'},errcode:0});},
+  disconnect:()=>{offline.lifecycle('disconnected');manager.disconnect();},
+  readFingerprint:()=>({botId:actor.botId,corpId:actor.corpId,ownerId:actor.accountId,configVersion:'1',credentialFingerprint:'synthetic-only',workspaceFingerprint:digest(workspaceJid)}),
+ });
+ const marker=path.join(process.cwd(),'restoration-employee-result.json');
+ const oldReply=()=>ledger.getBotReply(staff,seed.unknownId);
+ const send=async(id:string,text:string)=>{
+  const req='restoration-'+id;
+  offline.frame({cmd:'aibot_msg_callback',headers:{req_id:req},body:{msgid:id,aibotid:actor.botId,msgtype:'text',chattype:'single',create_time:1792458000,from:{userid:actor.memberId,corpid:actor.corpId},text:{content:text}}});
+  await pilot.idle();return req;
+ };
+ const reply=(req:string)=>offline.sent.findLast(frame=>frame.cmd==='aibot_respond_msg'&&frame.headers.req_id===req);
+ try{
+  expect(oldReply()).toEqual(seed.unknownReply);expect(offline.sent).toEqual([]);expect(transportCalls).toEqual([]);
+  await expect(pilot.prepare()).resolves.toBe('prepared');expect(pilot.activate()).toBe(true);
+  // Activation must not replay any retained task, D2 input or uncertain Q reply.
+  await pilot.idle();expect(offline.sent).toEqual([]);expect(transportCalls).toEqual([]);
+  const selectionReq=await send((restarting?'restart':'boot')+'-select','岗位 内容营销');
+  expect(JSON.stringify(reply(selectionReq))).toContain('已选择');expect(tasks.currentConversation(actor)).toMatchObject({state:'ready',workspaceJid});
+  for(const record of seed.legacyReceipts.filter((item:any)=>item.origin!=='restoration-old-completed')){
+   const req=await send((restarting?'restart':'boot')+'-query-'+record.origin,'查询对话 '+record.receiptId);
+   expect(JSON.stringify(reply(req))).toContain('待人工核对');expect(transportCalls).toEqual([]);
+  }
+  const historicalReq=await send((restarting?'restart':'boot')+'-query-historical','查询对话 '+receiptId('restoration-old-completed'));
+  expect(JSON.stringify(reply(historicalReq))).toContain(completedContent);
+  expect(JSON.stringify(reply(historicalReq))).toContain('待人工核对');expect(transportCalls).toEqual([]);
+  if(pi){
+   const {exerciseRestorationPiScenario}=await import('./full-host-restoration-pi-scenario.fixture.mts');
+   piEvidence=await exerciseRestorationPiScenario({host,db,sql,config,boundary,transportCalls,pi,send,reply,offline,completedDeliveries,events,restarting});
+  }else if(!restarting){
+   const origin='restoration-new-demand',id=receiptId(origin);
+   if(c4Case==='grounded')offline.setAcknowledge(async frame=>({headers:frame.headers,errcode:frame.cmd==='aibot_send_msg'?40001:0,body:{}}));
+   const requestId=await send(origin,request);
+   expect(JSON.stringify(reply(requestId))).toContain(id);
+   await boundary.wait(()=>db.readConversationExecution(id)?.state==='completed','actual original queue produces completed D3 and D5');
+   await boundary.wait(()=>completedDeliveries.length===1,'actual frozen result delivery settles');
+   expect(transportCalls).toHaveLength(1);expect(transportCalls[0].prompt).toContain(request);
+   expect(transportCalls[0].prompt).not.toContain('Synthetic old running');expect(transportCalls[0].prompt).not.toContain('Synthetic old queued');
+   const results=db.readConversationResults(id);expect(results).toHaveLength(1);expect(results[0]).toMatchObject({receiptId:id,revision:1,content:expectedAnswer});
+   const executionState=db.readConversationExecution(id);expect(results[0]).toMatchObject({queryId:executionState.queryId,turnId:executionState.turnId});expect(results[0].sourceOutputIds).toHaveLength(1);
+   if(c4Case){
+    const businessResult=JSON.parse(results[0].content);expect(businessResult).toMatchObject({status:c4Case==='grounded'?'draft':'partial',executed:false,published:false});
+    if(c4Case==='missing-evidence'){expect(businessResult).toMatchObject({draft:null,missingMaterial:['approved.txt']});expect(results[0].content).not.toMatch(/12|限额|元|项目体验介绍/);}
+   }
+   const canonical=sql.prepare('SELECT * FROM messages WHERE id=? AND chat_jid=?').get(results[0].sourceOutputIds[0],workspaceJid) as any;
+   expect(canonical).toMatchObject({content:results[0].content,turn_id:results[0].turnId,is_from_me:1});
+   expect(completedDeliveries[0].deliveries).toMatchObject([{state:c4Case==='grounded'?'rejected':'accepted'}]);
+   if(c4Case==='grounded'){
+    const before=structuredClone(results);
+    expect((await pilot.recover(scope(),id)).deliveries).toMatchObject([{state:'rejected'}]);
+    expect(offline.sent.filter(frame=>frame.cmd==='aibot_send_msg')).toHaveLength(1);
+    offline.setAcknowledge(undefined);
+    const recovered=await pilot.recover(scope(),id,{retryRejected:true});expect(recovered.deliveries).toMatchObject([{state:'accepted',attempt:2}]);
+    await pilot.recover(scope(),id,{retryRejected:true});
+    expect(db.readConversationResults(id)).toEqual(before);expect(transportCalls).toHaveLength(1);
+    deliveryRecovery={initial:'rejected',recovered:'accepted',attempt:2,runnerCalls:1,duplicateRecoverResends:0};
+    events.push('same-C4-frozen-D5-known-rejection-explicit-recover-accepted-repeat-no-resend-no-rerun');
+   }
+   const proactive=offline.sent.filter(frame=>frame.cmd==='aibot_send_msg');expect(proactive).toHaveLength(c4Case==='grounded'?2:1);
+   for(const frame of proactive){expect(frame.body).toMatchObject({chatid:actor.memberId,chat_type:1,msgtype:'markdown'});expect(JSON.stringify(frame.body)).toContain(JSON.stringify(expectedAnswer).slice(1,-1));}
+   const queryReq=await send('boot-query-new','查询对话 '+id);expect(JSON.stringify(reply(queryReq))).toContain(JSON.stringify(expectedAnswer).slice(1,-1));
+   fs.writeFileSync(marker,JSON.stringify({processId:process.pid,receiptId:id,result:results[0],c4Case:c4Case??null},null,2));
+   events.push('same-host-offline-sdk-identity-D1-D2-original-queue-D3-canonical-D5-reply-and-query');
+  }else{
+   const first=JSON.parse(fs.readFileSync(marker,'utf8'));expect(first.processId).not.toBe(process.pid);
+   expect(first.c4Case).toBe(c4Case??null);
+   const results=db.readConversationResults(first.receiptId);expect(results).toEqual([first.result]);
+   const queryReq=await send('restart-query-new','查询对话 '+first.receiptId);
+   expect(JSON.stringify(reply(queryReq))).toContain(JSON.stringify(expectedAnswer).slice(1,-1));expect(transportCalls).toEqual([]);expect(completedDeliveries).toEqual([]);
+   expect(offline.sent.filter(frame=>frame.cmd==='aibot_send_msg')).toEqual([]);
+   events.push('new-os-process-restores-same-host-and-sdk-queries-existing-D5-without-reexecution');
+  }
+  expect(oldReply()).toEqual(seed.unknownReply);expect(retainedSnapshot(sql)).toEqual(seed.retained);
+  for(const frame of offline.sent)expect(JSON.stringify(frame)).not.toContain('Synthetic Q unknown reply; never resend');
+  expect(offline.connect).not.toHaveBeenCalled();expect(boundary.blocked).toEqual([]);
+  events.push('retained-task-D2-and-Q-unknown-unchanged-no-automatic-resume-or-resend');
+  return {sdkReplies:offline.sent.filter(frame=>frame.cmd==='aibot_respond_msg').length,sdkNotifies:offline.sent.filter(frame=>frame.cmd==='aibot_send_msg').length,runnerCalls:transportCalls.length,...(c4Case?{c4Case,businessStatus:c4Case==='grounded'?'draft':'partial'}:{}),...(deliveryRecovery?{deliveryRecovery}:{}),...(piEvidence?{pi:piEvidence}:{})};
+ }finally{await pilot.close();expect(pilot.status()).toBe('closed');grants.close();ledger.close();tasks.close();}
+}

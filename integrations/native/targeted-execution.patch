@@ -1,0 +1,226 @@
+diff --git a/db.ts b/db.ts
+index ce78cc0..a5a10a4 100644
+--- a/db.ts
++++ b/db.ts
+@@ -5344,4 +5344,9 @@ export function getTaskRunsByStatus(
+-export function claimNextTaskRun(
+-  owner: string,
+-  leaseMs: number,
+-): ClaimedTaskRun | undefined {
++export function claimNextTaskRun(owner: string, leaseMs: number): ClaimedTaskRun | undefined {
++  return claimTaskRun(owner, leaseMs);
++}
++
++export function claimTaskRunById(runId: string, owner: string, leaseMs: number): ClaimedTaskRun | undefined {
++  return claimTaskRun(owner, leaseMs, runId);
++}
++
++function claimTaskRun(owner: string, leaseMs: number, runId?: string): ClaimedTaskRun | undefined {
+@@ -5355 +5360 @@ export function claimNextTaskRun(
+-         WHERE (
++         WHERE (? IS NULL OR id = ?) AND ((
+@@ -5360 +5365 @@ export function claimNextTaskRun(
+-         )
++         ))
+@@ -5363 +5368 @@ export function claimNextTaskRun(
+-      .get(nowIso, nowIso) as TaskRunRow | undefined;
++      .get(runId ?? null, runId ?? null, nowIso, nowIso) as TaskRunRow | undefined;
+diff --git a/task-scheduler.ts b/task-scheduler.ts
+index 60278f4..7daffff 100644
+--- a/task-scheduler.ts
++++ b/task-scheduler.ts
+@@ -30,0 +31 @@ import {
++  claimTaskRunById,
+@@ -2639,0 +2641 @@ function executeClaimedTaskRun(
++  targeted?: TargetedTaskRunAdmission,
+@@ -2664,0 +2667,6 @@ function executeClaimedTaskRun(
++    if (targeted) {
++      completeTaskRun(claim.id, claim.lease_owner, claim.lease_token, {
++        status: 'cancelled', error: 'Workspace mutation blocked targeted request', notificationStatus: 'skipped',
++      });
++      return;
++    }
+@@ -2674,0 +2683 @@ function executeClaimedTaskRun(
++  let releaseTargetedRequest = () => {};
+@@ -2680,0 +2690 @@ function executeClaimedTaskRun(
++    releaseTargetedRequest();
+@@ -2708 +2718 @@ function executeClaimedTaskRun(
+-    armScheduler(0);
++    if (!targeted) armScheduler(0);
+@@ -2856,0 +2867 @@ function executeClaimedTaskRun(
++    releaseTargetedRequest();
+@@ -2861 +2872 @@ function executeClaimedTaskRun(
+-      if (claim.trigger_type === 'manual' && !shuttingDown) {
++      if (targeted || (claim.trigger_type === 'manual' && !shuttingDown)) {
+@@ -2881 +2892 @@ function executeClaimedTaskRun(
+-    armScheduler(0);
++    if (!targeted) armScheduler(0);
+@@ -2882,0 +2894,12 @@ function executeClaimedTaskRun(
++  if (targeted) {
++    const expire = () => {
++      if (started || settled) return;
++      cancelTaskRunNow(claim.id, false);
++      onDropped();
++    };
++    const timer = setTimeout(expire, Math.max(0, Math.min(2_147_483_647, targeted.deadline - performance.now())));
++    timer.unref?.();
++    targeted.signal.addEventListener('abort', expire, { once: true });
++    releaseTargetedRequest = () => { clearTimeout(timer); targeted.signal.removeEventListener('abort', expire); };
++    if (targeted.signal.aborted || performance.now() >= targeted.deadline) { expire(); return; }
++  }
+@@ -2889,6 +2912,28 @@ function executeClaimedTaskRun(
+-        started = markTaskRunExecutionStarted(
+-          claim.id,
+-          claim.lease_owner,
+-          claim.lease_token,
+-        );
+-        if (!started) {
++        let execution: Promise<void> | undefined;
++        const start = () => {
++          if (targeted) targetedTaskDefinition(task.id, deps);
++          started = markTaskRunExecutionStarted(claim.id, claim.lease_owner, claim.lease_token);
++          if (!started) {
++            settled = true;
++            clearInterval(heartbeat);
++            clearActiveDurableExecution(claim.id, claim.attempt);
++            return;
++          }
++          executionStartedAtMs = Date.now();
++          activeDurableTaskIds.add(task.id);
++          releaseTargetedRequest();
++          execution = runTask(task, executionDeps, {
++            ...prepared.options, durableRun: claim,
++            onDurableTerminalHandoffPrepared: (commit) => { isolatedTerminalHandoff = commit; },
++          });
++        };
++        try {
++          if (targeted) await targeted.withCurrent(() => targetedTaskWrite(deps, targeted, start));
++          else start();
++          await execution;
++        } catch (err) {
++          if (!targeted || started) throw err;
++          completeTaskRun(claim.id, claim.lease_owner, claim.lease_token, {
++            status: 'cancelled', error: 'Targeted request no longer authorized before execution',
++            notificationStatus: 'skipped',
++          });
+@@ -2895,0 +2941 @@ function executeClaimedTaskRun(
++          releaseTargetedRequest();
+@@ -2898,12 +2943,0 @@ function executeClaimedTaskRun(
+-          return;
+-        }
+-        executionStartedAtMs = Date.now();
+-        activeDurableTaskIds.add(task.id);
+-        try {
+-          await runTask(task, executionDeps, {
+-            ...prepared.options,
+-            durableRun: claim,
+-            onDurableTerminalHandoffPrepared: (commit) => {
+-              isolatedTerminalHandoff = commit;
+-            },
+-          });
+@@ -2911,4 +2945 @@ function executeClaimedTaskRun(
+-          if (!settled) {
+-            settled = true;
+-            finish(heartbeat, 'isolated');
+-          }
++          if (!settled) { settled = true; finish(heartbeat, 'isolated'); }
+@@ -3387 +3418 @@ export function triggerTaskNow(
+-export function cancelTaskRunNow(runId: string): {
++export function cancelTaskRunNow(runId: string, wakeScheduler = true): {
+@@ -3466 +3497 @@ export function cancelTaskRunNow(runId: string): {
+-  notifyTaskSchedulerChanged();
++  if (wakeScheduler) notifyTaskSchedulerChanged();
+@@ -3493,0 +3525,93 @@ export async function waitForTaskRunsToStop(
++
++
++/** Explicit request admission supplied by the trusted original server. */
++export interface TargetedTaskRunAdmission {
++  readonly signal: AbortSignal;
++  readonly deadline: number;
++  withCurrent(work: () => void): Promise<void>;
++  revalidate(): void;
++}
++
++function targetedTaskWrite(
++  deps: SchedulerDependencies,
++  admission: TargetedTaskRunAdmission,
++  work: () => void,
++): void {
++  if (admission.signal.aborted || !Number.isFinite(admission.deadline) ||
++      performance.now() >= admission.deadline || deps.queue.isShuttingDown?.())
++    throw new Error('TARGETED_TASK_REQUEST_CLOSED');
++  // Use the existing process gate. This entry never creates or restores one.
++  const gate = (deps as SchedulerDependencies & { appointmentBootGate?: {
++    isPaused(): boolean;
++    beginWrite(): unknown;
++    finishWrite(ticket: unknown): void;
++  }}).appointmentBootGate;
++  if (!gate || gate.isPaused()) throw new Error('APPOINTMENT_MAINTENANCE');
++  const ticket = gate.beginWrite();
++  if (!ticket) throw new Error('APPOINTMENT_MAINTENANCE');
++  try { admission.revalidate(); work(); } finally { gate.finishWrite(ticket); }
++}
++
++function targetedTaskDefinition(taskId: string, deps: SchedulerDependencies): ScheduledTask {
++  const task = getTaskById(taskId);
++  const group = task && deps.registeredGroups()[task.chat_jid];
++  if (!task || task.deleted_at || task.status !== 'active' ||
++      task.context_mode !== 'isolated' || task.execution_type !== 'agent' ||
++      task.execution_mode !== 'container' || !group || group.is_home ||
++      group.executionMode !== 'container' || !group.created_by ||
++      group.folder !== task.group_folder || deps.queue.isGroupMutationPaused?.(task.chat_jid))
++    throw new Error('TARGETED_TASK_DEFINITION_UNAVAILABLE');
++  return task;
++}
++
++/** Opt-in single manual run; never materializes definitions or pumps outbox. */
++export async function triggerTaskRunTargeted(
++  taskId: string, deps: SchedulerDependencies, key: string,
++  admission: TargetedTaskRunAdmission,
++): Promise<{ success: boolean; error?: string; runId?: string }> {
++  if (!key || key.trim() !== key || key.length > 200)
++    return { success: false, error: 'TARGETED_TASK_KEY_REQUIRED' };
++  let result: { success: boolean; error?: string; runId?: string } =
++    { success: false, error: 'TARGETED_TASK_NOT_ADMITTED' };
++  await admission.withCurrent(() => targetedTaskWrite(deps, admission, () => {
++    const task = targetedTaskDefinition(taskId, deps);
++    const created = createTaskRun({ task, triggerType: 'manual', idempotencyKey: key });
++    if (created.reason === 'active_conflict') {
++      result = { success: false, error: 'Task is already running' };
++      return;
++    }
++    if (created.run.task_id !== taskId || created.run.idempotency_key !== key ||
++        created.run.trigger_type !== 'manual' ||
++        created.run.definition_snapshot.chat_jid !== task.chat_jid ||
++        created.run.definition_snapshot.group_folder !== task.group_folder ||
++        created.run.definition_snapshot.context_mode !== 'isolated' ||
++        created.run.definition_snapshot.execution_type !== 'agent' ||
++        created.run.definition_snapshot.execution_mode !== 'container')
++      throw new Error('TARGETED_TASK_RUN_MISMATCH');
++    result = { success: true, runId: created.run.id };
++    const claim = claimTaskRunById(created.run.id, SCHEDULER_RUNNER_ID, TASK_RUN_LEASE_MS);
++    if (claim) {
++      try { executeClaimedTaskRun(claim, deps, admission); }
++      catch (error) { cancelTaskRunNow(claim.id, false); throw error; }
++    }
++  }));
++  return result;
++}
++
++/** Exact cancellation keeps the original durable fence and precise stopper. */
++export async function cancelTaskRunTargeted(
++  runId: string, deps: SchedulerDependencies, admission: TargetedTaskRunAdmission,
++): Promise<{ success: boolean; error?: string }> {
++  let result: { success: boolean; error?: string } =
++    { success: false, error: 'TARGETED_TASK_NOT_ADMITTED' };
++  await admission.withCurrent(() => targetedTaskWrite(deps, admission, () => {
++    const run = getTaskRunById(runId);
++    if (!run || run.trigger_type !== 'manual' ||
++        run.definition_snapshot.context_mode !== 'isolated' ||
++        run.definition_snapshot.execution_type !== 'agent' ||
++        run.definition_snapshot.execution_mode !== 'container')
++      throw new Error('TARGETED_TASK_RUN_MISMATCH');
++    result = cancelTaskRunNow(runId, false);
++  }));
++  return result;
++}

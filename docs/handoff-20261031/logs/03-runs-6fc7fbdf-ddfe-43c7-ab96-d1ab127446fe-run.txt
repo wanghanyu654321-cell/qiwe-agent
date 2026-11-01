@@ -1,0 +1,12 @@
+FULL_HOST_RUN {"runId":"2026-10-29T12-31-59-233Z-d0496de1-328b-4dbe-b37a-7f95b2299d41","evidenceRoot":"/tmp/qiwe-full-host-evidence/2026-10-29T12-31-59-233Z-d0496de1-328b-4dbe-b37a-7f95b2299d41","status":"preparing"}
+src/web.ts(4,68): error TS7006: Parameter 'method' implicitly has an 'any' type.
+src/web.ts(4,75): error TS7006: Parameter 'pathname' implicitly has an 'any' type.
+file:///input/qiwe-agent/integrations/native/real-container-cleanup.mjs:28
+ if(names.some(name=>!namesAllowed.test(name)))throw Error('REAL_CONTAINER_UNSAFE_OWNED_MANIFEST');
+                                                     ^
+
+Error: REAL_CONTAINER_UNSAFE_OWNED_MANIFEST
+    at cleanupOwnedContainers (file:///input/qiwe-agent/integrations/native/real-container-cleanup.mjs:28:54)
+    at file:///input/qiwe-agent/integrations/native/verify-full-host.mjs:273:19
+
+Node.js v22.23.2
