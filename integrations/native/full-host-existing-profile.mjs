@@ -16,9 +16,12 @@ export function inspectExistingProfileContext(dataDir,ownerId,groups,allowStep=(
  const deadline=performance.now()+5000;let operations=0;
  const probe=(method,...args)=>{if(++operations>100000||performance.now()>deadline||!allowStep())throw Error('profile_context_budget');return fs[method](...args);};
  const descriptor=fd=>'/proc/self/fd/'+fd;
+ // Directory timestamps can be coarser than a racing write, so versions also bind the exact entry names.
+ const listing=fd=>probe('readdirSync',descriptor(fd)).sort().join('\0');
  function remember(logical,fd,expected){
   let current;try{current=probe('fstatSync',fd,{bigint:true});if(!current.isDirectory()||expected&&stamp(current)!==stamp(expected))throw Error('profile_context_directory_changed');}catch(error){fs.closeSync(fd);throw error;}
-  const entry={fd,version:stamp(current)};opened.push(entry);directories.set(logical,entry);return fd;
+  let names;try{names=listing(fd);}catch(error){fs.closeSync(fd);throw error;}
+  const entry={fd,version:stamp(current)+'\n'+names};opened.push(entry);directories.set(logical,entry);return fd;
  }
  function child(parent,logical,name){
   const known=directories.get(logical);if(known)return known.fd;
@@ -47,6 +50,6 @@ export function inspectExistingProfileContext(dataDir,ownerId,groups,allowStep=(
   for(const folder of new Set(groups))for(const suffix of [['.mcp.json'],['.claude','settings.json'],['.claude','settings.local.json']])
    if(!absent(['groups',folder,...suffix]))return false;
   for(const item of missing){try{probe('lstatSync',descriptor(item.parent)+'/'+item.name,{bigint:true});return false;}catch(error){if(error.code!=='ENOENT')throw error;}}
-  return opened.every(entry=>stamp(probe('fstatSync',entry.fd,{bigint:true}))===entry.version);
+  return opened.every(entry=>stamp(probe('fstatSync',entry.fd,{bigint:true}))+'\n'+listing(entry.fd)===entry.version);
  }catch{return false;}finally{for(const entry of opened.reverse())fs.closeSync(entry.fd);}
 }
