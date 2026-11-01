@@ -2,7 +2,7 @@ import {expect} from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import childProcess from 'node:child_process';
-import {admitDockerRun,admitDockerControl,admitDockerShell,admitLocalDockerSpawn} from './real-container-boundary.mjs';
+import {admitDockerRun,frontClawArgs,frontClawName,admitDockerControl,admitDockerShell,admitLocalDockerSpawn} from './real-container-boundary.mjs';
 import {translateLocalMounts,inspectLocalDockerReceipt,localDocker,localEndpoint} from '../src/full-host-local-docker.mjs';
 import {actor,folder} from './full-host-restoration.fixture.mts';
 const actual={spawn:childProcess.spawn,execFile:childProcess.execFile,execFileSync:childProcess.execFileSync};
@@ -16,17 +16,18 @@ export const localContainerRequest=c4Case?'[c4-synthetic] 请根据已有批准�
 export function prepareLocalContainerTransport(calls:any[],existing?:{actor:{accountId:string};folder:string;ownedContainerPrefix:string}){
  const selectedActor=existing?.actor??actor,selectedFolder=existing?.folder??folder;
  const ownedContainerPrefix=existing?.ownedContainerPrefix;
- if(existing&&ownedContainerPrefix!=='miniclaw-'+selectedFolder+'-')throw Error('EXISTING_CONTAINER_FOLDER_MISMATCH');
+ if(existing&&ownedContainerPrefix!=='frontclaw-'+selectedFolder+'-'&&ownedContainerPrefix!=='miniclaw-'+selectedFolder+'-')throw Error('EXISTING_CONTAINER_FOLDER_MISMATCH');
  const receipt=JSON.parse(fs.readFileSync(process.env.QIWE_RESTORATION_RECEIPT!,'utf8'));
  const dockerFacts=inspectLocalDockerReceipt(receipt),runs:any[]=[],owned=new Set<string>();
  let ready=false,expectedMounts:any;
  const invoke=(args:string[])=>actual.execFileSync(localDocker,['--host',localEndpoint,...args],{encoding:'utf8',timeout:20000});
- const route=(command:string,args:string[])=>['--host',localEndpoint,...admitDockerControl(command,args,owned,ownedContainerPrefix)];
+ const route=(command:string,args:string[])=>['--host',localEndpoint,...admitDockerControl(command,frontClawArgs(args,ownedContainerPrefix),owned,ownedContainerPrefix)];
  const ports={
   execFileSync:(command:string,args:string[],...rest:any[])=>actual.execFileSync(localDocker,route(command,args),...rest),
   execFile:(command:string,args:string[],...rest:any[])=>actual.execFile(localDocker,route(command,args),...rest),
-  exec:(command:string,...rest:any[])=>actual.execFile(localDocker,['--host',localEndpoint,...admitDockerShell(command,owned,ownedContainerPrefix)],...rest),
+  exec:(command:string,...rest:any[])=>actual.execFile(localDocker,['--host',localEndpoint,...admitDockerShell(frontClawName(command,ownedContainerPrefix),owned,ownedContainerPrefix)],...rest),
   spawn:(command:string,args:string[],options:any)=>{
+   args=frontClawArgs(args,ownedContainerPrefix);
    admitLocalDockerSpawn(command,args,options,{ready,alreadyStarted:runs.length>0,ownedContainerPrefix});
    const shell=JSON.parse(process.env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL!);
    const identity=JSON.parse(invoke(['info','--format','{{json .SecurityOptions}}']));

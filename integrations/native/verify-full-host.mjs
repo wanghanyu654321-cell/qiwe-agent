@@ -171,7 +171,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  if(options.frontagentExistingInput){
   delete env.WEB_SESSION_SECRET;
   env.QIWE_FRONTAGENT_EXISTING_INPUT=options.frontagentExistingInput;
-  env.QIWE_FRONTAGENT_EXISTING_FOLDER=frontagentExistingState.containerPrefix.slice('miniclaw-'.length,-1);
+  env.QIWE_FRONTAGENT_EXISTING_FOLDER=frontagentExistingState.containerPrefix.replace(/^(?:frontclaw|miniclaw)-/,'').slice(0,-1);
   env.MINICLAW_WEB_URL='http://127.0.0.1:39130';env.CORS_ALLOW_LOCALHOST='false';env.CORS_ALLOWED_ORIGINS='http://127.0.0.1:39130';
   env.ALLOW_LEGACY_UNSIGNED_COOKIE='false';env.TRUST_PROXY='false';
   // Reuse only the deterministic fake-provider three-skill protocol; this run remains R3 existing-state, not C4.
@@ -189,6 +189,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   if(options.controlledRealPilot){
    env.QIWE_REAL_CONTAINER_ORIGINAL_SHELL=JSON.stringify(Object.fromEntries(['verified','image','entrypoint','piVersion','piAiVersions','files'].map(key=>[key,originalShell[key]])));
    env.QIWE_CONTROLLED_REAL_PILOT='1';env.QIWE_LOCAL_DOCKER_NETWORK=process.env.QIWE_LOCAL_DOCKER_NETWORK;
+   if(process.env.WECOM_DEBUG==='1')env.WECOM_DEBUG='1';
    env.WEB_PORT='39130';
   }
  }

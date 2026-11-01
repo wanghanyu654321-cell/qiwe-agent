@@ -1,5 +1,7 @@
 import {createHash} from 'node:crypto';
 
+const dbg=(event,fields={})=>{if(process.env.WECOM_DEBUG==='1')try{console.log('WECOM_DEBUG '+JSON.stringify({t:new Date().toISOString(),event,...fields}));}catch{}};
+const mask=v=>typeof v==='string'&&v?'***'+(v.length>=12?v.slice(-4):'')+'(len='+v.length+')':'<none>';
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const denied=()=>Error('FRONTAGENT_PILOT_ADMISSION_DENIED');
 const forbidden=async()=>{throw Error('EXISTING_RESOURCE_CREATION_FORBIDDEN');};
@@ -21,9 +23,11 @@ export async function prepareExistingFrontagentPilot(options){
  const {botId,corpId,secret}=initialCredentials;
  const matching=()=>{const rows=readBindings();if(!Array.isArray(rows))throw denied();return rows.filter(row=>row.active&&row.accountId===descriptor.accountId);};
  const rows=matching();
+ dbg('provision_binding',{activeRowsForAccount:rows.length,botIdMatch:rows[0]?.botId===botId,corpIdMatch:rows[0]?.corpId===corpId,hasMember:!!rows[0]?.memberId,version:rows[0]?.version,botId:mask(botId),corpId:mask(corpId),accountId:mask(descriptor.accountId)});
  if(rows.length!==1||rows[0].botId!==botId||rows[0].corpId!==corpId||!rows[0].memberId||!Number.isSafeInteger(rows[0].version)||rows[0].version<1)throw denied();
  const binding=structuredClone(rows[0]);
  const grant=grants.get(descriptor.accountId);
+ dbg('provision_grant',{active:!!grant?.active,storeMatch:grant?.storeId===descriptor.storeId,roles:grant?.roles,version:grant?.version});
  if(!grant?.active||grant.storeId!==descriptor.storeId||grant.roles?.length!==1||grant.roles[0]!=='marketing'||!Number.isSafeInteger(grant.version))throw denied();
  const grantVersion=grant.version;
  const verifyResources=()=>{
@@ -47,6 +51,7 @@ export async function prepareExistingFrontagentPilot(options){
   approval();verifyResources();
  };
  live();
+ dbg('provision_live_ok',{memberId:mask(binding.memberId)});
  const identity={tenantId:descriptor.tenantId,stores:[{id:descriptor.storeId}],roles:['marketing'],store:grants,
   readBinding:modules.createWecomBotBindingReader(async()=>readBindings()),
   readNative:async accountId=>{if(accountId!==descriptor.accountId)throw denied();live();return {user:db.getUserById(accountId),workspaceJid:descriptor.homeJid};}};
@@ -61,11 +66,12 @@ export async function prepareExistingFrontagentPilot(options){
    actor:{...actor,role:'marketing'},scope:request,idempotencyKey:digest([actor.tenantId,actor.accountId,actor.storeId,'marketing']),
    assertCurrent:()=>authority.assertCurrent(issued),withCurrent:work=>authority.withCurrent(issued,work),
   });
+  dbg('provision_workspace_adopted',{state:adopted?.state,workspaceMatch:adopted?.workspaceJid===descriptor.workspaceJid,profileMatch:adopted?.profileId===descriptor.profileId});
   if(adopted?.state!=='ready'||adopted.workspaceJid!==descriptor.workspaceJid||adopted.profileId!==descriptor.profileId)throw denied();
   await authority.assertCurrent(issued);live();
   const fingerprint=()=>{live();return {botId,corpId,ownerId:descriptor.accountId,configVersion:String(binding.version),credentialFingerprint:digest(secret),workspaceFingerprint:digest(descriptor.workspaceJid)};};
   const f=fingerprint();
-  pilot=modules.createControlledRealWecomBotPilot({mode:'controlled-real-pilot',
+  pilot=modules.createControlledRealWecomBotPilot({mode:'controlled-real-pilot',requestTimeoutMs:25000,
    admission:{mode:'controlled-real-pilot',environment:'local-test',runId,expiresAt,botId,corpId,memberId:binding.memberId,accountId:descriptor.accountId,tenantId:descriptor.tenantId,storeId:descriptor.storeId,roles:['marketing'],bindingVersion:binding.version,configVersion:f.configVersion,credentialFingerprint:f.credentialFingerprint,workspaceFingerprint:f.workspaceFingerprint},
    secret,identity,business:{scope:{tenant:descriptor.tenantId,store:descriptor.storeId,workspace:descriptor.homeJid},employees:[{...descriptor.employee,accountId:descriptor.accountId}],ledger,store:tasks},
    initializeExecution:input=>{const execution=initialize(input);if(execution.queue!==host.fullHostQueue||execution.gate!==gate)throw Error('FRONTAGENT_HOST_EXECUTION_CHANGED');return execution;},
@@ -74,10 +80,14 @@ export async function prepareExistingFrontagentPilot(options){
    createRoles:roleGate=>{const port=modules.createControlledRealRoleWorkspaceNativePort({mode:'controlled-real-pilot',gate:roleGate,native:db,templates:[],prepareOwnProfiles:forbidden,journalDirectory,readActor});return {readRoleWorkspace:port.readRoleWorkspace,prepareRoleWorkspace:forbidden};},
    readFingerprint:fingerprint,...(options.onDelivery?{onDelivery:options.onDelivery}:{}),...(options.onOutcome?{onOutcome:options.onOutcome}:{})
   });
-  if(await pilot.prepare()!=='prepared')throw Error('FRONTAGENT_PILOT_PREPARE_FAILED');
+  dbg('pilot_prepare_start',{});
+  let prepared;try{prepared=await pilot.prepare();}catch(error){dbg('pilot_prepare_failed',{failure:pilot.failure?.(),status:pilot.status()});throw error;}
+  dbg('pilot_prepare_result',{prepared,status:pilot.status()});
+  if(prepared!=='prepared')throw Error('FRONTAGENT_PILOT_PREPARE_FAILED');
   live();
-  return Object.freeze({activate:()=>{live();return pilot.activate();},status:()=>pilot.status(),idle:()=>pilot.idle(),close:async()=>{if(closed)return;closed=true;try{await pilot.close();}finally{authority.close();}}});
+  return Object.freeze({activate:()=>{live();const ok=pilot.activate();dbg('pilot_activate',{ok,status:pilot.status(),failure:pilot.failure?.()});return ok;},status:()=>pilot.status(),idle:()=>pilot.idle(),close:async()=>{if(closed)return;closed=true;try{await pilot.close();}finally{authority.close();}}});
  }catch(error){
+  dbg('provision_failed',{message:typeof error?.message==='string'&&/^[A-Za-z0-9_]{1,80}$/.test(error.message)?error.message:'<redacted>'});
   let cleanupUnknown=false;
   if(pilot)try{await pilot.close();if(pilot.status()!=='closed')cleanupUnknown=true;}catch{cleanupUnknown=true;}
   try{authority.close();}catch{cleanupUnknown=true;}

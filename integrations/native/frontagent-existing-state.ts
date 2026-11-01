@@ -163,5 +163,5 @@ export function prepareExistingFrontagentState(options:{inputRoot:string;hostRoo
   db.exec('COMMIT');
  }catch{throw Error('FRONTAGENT_EXISTING_IDENTITY_DATABASE_MAPPING_INVALID');}finally{db.close();}
  requireState(digest(fs.readFileSync(descriptorFile))===digest(descriptorBytes)&&digest(JSON.stringify(inventory(inputRoot).entries))===digest(JSON.stringify(before.entries)),'INPUT_CHANGED_DURING_COPY');
- return {codeRoot:path.join(hostRoot,'frontagent-product'),jobRoot:hostRoot,ownerId,containerPrefix:'miniclaw-'+d.folder+'-',audit:{format:1,descriptorSha256:digest(descriptorBytes),inputSha256:digest(JSON.stringify(before.entries)),files:before.entries.length,counts}};
+ return {codeRoot:path.join(hostRoot,'frontagent-product'),jobRoot:hostRoot,ownerId,containerPrefix:'frontclaw-'+d.folder+'-',audit:{format:1,descriptorSha256:digest(descriptorBytes),inputSha256:digest(JSON.stringify(before.entries)),files:before.entries.length,counts}};
 }

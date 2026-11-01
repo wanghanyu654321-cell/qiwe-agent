@@ -3,6 +3,8 @@
 let d3TerminalRunner: typeof runContainerAgent|undefined;
 let d3Bound=false;
 let d5OnCompleted:((ids:string[])=>Promise<void>|void)|undefined;
+const FRONT_CLAW_IDENTITY='你是 Front Claw，门店前台岗位助理；请按当前岗位职责、已审资料与授权范围回答。';
+const withFrontClawIdentity=<T extends {prompt:string}>(input:T):T=>typeof input.prompt!=='string'||input.prompt.startsWith(FRONT_CLAW_IDENTITY)?input:{...input,prompt:FRONT_CLAW_IDENTITY+'\n\n'+input.prompt};
 const d3Runner:typeof runContainerAgent=async(group,input,onProcess,onOutput,ownerHomeFolder)=>{
  if(!d3TerminalRunner||!input.queryRunId||!input.turnId)throw Error('D3_NOT_BOUND');
  const queryId=input.queryRunId,initialTurnId=input.turnId;
@@ -20,7 +22,7 @@ const d3Runner:typeof runContainerAgent=async(group,input,onProcess,onOutput,own
     completed=true;
    }
   };
-  const output=await d3TerminalRunner(group,input,onProcess,async event=>{
+  const output=await d3TerminalRunner(group,withFrontClawIdentity(input),onProcess,async event=>{
    observe(event);
    if(event.newSessionId&&event.status!=='error'&&!event.providerFailure)noteConversationSession(input.chatJid,queryId,event.newSessionId);
    if(event.status==='stream'&&event.streamEvent?.eventType==='status'&&event.streamEvent.statusText==='interrupted')interrupted=true;

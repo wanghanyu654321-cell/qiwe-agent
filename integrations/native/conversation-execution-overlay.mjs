@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 const once=(source,before,after)=>{if(source.split(before).length!==2)throw Error('D3_ANCHOR_CHANGED: '+before.slice(0,100));return source.replace(before,after);};
+export const FRONT_CLAW_IDENTITY='你是 Front Claw，门店前台岗位助理；请按当前岗位职责、已审资料与授权范围回答。';
 export function applyConversationExecution(files,native,{fullHost=false}={}){
  if(typeof fullHost!=='boolean')throw Error('D3_INVALID_FULL_HOST_SCOPE');
  for(const name of ['index.ts','group-queue.ts','conversation-history.ts'])if(!native.has(name))throw Error('D3_SOURCE_MISSING: '+name);
@@ -86,7 +87,7 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
   fragment=fragment.replace(" if(!d3TerminalRunner||!input.queryRunId||!input.turnId)throw Error('D3_NOT_BOUND');"," if(!input.queryRunId||!input.turnId)throw Error('D3_NOT_BOUND');");
   fragment=fragment.replace(" if(!input.queryRunId||!input.turnId)throw Error('D3_NOT_BOUND');",` if(!input.queryRunId||!conversationBatchActive(input.chatJid,input.queryRunId))return runContainerAgent(group,input,onProcess,onOutput,ownerHomeFolder);
  if(!input.turnId)throw Error('D3_NOT_BOUND');`);
-  fragment=fragment.replace('await d3TerminalRunner(group,input,','await runContainerAgent(group,input,');
+  fragment=fragment.replace('await d3TerminalRunner(group,withFrontClawIdentity(input),','await runContainerAgent(group,withFrontClawIdentity(input),');
   // A real O runner may stay alive for subsequent Web warm turns. Those
   // callbacks still belong to O's original onOutput, never to this first
   // conversation receipt's projection, session or terminal result.
@@ -107,8 +108,30 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
   const own=initialOutput;
   const frozen=finishConversationBatch(input.chatJid,queryId,interrupted?'cancelled':own?.status==='success'&&completed?'completed':own?.status==='error'?'failed':'unknown',own?.status==='success'?own.newSessionId:undefined);`);
   fragment=once(fragment," }catch(error){finishConversationBatch(input.chatJid,queryId,'unknown');throw error;}"," }catch(error){runnerSettled=true;finishConversationBatch(input.chatJid,queryId,'unknown');throw error;}");
+   // Early finish: a warm O runner may never resolve after the first turn.
+   // Freeze the result and notify as soon as the owned first turn completes.
+   fragment=once(fragment,' let runnerSettled=false;',`  let runnerSettled=false;
+  let batchFinished=false;const convStartedAt=Date.now();
+  const convDbg=(event:string,fields:Record<string,unknown>={})=>{if(process.env.WECOM_DEBUG==='1')try{console.log('WECOM_DEBUG '+JSON.stringify({t:new Date().toISOString(),event,...fields}));}catch{}};
+  convDbg('conv_batch_start',{query:String(queryId).slice(-4)});
+  const earlyFinish=async(event:Awaited<ReturnType<typeof runContainerAgent>>)=>{
+   if(batchFinished||runnerSettled||interrupted||!completed||!event.inputTurnCompleted||!ownsInitial(event))return;
+   batchFinished=true;
+   convDbg('conv_turn_completed',{elapsedMs:Date.now()-convStartedAt});
+   const frozen=finishConversationBatch(input.chatJid,queryId,'completed',event.status!=='error'&&!event.providerFailure?event.newSessionId:undefined);
+   convDbg('conv_batch_finish',{state:frozen.length?'completed':'unknown',recorded:frozen.length,trigger:'turn_completed'});
+   if(frozen.length&&d5OnCompleted){convDbg('conv_notify_start',{count:frozen.length});try{await d5OnCompleted(frozen);convDbg('conv_notify_ok',{count:frozen.length});}catch(error){convDbg('conv_notify_err',{});logger.warn({err:error},'Conversation notification deferred');}}
+  };`);
+   // After the early finish the first turn is frozen; late owned callbacks are fenced like a settled runner.
+   fragment=once(fragment,'   if(runnerSettled)return;','   if(runnerSettled||batchFinished&&ownsInitial(event))return;');
+   fragment=once(fragment,'   }\n   await onOutput?.(event);','   }\n   await onOutput?.(event);\n   await earlyFinish(event);');
+   fragment=once(fragment,'  runnerSettled=true;\n  if(ownsInitial(output))observe(output);',`  runnerSettled=true;
+  convDbg('runner_exit',{elapsedMs:Date.now()-convStartedAt,early:batchFinished,status:output.status});
+  if(batchFinished)return output;
+  if(ownsInitial(output))observe(output);`);
+   fragment=once(fragment,'  // Delivery failure cannot change',"  convDbg('conv_batch_finish',{recorded:frozen.length,trigger:'runner_exit'});\n  // Delivery failure cannot change");
   fragment+=fs.readFileSync(new URL('./full-host-conversation-index.fragment',import.meta.url),'utf8');
  }
- index=once(index,main,fragment+(fullHost?'\n'+main:''));
+ index=once(index,main,fragment+(fullHost?'\n'+main.replace('Failed to start miniclaw','Failed to start Front Claw'):''));
  result.set('index.ts',index);return result;
 }

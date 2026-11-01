@@ -8,6 +8,7 @@ import {normalizeBotFrame, type BotEvent} from './wecom-bot-transport.js';
 import {parseBotTaskCommand} from './wecom-bot-task-commands.js';
 import {createBotConversations,type BotRoleWorkspacePort,type BotConversationIntakePort} from './wecom-bot-conversations.js';
 import type {BotTaskStore} from './wecom-bot-task-store.js';
+import {wecomDebug, maskWecomValue} from './wecom-bot-preparation.js';
 
 type Client = Pick<WSClient, 'on' | 'off' | 'isConnected'>;
 /** A bound trusted gate adapter. It must register a real write ticket before work starts. */
@@ -66,7 +67,7 @@ function createAssembly(options:AssemblyOptions) {
   const configuredBoundary = options.executionBoundary;
   const requestTimeout = options.requestTimeoutMs ?? 4000, capacity = options.maxInFlight ?? 8;
   const valid = (s: unknown): s is string => typeof s === 'string' && !!s.trim() && s.length <= 120 && !/[\u0000-\u001f]/.test(s);
-  if (!valid(botId) || !valid(corpId) || !client || typeof client.on !== 'function' || typeof client.off !== 'function' || !Number.isInteger(requestTimeout) || requestTimeout < 1 || requestTimeout > 4000 || !Number.isInteger(capacity) || capacity < 1 || capacity > 1024 || !options.businesses.length || configuredBoundary && (typeof configuredBoundary.admit !== 'function' || typeof configuredBoundary.enter !== 'function' || typeof configuredBoundary.check !== 'function' || typeof configuredBoundary.close !== 'function')) throw Error('invalid_bot_assembly');
+  if (!valid(botId) || !valid(corpId) || !client || typeof client.on !== 'function' || typeof client.off !== 'function' || !Number.isInteger(requestTimeout) || requestTimeout < 1 || requestTimeout > 25000 || !Number.isInteger(capacity) || capacity < 1 || capacity > 1024 || !options.businesses.length || configuredBoundary && (typeof configuredBoundary.admit !== 'function' || typeof configuredBoundary.enter !== 'function' || typeof configuredBoundary.check !== 'function' || typeof configuredBoundary.close !== 'function')) throw Error('invalid_bot_assembly');
   const boundary = configuredBoundary && {admit: configuredBoundary.admit.bind(configuredBoundary), enter: configuredBoundary.enter.bind(configuredBoundary), check: configuredBoundary.check.bind(configuredBoundary), close: configuredBoundary.close.bind(configuredBoundary), onInputRejected: configuredBoundary.onInputRejected?.bind(configuredBoundary)};
   if (attached.has(client)) throw Error('assembly_already_attached');
   // Validate sender now, without taking ownership of either injected SDK port.
@@ -89,6 +90,7 @@ function createAssembly(options:AssemblyOptions) {
   const pending = new Set<Promise<void>>(), active = new Set<{controller: AbortController; dispose(): void}>();
   const connected = () => {try {return client.isConnected === true;} catch {return false;}};
   function observe(outcome: WecomBotAssemblyOutcome) {
+    wecomDebug('assembly_outcome', {state: outcome.state, detail: outcome.detail});
     try {
       // The observer receives an independent safe value; its failures cannot change committed facts.
       const returned: unknown = onOutcome?.(structuredClone(outcome));
@@ -122,6 +124,8 @@ function createAssembly(options:AssemblyOptions) {
       try {ticket = boundary.enter();} catch {reject('input_not_accepted'); return;}
       if (ticket === null || ticket === undefined || typeof (ticket as {then?: unknown})?.then === 'function') {reject('input_not_accepted'); return;}
     }
+    const startedAt = performance.now(), elapsed = () => Math.round(performance.now() - startedAt);
+    wecomDebug('request_admitted', {reqId: maskWecomValue(event.reqId), timeoutMs: requestTimeout});
     const capturedEpoch = epoch, controller = new AbortController(), deadline = performance.now() + requestTimeout;
     const resources: (() => void)[] = [];
     const physicalReads = new Set<Promise<void>>();
@@ -162,6 +166,7 @@ function createAssembly(options:AssemblyOptions) {
         resources.push(() => authority.close());
         const command = event.action.kind === 'text' ? parseBotTaskCommand(event.action.text) : undefined;
         const context = await authority.authorize(scope, businesses.some(b=>b.conversations)?null:command?.role ?? 'manager'); check();
+        wecomDebug('authorized', {elapsedMs: elapsed()});
         const business = businesses.find(b => b.scope.tenant === context.identity.tenantId && b.scope.store === context.identity.storeId && b.employees.some(e => e.accountId === context.identity.accountId));
         if (!business) throw Error('access_denied');
         const sender = createSender({...senderOptions, sdk: {...senderOptions.sdk, ready: () => {
@@ -181,10 +186,13 @@ function createAssembly(options:AssemblyOptions) {
         const delivery = createDelivery({ authority, ledger: business.ledger, scope: business.scope, employees: business.employees,
           ...(business.artifacts ? {artifacts: business.artifacts} : {}), ...(tasks ? {tasks} : {}),...(conversations?{conversations}:{}), readEvent: () => {check(); return frame;}, sender});
         resources.push(() => delivery.close());
+        wecomDebug('delivery_start', {elapsedMs: elapsed()});
         const result = await delivery.handle(scope); check();
+        wecomDebug('delivery_done', {elapsedMs: elapsed()});
         observe({state: 'handled', detail: 'event_handled', event: metadata, result});
       } catch (error) {
         const code = error instanceof Error ? error.message : '';
+        wecomDebug('request_rejected', {code: /^[a-z_]{1,64}$/.test(code) ? code : 'other', aborted: controller.signal.aborted, elapsedMs: elapsed()});
         const allowed = ['access_denied', 'access_changed', 'authority_unavailable', 'unsupported_event', 'bot_reply_conflict', 'request_timeout', 'input_not_accepted'];
         let maintenance = false;
         if (boundary) {try {maintenance = boundary.admit() !== true;} catch {maintenance = true;}}

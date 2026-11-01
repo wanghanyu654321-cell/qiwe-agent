@@ -5,6 +5,7 @@ import type {ReportDelivery} from './manager-store.js';
 import type {createBotSender} from './wecom-bot-sender.js';
 import {parseManagerCommand} from './manager-commands.js';
 import {botDeliveryNotice} from './wecom-bot-notice.js';
+import {wecomDebug, maskWecomValue} from './wecom-bot-preparation.js';
 export {botDeliveryNotice} from './wecom-bot-notice.js';
 export interface BotDeliveryResult {result:BotReportResult;delivery:ReportDelivery|null;reportDelivery?:ReportDelivery;deferred?:boolean;suppressed?:boolean;}
 type DeliveryOptions=Omit<BotReportOptions,'mode'>&{mode:'isolated-synthetic' | 'controlled-real-pilot';sender:ReturnType<typeof createBotSender>};
@@ -30,7 +31,7 @@ function createDelivery(options:DeliveryOptions){
  };
  const createHandler=(value:Omit<BotReportOptions,'mode'>)=>options.mode==='controlled-real-pilot'?createControlledRealBotReportHandler({...value,mode:'controlled-real-pilot'}):createBotReportHandler({...value,mode:'isolated-synthetic'});
  const handler=createHandler({...options,beforeWork:(value,guard)=>{
-  checkOpen();const seed=eventSeed(value),wasReserved=ledger.reserveBotReply({...value.actor},{...seed,reqId:value.event.reqId},guard);
+  checkOpen();const seed=eventSeed(value),wasReserved=ledger.reserveBotReply({...value.actor},{...seed,reqId:value.event.reqId},guard);wecomDebug('reply_reserved',{reqId:maskWecomValue(value.event.reqId),replay:!!wasReserved});
   const previous=ledger.getBotReply(value.actor,seed.id);return {replayState:wasReserved?(previous?(previous.reportId?'completed-report' as const:'completed-nonreport' as const):'reserved' as const):'none' as const,...(previous?.attachment?{cached:{status:'file' as const,snapshotId:previous.attachment.snapshotHash,attachment:{...previous.attachment},reply:structuredClone(previous.reply)}}:{})};
  }});
  return {
@@ -58,9 +59,11 @@ function createDelivery(options:DeliveryOptions){
      const filePreflight=async()=>{await preflight();await authority.withCurrent(context,guard=>{currentFile();if(fresh){const snapshot=artifacts!.read(owner,descriptor.snapshotHash);if(!snapshot||ledger.summary(actor,snapshot.period.start,snapshot.kind,roster).snapshotHash!==descriptor.snapshotHash)throw Error('snapshot_changed');}guard();});};
      outcome=await sender.file(context.channel.memberId,descriptor.filename,file.bytes,input,filePreflight);
     }catch{outcome={state:'blocked' as const,apiErrorCode:null,msgid:null,detail:'file_not_sent'};}
-   }else outcome=await sender.reply(claim.reply,input,preflight);
+   }else{wecomDebug('reply_send_start',{kind:'reply'});outcome=await sender.reply(claim.reply,input,preflight);}
+   wecomDebug(outcome.state==='accepted'?'reply_send_ok':'reply_send_err',{state:outcome.state,detail:outcome.detail,errcode:outcome.apiErrorCode??null});
    let delivery=claim.delivery,deferred=false;
    try{delivery=ledger.finishBotReply(actor,claim.id,claim.delivery.id,claim.delivery.attempt,outcome)?.delivery??delivery;}catch{deferred=true;}
+   wecomDebug('reply_committed',{state:delivery?.state??null,deferred});
    let reportDelivery=confirmation&&report?.delivery?{...report.delivery,state:delivery.state,attempt:claim.reportAttempt!,apiErrorCode:delivery.apiErrorCode,msgid:delivery.msgid,detail:delivery.detail,...(delivery.ackReqId?{ackReqId:delivery.ackReqId}:{})}:undefined;
    try{reportDelivery=readReportDelivery();}catch{deferred=true;}
    return {result,delivery,...(reportDelivery?{reportDelivery}:{}),...(deferred?{deferred:true}:{})};
@@ -151,7 +154,7 @@ export function createBotConversationDelivery(options:{
      await authority.assertCurrent(context);check(request);
      if(!observed||observed.workspaceJid!==receipt.workspaceJid||observed.profileId!==receipt.profileId||observed.role!==receipt.role||observed.selectionId!==receipt.selectionId||!context.roles.includes(observed.role)||frozen.length!==1||JSON.stringify(frozen[0])!==JSON.stringify(result))throw Error('access_changed');
     };
-    const outcome=await sender.notify(claim.target.memberId,claim.reply.body.stream.content,request,preflight);
+    wecomDebug('reply_send_start',{kind:'notify'});const outcome=await sender.notify(claim.target.memberId,claim.reply.body.stream.content,request,preflight);wecomDebug(outcome.state==='accepted'?'reply_send_ok':'reply_send_err',{kind:'notify',state:outcome.state,detail:outcome.detail,errcode:outcome.apiErrorCode??null});
     try{deliveries.push(ledger.finishBotReply(prepared.actor,claim.id,claim.delivery.id,claim.delivery.attempt,outcome)!.delivery);}catch{deliveries.push(claim.delivery);}
    }
    if(!next)next=prepared.next;

@@ -18,9 +18,16 @@ export function validateOriginalShellImage(inspection,probe,{image,files}){
  return Object.freeze({verified:true,image,entrypoint:[...inspection.Config.Entrypoint],piVersion:probe.piVersion,piAiVersions:{...probe.piAiVersions},files:{...probe.files}});
 }
 
+/** Upstream still names runners miniclaw-<folder>-<n>; the user-visible name becomes frontclaw-<folder>-<n>. */
+export function frontClawName(value,ownedContainerPrefix){
+ if(typeof value!=='string'||typeof ownedContainerPrefix!=='string'||!ownedContainerPrefix.startsWith('frontclaw-'))return value;
+ const legacy='miniclaw-'+ownedContainerPrefix.slice('frontclaw-'.length);
+ return value.split(legacy).join(ownedContainerPrefix);
+}
+export const frontClawArgs=(args,ownedContainerPrefix)=>Array.isArray(args)?args.map(value=>frontClawName(value,ownedContainerPrefix)):args;
 function admittedName(name,ownedContainerPrefix,defaultPattern){
  if(ownedContainerPrefix===undefined)return defaultPattern.test(name??'');
- return typeof ownedContainerPrefix==='string'&&/^miniclaw-[a-z0-9][a-z0-9_-]{0,127}-$/.test(ownedContainerPrefix)&&
+ return typeof ownedContainerPrefix==='string'&&/^(?:frontclaw|miniclaw)-[a-z0-9][a-z0-9_-]{0,127}-$/.test(ownedContainerPrefix)&&
   typeof name==='string'&&name.startsWith(ownedContainerPrefix)&&/^\d+$/.test(name.slice(ownedContainerPrefix.length));
 }
 export function admitDockerControl(command,args,owned,ownedContainerPrefix){

@@ -9,6 +9,16 @@ import {parseBotTaskCommand} from './wecom-bot-task-commands.js';
 
 export type BotConversationCommand={kind:'select';role:WorkbenchRole}|{kind:'exit'|'status'|'invalid'};
 const roles:Record<string,WorkbenchRole>={客服接待:'reception',前台办理:'frontdesk',内容营销:'marketing',投放辅助:'ads',店长经营:'manager',评测质检:'qa',培训:'training',reception:'reception',frontdesk:'frontdesk',marketing:'marketing',ads:'ads',manager:'manager',qa:'qa',training:'training'};
+const roleKeywords:Partial<Record<string,string[]>>={reception:['客服','接待','咨询','顾客','售后'],frontdesk:['前台','办理','预约','登记','到店'],marketing:['营销','内容','文案','推广','小红书','朋友圈','活动','海报','种草'],ads:['投放','广告','预算','出价','ROI','计划'],qa:['质检','评测','检查','评分'],training:['培训','课程','学习','考试']};
+export const roleName=(role:WorkbenchRole)=>Object.entries(roles).find(([key,value])=>value===role&&/[^\x00-\x7f]/.test(key))?.[0]??role;
+/** Picks a granted, non-manager role for plain text; never a role outside `granted`. */
+export function pickAutoRole(granted:readonly WorkbenchRole[],text:string):{role:WorkbenchRole;multiple:boolean}|undefined{
+ const candidates=granted.filter(role=>role!=='manager');if(!candidates.length)return undefined;
+ if(candidates.length===1)return {role:candidates[0]!,multiple:false};
+ const lower=text.toLowerCase();
+ const hit=candidates.find(role=>[roleName(role),role,...(roleKeywords[role]??[])].some(word=>lower.includes(word.toLowerCase())));
+ return {role:hit??candidates[0]!,multiple:true};
+}
 export function parseBotConversationCommand(text:string):BotConversationCommand|undefined{
  const value=text.trim();if(value==='退出岗位对话')return {kind:'exit'};if(value==='岗位查询')return {kind:'status'};
  const match=/^岗位\s+(\S+)$/.exec(value);
@@ -67,7 +77,7 @@ export function createBotConversations({store,native,intake,authority,prepareAns
  const preservedView=(value:BotConversationReceipt)=>`历史需求待人工核对，已暂停自动续跑；请联系管理员核对，不要重复提交。原记录保留，受理编号：${value.receiptId}。`;
  return {beforeReply(value:BotConversationReply){return replyChecks.get(value);},async route(context:WecomBotContext,source:BotEvent,scope:BotContextRequest,replayState:'none'|'reserved'|'completed-report'|'completed-nonreport'='none'):Promise<BotConversationReply|undefined>{
   if(source.action.kind!=='text')return undefined;
-  const text=source.action.text.trim(),command=parseBotConversationCommand(text),current=store.currentConversation(actor(context));
+  const text=source.action.text.trim(),command=parseBotConversationCommand(text);let current=store.currentConversation(actor(context));
   if(text.startsWith('查询对话')||text.startsWith('取消对话')){
    const cancelling=text.startsWith('取消对话'),match=/^(?:查询对话|取消对话)\s+([a-f0-9]{64})(?:\s+([1-9]\d*)(?:\s+([1-9]\d*))?)?$/.exec(text);
    if(!match)return {reply:`请发送“${cancelling?'取消':'查询'}对话 受理编号”，使用原消息中的完整编号。`};
@@ -117,7 +127,7 @@ export function createBotConversations({store,native,intake,authority,prepareAns
    await authority.withCurrent(context,guard=>store.exitConversation(actor(context),source.messageId,hash([source.botId,source.memberId,source.messageId,source.createTime??null,source.action]),guard));
    return {reply:'已退出岗位对话，普通文字恢复原报数规则。'};
   }
-  if(command?.kind==='select'){
+  const selectRole=async(command:{role:WorkbenchRole}):Promise<BotConversationReply>=>{
    if(!context.roles.includes(command.role))throw Error('access_denied');
    const seed=event(context,source,command.role),reservation=await authority.withCurrent(context,guard=>store.beginConversationSelection(seed,guard));
    if(store.currentConversation(actor(context))?.eventId!==reservation.eventId)return {reply:'这条选岗消息已由更新的岗位选择覆盖；请以当前岗位为准。'};
@@ -139,7 +149,8 @@ export function createBotConversations({store,native,intake,authority,prepareAns
    if(result.ownerAccountId!==trustedActor.accountId||result.storeId!==trustedActor.storeId||result.role!==command.role||!/^web:(?!home(?:-|:|$))[^\s#]{1,196}$/.test(result.workspaceJid)||!result.profileId)throw Error('access_denied');
    const saved=await authority.withCurrent(context,guard=>store.finishConversationSelection(seed,{workspaceJid:result.workspaceJid,profileId:result.profileId},guard));
    return {reply:saved.state==='ready'?`已选择${name(command.role)}岗位对话，当前门店${context.identity.storeId}。${intake?(intake.cancelReceipt?'可发送需求、查询进度或取消对话。':'可保存需求并查询受理编号；对话执行尚未接通。'):'后续自然语言对话执行尚未接通。'}`:'这条选岗消息已由更新的岗位选择覆盖；请以当前岗位为准。'};
-  }
+  };
+  if(command?.kind==='select')return selectRole(command);
   const report=/^报数\s+([\s\S]+)$/.exec(text);
   if(report){if(!context.roles.includes('manager'))throw Error('access_denied');return {reportText:report[1]!.trim()};}
   if(parseBotTaskCommand(text)||parseManagerCommand(text)||/^(查询|导出Excel|经营汇总|查询汇总|查询文件)(?:\s|$)/.test(text))return undefined;
@@ -154,6 +165,17 @@ export function createBotConversations({store,native,intake,authority,prepareAns
    // Another completed reply might be an uncertain Native submit.
    if(replayState==='completed-report')return undefined;
    if(replayState==='reserved'||replayState==='completed-nonreport')return {reply:`受理结果待核实。请稍后发送：查询对话 ${id}；请勿重复提交。`};
+   // Auto role selection: a bound identity with granted roles but no current selection
+   // gets the only granted role, or a content-matched one (falling back to the first).
+   let autoHint='';
+   if(!current&&!context.roles.includes('manager')){
+    const pick=pickAutoRole(context.roles,text);
+    if(pick){
+     const selected=await selectRole({role:pick.role});current=store.currentConversation(actor(context));
+     if(current?.state!=='ready'||current.role!==pick.role)return selected;
+     if(pick.multiple)autoHint=`\n（已自动选择${roleName(pick.role)}岗位；发送“岗位 <名称>”可切换岗位。）`;
+    }
+   }
    if(current?.state==='ready'){
     if(!context.roles.includes(current.role))throw Error('access_changed');
     const target=Object.freeze({workspaceJid:current.workspaceJid!,profileId:current.profileId!,role:current.role,selectionId:current.eventId});
@@ -162,7 +184,7 @@ export function createBotConversations({store,native,intake,authority,prepareAns
     try{saved=await bounded(scope,intake.submitMessage(submitInput));}catch(error){await authority.assertCurrent(context);if(error instanceof Error&&['authority_cancelled','authority_timeout','access_changed','access_denied'].includes(error.message))throw error;return {reply:`受理结果待核实。请稍后发送：查询对话 ${id}；请勿重复提交。`};}
     await authority.assertCurrent(context);
     if(!validReceipt(saved,id)||saved.fingerprint!==fingerprint||saved.role!==target.role||saved.workspaceJid!==target.workspaceJid||saved.profileId!==target.profileId||saved.selectionId!==target.selectionId)return {reply:`受理结果待核实。请稍后发送：查询对话 ${id}；请勿重复提交。`};
-    return {reply:receiptView(saved)};
+    return {reply:receiptView(saved)+autoHint};
    }
   }
   if(current?.state==='stale')throw Error('access_changed');

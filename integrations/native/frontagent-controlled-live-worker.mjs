@@ -6,6 +6,7 @@ import {installControlledRealContainerTransport} from './controlled-real-contain
 import {restoreExistingFrontagentHost} from './frontagent-pilot-restoration.mjs';
 import {prepareExistingFrontagentPilot} from './frontagent-controlled-pilot.mjs';
 
+const dbg=(event,fields={})=>{if(process.env.WECOM_DEBUG==='1')try{console.log('WECOM_DEBUG '+JSON.stringify({t:new Date().toISOString(),event,...fields}));}catch{}};
 const fail=code=>{throw Error('FRONTAGENT_LIVE_'+code);};
 function absent(file){
  try{fs.lstatSync(file);return false;}catch(error){if(error?.code==='ENOENT')return true;throw error;}
@@ -15,11 +16,12 @@ const sameScope=(a,b)=>!!a&&!!b&&scopeKeys.every(key=>a[key]===b[key]);
 export async function preloadOriginalRestorationBoundary(root){
  return import(pathToFileURL(path.join(root,'src/full-host-local-docker.mjs')).href);
 }
-export function writeControlledLiveFailureMarker(root,runId,codes){
+export const safeErrorToken=value=>typeof value==='string'&&/^[A-Z][A-Z0-9_]{2,80}$/.test(value)?value:'UNSAFE_MESSAGE_REDACTED';
+export function writeControlledLiveFailureMarker(root,runId,codes,original){
  if(!path.isAbsolute(root??'')||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(runId??'')||
     !Array.isArray(codes)||!codes.length||codes.some(code=>typeof code!=='string'||!/^FRONTAGENT_LIVE_(?:START_FAILED|CLEANUP_[A-Z]+_UNKNOWN)$/.test(code)))fail('MARKER_INPUT_INVALID');
  const fd=fs.openSync(path.join(root,'frontagent-live-cleanup-unknown.json'),'wx',0o600);
- try{fs.writeFileSync(fd,JSON.stringify({runId,codes}));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+ try{fs.writeFileSync(fd,JSON.stringify(original?{runId,codes,original:{message:safeErrorToken(original.message),code:safeErrorToken(original.code)}}:{runId,codes}));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
 }
 export function createControlledLiveShutdown(resources){
  let once;
@@ -65,13 +67,13 @@ export async function startControlledLiveWorker(options){
  const clearKeys=['ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN'],keys=[...Object.keys(controlledEnv),...clearKeys];
  const previous=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
  for(const key of clearKeys)delete process.env[key];for(const [key,value]of Object.entries(controlledEnv))process.env[key]=value;
- let transport,host,sql,grants,ledger,tasks,pilot,timer,startupFailed=false;
+ let transport,host,sql,grants,ledger,tasks,pilot,timer,startupFailed=false,startupError;
  const restoreEnvironment=()=>{for(const key of keys)if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key];};
  const closeResources=createControlledLiveShutdown({
   get initialFailure(){return startupFailed;},get pilot(){return pilot;},get host(){return host;},get transport(){return transport;},
   get tasks(){return tasks;},get ledger(){return ledger;},get grants(){return grants;},get sql(){return sql;},
   restoreEnvironment,
-  reportUnknown:codes=>writeControlledLiveFailureMarker(root,scope.runId,codes),
+  reportUnknown:codes=>writeControlledLiveFailureMarker(root,scope.runId,codes,startupError),
   // The original main owns scheduler, Web, native DB and final process exit.
   signalOriginal:()=>{if(host){if(!process.listenerCount('SIGTERM'))throw Error('missing original handler');process.emit('SIGTERM');}}
  });
@@ -95,6 +97,7 @@ export async function startControlledLiveWorker(options){
   const Database=createRequire(path.join(root,'package.json'))('better-sqlite3');
   sql=new Database(path.join(config.STORE_DIR,'messages.db'),{readonly:true,fileMustExist:true});
   const restoration=await restoreExistingFrontagentHost({sql,host,db,auth,base,adminCookie:descriptor.adminCookie,classifyRestorationRow:classifier.classifyRestorationRow});
+  dbg('host_restored',{restored:!!restoration.restored,phase:host.fullHostBootGate.phase()});
   if(!restoration.restored||host.fullHostBootGate.phase()!=='ready')fail('RESTORE_UNPROVEN');
   checkProvider();transport.prepare(config);transport.activate(host.fullHostBootGate);
   const [access,manager,taskStore,bindings,botContext,botPilot,roleOverlay,conversationOverlay]=await Promise.all([
@@ -108,17 +111,19 @@ export async function startControlledLiveWorker(options){
   const checkedCredentials=()=>{checkProvider();const current=readCredentials(),currentModel=readModelCredentials();
    if(!currentModel||currentModel.apiKey!==model.apiKey||currentModel.baseUrl!==model.baseUrl||currentModel.model!==model.model)fail('MODEL_CREDENTIAL_CHANGED');
    return current;};
+  dbg('provision_files',{bindingsFile:fs.existsSync(bindingFile),approvedFile:fs.existsSync(approvedFile)});
   const modules={...bindings,...botContext,...botPilot,...roleOverlay,...conversationOverlay};
   pilot=await prepareExistingFrontagentPilot({descriptor,gate:host.fullHostBootGate,db,host,grants,ledger,tasks,
    readBindings:()=>JSON.parse(fs.readFileSync(bindingFile,'utf8')),readApproved:()=>JSON.parse(fs.readFileSync(approvedFile,'utf8')),
    readCredentials:checkedCredentials,runId:scope.runId,expiresAt:scope.expiresAt,journalDirectory:path.join(root,'unused-existing-role-journal'),modules,
    ...(options.onDelivery?{onDelivery:(_id,result)=>options.onDelivery({states:(result.deliveries??[]).map(delivery=>delivery.state),deferred:!!result.deferred})}:{}),
-   ...(options.onOutcome?{onOutcome:()=>options.onOutcome()}:{}),
+   onOutcome:outcome=>{dbg('worker_outcome',{state:outcome?.state??null,detail:outcome?.detail??null,deliveryStates:(outcome?.result?.deliveries??[]).map(d=>d?.state)});if(options.onOutcome)return options.onOutcome(outcome);},
   });
+  dbg('worker_pilot_prepared',{status:pilot.status()});
   timer=setTimeout(()=>{void shutdown().catch(()=>{console.error('FRONTAGENT_LIVE_CLEANUP_UNKNOWN');try{options.onFailure?.('FRONTAGENT_LIVE_CLEANUP_UNKNOWN');}catch{}});},Math.max(1,scope.expiresAt-Date.now()));timer.unref();
   return Object.freeze({activate:()=>{checkProvider();return pilot.activate();},status:()=>pilot.status(),idle:()=>pilot.idle(),close:shutdown});
  }catch(error){
-  startupFailed=true;
+  startupFailed=true;startupError={message:error?.message,code:error?.code};
   try{await shutdown();}catch(cleanupError){
    const failure=new AggregateError(cleanupError.errors??[Error('FRONTAGENT_LIVE_START_FAILED')],'FRONTAGENT_LIVE_START_OR_CLEANUP_FAILED');
    Object.defineProperty(failure,'originalError',{value:error,enumerable:false});throw failure;

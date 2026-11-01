@@ -28,6 +28,44 @@ export interface WecomBotPreparationOptions {
 }
 
 const claimed = new WeakSet<object>();
+/** Opt-in (WECOM_DEBUG=1) masked lifecycle diagnostics. Never prints secrets, ids or message text. */
+const wecomDebugEnabled = (): boolean => {try {return typeof process !== 'undefined' && process.env?.WECOM_DEBUG === '1';} catch {return false;}};
+export function maskWecomValue(value: unknown): string {
+  const s = typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '';
+  if (!s) return '<none>';
+  return '***' + (s.length >= 12 ? s.slice(-4) : '') + '(len=' + s.length + ')';
+}
+export function wecomDebug(event: string, fields: Record<string, unknown> = {}): void {
+  if (!wecomDebugEnabled()) return;
+  try {console.log('WECOM_DEBUG ' + JSON.stringify({t: new Date().toISOString(), event, ...fields}));} catch {}
+}
+function sanitizeSdkLog(message: unknown, args: unknown[]): string {
+  let s = typeof message === 'string' ? message : '';
+  s = s.replace(/body=[\s\S]*$/, 'body=<omitted>');
+  s = s.replace(/(reqId|req_id|upload_id|media_id)([=:]\s*)([^\s,]+)/gi, (_m, k: string, sep: string, v: string) => k + sep + maskWecomValue(v));
+  s = s.replace(/[{[][\s\S]*$/, '<json-omitted>');
+  s = s.replace(/[A-Za-z0-9_\-+/=]{20,}/g, t => maskWecomValue(t));
+  const extra = args.map(a => a instanceof Error ? a.message : a).filter(a => typeof a === 'number' || (typeof a === 'string' && !/^\s*[{[]/.test(a)))
+    .map(a => String(a).replace(/[A-Za-z0-9_\-+/=]{20,}/g, t => maskWecomValue(t)).slice(0, 160));
+  return (s + (extra.length ? ' ' + extra.join(' ') : '')).slice(0, 400);
+}
+const silentLogger = {debug() {}, info() {}, warn() {}, error() {}};
+function wecomSdkLogger() {
+  if (!wecomDebugEnabled()) return silentLogger;
+  const at = (level: string) => (message: unknown, ...args: unknown[]) => wecomDebug('sdk', {level, msg: sanitizeSdkLog(message, args)});
+  return {debug: at('debug'), info: at('info'), warn: at('warn'), error: at('error')};
+}
+function describeFrame(frame: unknown): Record<string, unknown> {
+  const f = (frame && typeof frame === 'object' ? frame : {}) as {cmd?: unknown; headers?: {req_id?: unknown}; body?: Record<string, unknown>};
+  const b = (f.body && typeof f.body === 'object' ? f.body : {}) as Record<string, unknown>;
+  const from = (b.from && typeof b.from === 'object' ? b.from : {}) as Record<string, unknown>;
+  const text = (b.text && typeof b.text === 'object' ? b.text : {}) as Record<string, unknown>;
+  const ev = (b.event && typeof b.event === 'object' ? b.event : {}) as Record<string, unknown>;
+  return {cmd: typeof f.cmd === 'string' ? f.cmd.slice(0, 40) : '<none>', reqId: maskWecomValue(f.headers?.req_id), msgtype: typeof b.msgtype === 'string' ? b.msgtype.slice(0, 30) : undefined,
+    chattype: typeof b.chattype === 'string' ? b.chattype.slice(0, 20) : undefined, eventtype: typeof ev.eventtype === 'string' ? ev.eventtype.slice(0, 40) : undefined,
+    aibotid: maskWecomValue(b.aibotid), msgid: maskWecomValue(b.msgid), userid: maskWecomValue(from.userid), corpid: maskWecomValue(from.corpid),
+    textLength: typeof text.content === 'string' ? text.content.length : undefined};
+}
 const fields = ['botId', 'corpId', 'ownerId', 'configVersion', 'credentialFingerprint', 'workspaceFingerprint'] as const;
 function isThenable(value: unknown): boolean {return !!value && (typeof value === 'object' || typeof value === 'function') && typeof (value as {then?: unknown}).then === 'function';}
 function absorbThenable(value: unknown) {if (isThenable(value)) void Promise.resolve(value).catch(() => {});}
@@ -53,8 +91,8 @@ export function createWecomBotPreparation(options: WecomBotPreparationOptions) {
 export function createControlledRealWecomBotPreparation(options:Omit<WecomBotPreparationOptions,'mode'|'createClient'|'connect'|'disconnect'>&{mode:'controlled-real-pilot';botId:string;secret:string}) {
   if(options.mode!=='controlled-real-pilot'||!options.botId||typeof options.secret!=='string'||!options.secret.trim()||['createClient','connect','disconnect'].some(k=>k in options))throw Error('invalid_preparation_port');
   const botId=options.botId,secret=options.secret,requestTimeout=options.timeoutMs??4000;
-  return createPreparation({...options,createClient:()=>new WSClient({botId,secret,maxReconnectAttempts:0,maxAuthFailureAttempts:0,requestTimeout,logger:{debug(){},info(){},warn(){},error(){}}}),
-    connect:client=>{(client as WSClient).connect();},disconnect:client=>{(client as WSClient).disconnect();}});
+  return createPreparation({...options,createClient:()=>{const client=new WSClient({botId,secret,maxReconnectAttempts:0,maxAuthFailureAttempts:0,requestTimeout,logger:wecomSdkLogger()});wecomDebug('client_created',{botId:maskWecomValue(botId),requestTimeout,maxReconnectAttempts:0});return client;},
+    connect:client=>{wecomDebug('connecting',{url:'wss://openws.work.weixin.qq.com'});(client as WSClient).connect();},disconnect:client=>{wecomDebug('disconnect_called',{});(client as WSClient).disconnect();}});
 }
 function createPreparation(options:Omit<WecomBotPreparationOptions,'mode'>&{mode:'isolated-synthetic' | 'controlled-real-pilot'}) {
   const {mode, gate, signal} = options;
@@ -127,10 +165,13 @@ function createPreparation(options:Omit<WecomBotPreparationOptions,'mode'>&{mode
       try {if (assembly) await Promise.race([assembly.idle(), new Promise<never>((_, reject) => {cleanupTimer = setTimeout(() => reject(Error('cleanup_timeout')), timeout);})]);} catch {failed = true;}
       finally {if (cleanupTimer) clearTimeout(cleanupTimer);}
       state = connected() || failed || uncertain || tickets.size > 0 ? 'cleanup_unknown' : 'closed';
+      wecomDebug('preparation_closed', {state, lastFailure, failed, uncertain, tickets: tickets.size});
+      if (debugTick) clearInterval(debugTick);
     })();
     return closed;
   }
   function fail(code: string) {
+    wecomDebug('preparation_fail', {code, state, connected: connected()});
     if (state === 'closing' || state === 'closed' || state === 'cleanup_unknown') return;
     lastFailure = code;
     approvedEpoch = -1; authenticatedEpoch = -1;
@@ -139,11 +180,13 @@ function createPreparation(options:Omit<WecomBotPreparationOptions,'mode'>&{mode
   }
   function inbound() {
     if (state === 'active' && bound.admit()) return;
+    wecomDebug('inbound_not_admitted', {state, approved: approvedEpoch === epoch, authenticated: authenticatedEpoch === epoch, connected: connected(), fingerprint: currentFingerprint(), ready: readyPhase()});
     if (state !== 'armed' && state !== 'connecting' && state !== 'prepared' && state !== 'active') return;
     try {const result: unknown = noteArrival(); if (isThenable(result)) {absorbThenable(result); throw Error('async_gate_port');}} catch {uncertain = true; fail('arrival_record_unknown'); return;}
     fail('input_not_accepted');
   }
   function invalidate(reason: string, mayContinue = false) {
+    wecomDebug('invalidate', {reason, state, mayContinue});
     epoch++; authenticatedEpoch = -1; approvedEpoch = -1;
     if (state === 'connecting' && mayContinue) return;
     if (state === 'armed') return;
@@ -154,12 +197,26 @@ function createPreparation(options:Omit<WecomBotPreparationOptions,'mode'>&{mode
     if (state !== 'connecting' || !connectReturned || authenticatedEpoch !== epoch || !connected()) return;
     if (!currentFingerprint()) {fail('preparation_identity_changed'); return;}
     state = 'prepared';
+    wecomDebug('prepared', {});
     if (timer) clearTimeout(timer);
     rejectWait = undefined;
     resolveWait?.('prepared'); resolveWait = undefined;
   }
   let resolveWait: ((value: 'prepared') => void) | undefined;
+  let debugTick: ReturnType<typeof setInterval> | undefined;
   try {
+    if (wecomDebugEnabled()) {
+      listen('connected', () => wecomDebug('connected', {}));
+      listen('authenticated', () => wecomDebug('auth_ok', {}));
+      listen('disconnected', (reason: unknown) => wecomDebug('disconnected', {reason: typeof reason === 'string' ? reason.replace(/[A-Za-z0-9_\-]{20,}/g, t => maskWecomValue(t)).slice(0, 120) : '<none>'}));
+      listen('reconnecting', (attempt: unknown) => wecomDebug('reconnecting', {attempt: typeof attempt === 'number' ? attempt : undefined}));
+      listen('error', (error: unknown) => wecomDebug('error', {message: error instanceof Error ? error.message.replace(/[A-Za-z0-9_\-]{20,}/g, t => maskWecomValue(t)).slice(0, 160) : '<non-error>'}));
+      listen('message', (frame: unknown) => wecomDebug('inbound', describeFrame(frame)));
+      listen('event', (frame: unknown) => wecomDebug('inbound_event', describeFrame(frame)));
+      listen('event.disconnected_event', () => wecomDebug('server_disconnected_event', {hint: 'another connection with the same botId took over'}));
+      debugTick = setInterval(() => wecomDebug('alive', {state, connected: connected(), authenticated: authenticatedEpoch === epoch, approved: approvedEpoch === epoch}), 60000);
+      (debugTick as {unref?: () => void}).unref?.();
+    }
     // SDK's generic events precede specific text/card callbacks, including unsupported types.
     listen('message', inbound); listen('event', inbound);
     listen('connected', () => invalidate('connection_changed', true));
@@ -191,6 +248,7 @@ function createPreparation(options:Omit<WecomBotPreparationOptions,'mode'>&{mode
       return waiting;
     },
     activate(): boolean {
+      wecomDebug('activate', {state, authenticated: authenticatedEpoch === epoch, connected: connected()});
       if (state !== 'prepared' || authenticatedEpoch !== epoch || !connected()) return false;
       if (!currentFingerprint()) {fail('preparation_identity_changed'); return false;}
       try {if (!readyPhase()) return false;} catch {return false;}

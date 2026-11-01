@@ -83,11 +83,18 @@ export function createControlledModelFetch(options: ControlledModelFetchOptions)
     // and other Request semantics survive, with redirects and deadline pinned here.
     const outbound = new Request(request, {body: JSON.stringify(body), redirect: 'error', signal});
     attempts++;
+    const debug = (globalThis as {process?: {env?: Record<string, string | undefined>}}).process?.env?.WECOM_DEBUG === '1';
+    const log = (event: string, fields: Record<string, unknown>) => {if (debug) try {console.error('WECOM_DEBUG ' + JSON.stringify({t: new Date().toISOString(), event, ...fields}));} catch {}};
+    const started = Date.now(), attempt = attempts;
+    log('model_call_start', {attempt, limit: maxRequests});
     let pending: Promise<Response>;
     try {pending = transport(outbound);} finally {
       try {onAttempt?.(Object.freeze({attempt: attempts, limit: maxRequests}));} catch { /* telemetry cannot alter I/O */ }
     }
-    return withAbort(pending, signal);
+    const observed = withAbort(pending, signal);
+    observed.then(r => log('model_call_done', {attempt, status: r.status, elapsedMs: Date.now() - started}),
+      e => log('model_call_done', {attempt, status: 'error', aborted: signal.aborted, error: (e as {name?: string})?.name ?? 'error', elapsedMs: Date.now() - started}));
+    return observed;
   };
   return Object.freeze({fetch: controlledFetch,
     get state() {return Object.freeze({reserved, attempts, limit: maxRequests});}});

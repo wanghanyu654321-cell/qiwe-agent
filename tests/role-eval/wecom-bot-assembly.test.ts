@@ -535,13 +535,20 @@ it('uses the task command role while preserving manager-role denial and rejects 
 });
 
 it.each([
-  {requestTimeoutMs: 0}, {requestTimeoutMs: 4001}, {requestTimeoutMs: 1.5},
+  {requestTimeoutMs: 0}, {requestTimeoutMs: 25001}, {requestTimeoutMs: 1.5},
   {maxInFlight: 0}, {maxInFlight: 1.5}, {maxInFlight: 1025},
 ])('rejects invalid bounded configuration %j without taking over the SDK', config => {
   const s = setup(); s.app.close();
   expect(() => createWecomBotAssembly({...s.options, ...config})).toThrow('invalid_bot_assembly');
   expect(s.offline.client.listenerCount('message.text')).toBe(0);
   expect(s.offline.connect).not.toHaveBeenCalled();
+});
+
+it.each([undefined, 4000, 25000])('accepts request budget %s up to the 25s pilot cap', requestTimeoutMs => {
+  const s = setup(); s.app.close();
+  const app = createWecomBotAssembly({...s.options, ...(requestTimeoutMs === undefined ? {} : {requestTimeoutMs})});
+  expect(s.offline.client.listenerCount('message.text')).toBeGreaterThan(0);
+  app.close();
 });
 
 it('does not route unsupported SDK message types and refuses missing single attribution on card events', async () => {

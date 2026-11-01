@@ -38,6 +38,8 @@ export interface WecomBotPilotOptions {
   disconnect: WecomBotPreparationOptions['disconnect'];
   readFingerprint: WecomBotPreparationOptions['readFingerprint'];
   timeoutMs?: number; signal?: AbortSignal;
+  /** Per-inbound-request budget for the assembly (default 4000, max 25000). */
+  requestTimeoutMs?: number;
   onOutcome?: WecomBotAssemblyOptions['onOutcome'];
   onDelivery?(receiptId: string, result: WecomBotPilotDelivery): void;
 }
@@ -54,7 +56,7 @@ type PilotMode='isolated-synthetic'|'controlled-real-pilot';
 type SharedPilotOptions=Omit<WecomBotPilotOptions,'mode'|'initializeExecution'|'createClient'|'connect'|'disconnect'>&Partial<Pick<WecomBotPilotOptions,'createClient'|'connect'|'disconnect'>>&{mode:PilotMode;initializeExecution(options:{mode:PilotMode;authorize:WecomBotPilotOptions['authorize'];onCompleted:(ids:string[])=>Promise<void>}):WecomBotPilotExecution;real?:{memberId:string;secret:string;admit:()=>boolean}};
 function createPilot(options:SharedPilotOptions) {
   if (['initializeExecution', 'authorize', 'createIntake', 'createRoles', 'readSubject', 'readFingerprint'].some(key => typeof Reflect.get(options,key) !== 'function')) throw Error('invalid_bot_pilot');
-  const {mode,botId,corpId,timeoutMs,signal,onOutcome,onDelivery} = options;
+  const {mode,botId,corpId,timeoutMs,requestTimeoutMs,signal,onOutcome,onDelivery} = options;
   const initialize = options.initializeExecution.bind(options), authorize = options.authorize.bind(options);
   const createIntake = options.createIntake.bind(options), createRoles = options.createRoles.bind(options);
   const createClient = options.createClient?.bind(options), connect = options.connect?.bind(options), disconnect = options.disconnect?.bind(options), readFingerprint = options.readFingerprint.bind(options);
@@ -157,7 +159,7 @@ function createPilot(options:SharedPilotOptions) {
             readSubject: scope => track(readSubject(scope), recoveryReads.getStore()), readBinding: (subject, scope) => track(identity.readBinding(subject, scope), recoveryReads.getStore()), readNative: (id, scope) => track(identity.readNative(id, scope), recoveryReads.getStore())});
           delivery = createBotConversationDelivery({authority, ledger: business.ledger, sender, intake, gate: deliveryGate, scope: business.scope, employees: business.employees});
           const assemblyOptions={botId, corpId, client, identity,
-            businesses: [{scope: business.scope, employees: business.employees, ledger: business.ledger, conversations: {store: business.store, native: roles, intake, deliveryGate: execution.gate}}], sender: {sdk}, executionBoundary: boundary, ...(onOutcome ? {onOutcome} : {})};
+            businesses: [{scope: business.scope, employees: business.employees, ledger: business.ledger, conversations: {store: business.store, native: roles, intake, deliveryGate: execution.gate}}], sender: {sdk}, executionBoundary: boundary, ...(requestTimeoutMs !== undefined ? {requestTimeoutMs} : {}), ...(onOutcome ? {onOutcome} : {})};
           assembly=real?createControlledRealWecomBotAssembly({...assemblyOptions,mode:'controlled-real-pilot',memberId:real.memberId}):createWecomBotAssembly({...assemblyOptions,mode:'isolated-synthetic'});
           return {close: stopOwned, idle};
         } catch (error) {

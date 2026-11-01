@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import {EventEmitter} from 'node:events';
+import {frontClawArgs,frontClawName} from './real-container-boundary.mjs';
 
 // Exercise the adapter with deterministic local ports; no Docker or network call.
 function fixture(){
@@ -17,7 +18,7 @@ function fixture(){
  const source=fs.readFileSync(new URL('./controlled-real-container-transport.mjs',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'').replaceAll('export function ','function ');
  const install=new vm.Script('(function(){'+source+';return installControlledRealContainerTransport;})()').runInNewContext({fs:fakeFs,path:path.posix,childProcess:actual,syncBuiltinESMExports:()=>{},process:fakeProcess,
   inspectLocalDockerReceipt:r=>{assert.equal(r.version,3);return r.docker;},localDocker:'/qiwe-control/docker',localEndpoint:'unix:///qiwe-control/docker.sock',
-  admitLocalDockerSpawn:(cmd,args,opts,s)=>{if(cmd!=='docker'||!s.ready||s.alreadyStarted||args[4]!=='miniclaw-marketing-123')throw Error('LOCAL_DOCKER_SPAWN_FORBIDDEN');},
+  frontClawArgs,frontClawName,admitLocalDockerSpawn:(cmd,args,opts,s)=>{if(cmd!=='docker'||!s.ready||s.alreadyStarted||!/^frontclaw-marketing-\d+$/.test(args[4]||''))throw Error('LOCAL_DOCKER_SPAWN_FORBIDDEN');},
   admitControlledRealDockerRun:(args,opts)=>({name:args[4],args:[...args],mounts:[]}),translateLocalMounts:args=>args,
   admitDockerControl:(cmd,args,owners)=>{if(cmd!=='docker'||args[0]!=='info'&&!(args[0]==='stop'&&owners.has(args[1])))throw Error('CONTROL');return args;},
   admitDockerShell:(cmd,owners)=>{const name=cmd.replace('docker stop ','');if(!owners.has(name))throw Error('CONTROL');return ['stop',name];},
@@ -37,7 +38,7 @@ test('requires prepared original gate, routes exactly one runner and keeps contr
  assert.throws(()=>transport.activate({phase:()=> 'paused'}),/GATE/);
  transport.activate({phase:()=> 'ready'});
  assert.equal(f.actual.spawn('docker',args,options),f.child);
- assert.equal(f.owned[0],'miniclaw-marketing-123\n');
+ assert.equal(f.owned[0],'frontclaw-marketing-123\n');
  assert.throws(()=>f.actual.spawn('docker',args,options),/FORBIDDEN/);
  assert.throws(()=>f.actual.execFileSync('docker',['stop','miniclaw-marketing-999']),/CONTROL/);
  const callback=()=>{},execOptions={encoding:'utf8'};
@@ -62,4 +63,20 @@ test('rejects mismatched scope and refuses malformed options before installing p
  assert.throws(()=>f.install({...f.opts,controlledRealPilot:{...f.scope,runId:'foreign'}}),/SCOPE/);
  assert.throws(()=>f.install({...f.opts,folder:'../other'}),/SCOPE/);
  assert.equal(f.actual.spawn,original);
+});
+
+test('allows a later sequential runner after the first owned child exits',async()=>{
+ const f=fixture(),transport=f.install(f.opts),options={stdio:['pipe','pipe','pipe']};
+ const first=['run','-i','--rm','--name','miniclaw-marketing-123',f.opts.image];
+ const second=['run','-i','--rm','--name','miniclaw-marketing-456',f.opts.image];
+ transport.prepare({GROUPS_DIR:'/tmp/job/groups',DATA_DIR:'/tmp/job/data'});
+ transport.activate({phase:()=> 'ready'});
+ assert.equal(f.actual.spawn('docker',first,options),f.child);
+ assert.throws(()=>f.actual.spawn('docker',second,options),/FORBIDDEN/);
+ f.child.emit('close',0);
+ assert.equal(f.actual.spawn('docker',second,options),f.child);
+ assert.deepEqual(f.owned,['frontclaw-marketing-123\n','frontclaw-marketing-456\n']);
+ assert.throws(()=>f.actual.spawn('docker',first,options),/FORBIDDEN/);
+ await transport.close();
+ assert.throws(()=>f.actual.spawn('docker',first,options),/FORBIDDEN/);
 });

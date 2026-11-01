@@ -26,7 +26,8 @@ async function main(){
  try{
   if(worker.activate()!==true)throw Error('CONTROLLED_REAL_ACTIVATION_FAILED');
   console.log('CONTROLLED_REAL_READY');
+  const statusTick=process.env.WECOM_DEBUG==='1'?setInterval(()=>{try{console.log('WECOM_DEBUG '+JSON.stringify({t:new Date().toISOString(),event:'pilot_status',status:worker.status()}));}catch{}},60000):undefined;statusTick?.unref?.();
   await new Promise(resolve=>{const stop=()=>{clearTimeout(timer);process.off('SIGINT',stop);process.off('SIGTERM',stop);resolve();};const timer=setTimeout(stop,Math.max(1,scope.expiresAt-Date.now()));process.once('SIGINT',stop);process.once('SIGTERM',stop);});
  }finally{await worker.close();}
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{const code=typeof error?.message==='string'&&/^[A-Z0-9_]{1,100}$/.test(error.message)?error.message:'CONTROLLED_REAL_ENTRY_FAILED';console.error(code);process.exitCode=1;});
+if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{const safeErrorToken=value=>typeof value==='string'&&/^[A-Z][A-Z0-9_]{2,80}$/.test(value)?value:'UNSAFE_MESSAGE_REDACTED';const code=typeof error?.message==='string'&&/^[A-Z0-9_]{1,100}$/.test(error.message)?error.message:'CONTROLLED_REAL_ENTRY_FAILED';console.error(code);const original=error?.originalError??error;console.error('CONTROLLED_REAL_ORIGINAL_ERROR message='+safeErrorToken(original?.message)+' code='+safeErrorToken(original?.code));process.exitCode=1;});

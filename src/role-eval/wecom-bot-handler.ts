@@ -66,7 +66,9 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
   const reservation=conversations?await authority.withCurrent(context,checkActive=>{const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();return replay?structuredClone(replay):undefined;}):undefined;
   const reservedReply=reservation?.cached;
   const conversationResult=await conversations?.route(context,event,input,reservation?.replayState??'none');
-  if(taskCommand&&!context.roles.includes(taskCommand.role)||!taskCommand&&!conversationResult&&!context.roles.includes('manager')||conversationResult?.reportText&&!context.roles.includes('manager'))throw Error('access_denied');
+  // With role conversations enabled, unrouted plain text before a role is selected gets a hint instead of a silent denial.
+  const selectHint=!!conversations&&!taskCommand&&!conversationResult&&event.action.kind==='text'&&!context.roles.includes('manager')&&context.roles.length>0&&!reservedReply;
+  if(taskCommand&&!context.roles.includes(taskCommand.role)||!selectHint&&!taskCommand&&!conversationResult&&!context.roles.includes('manager')||conversationResult?.reportText&&!context.roles.includes('manager'))throw Error('access_denied');
   const plan=(status:BotReportResult['status'],content:string,report?:StaffReport,card=false):BotReportResult=>({status,...(report?{reportId:report.id}:{}),reply:{reqId:event.reqId,body:{msgtype:card?'stream_with_template_card':'stream',stream:{id:hash('report-reply|'+event.reqId),finish:true,content},...(card&&report?{template_card:{card_type:'button_interaction' as const,main_title:{title:'核对本人报数'},task_id:'report-'+report.id+'-'+hash(JSON.stringify([context.channel.corpId,event.botId,event.memberId,event.messageId,event.reqId])).slice(0,32),button_list:[{text:'确认入账',key:'confirm:'+report.hash,style:1 as const}]}}:{})}}});
   const view=(r:StaffReport):BotReportResult=>{
    const complete=r.proposed.items.length>0&&r.proposed.items.length<=10&&r.proposed.missing.length===0;
@@ -89,6 +91,7 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
     if(reservedReply)return structuredClone(reservedReply);
     if(!conversations){const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay?.cached)return structuredClone(replay.cached);}
     if(conversationResult?.reply)return plan('needs-input',conversationResult.reply);
+    if(selectHint)return plan('needs-input','请先发送：岗位 内容营销（或其他已开通岗位），再发送你的问题。');
     if(taskCommand)return plan('needs-input','正在核实任务。');
     if(event.action.kind==='confirm'){
      const r=owned(event.action.reportId);if(!r)return plan('not-found','未找到你有权访问的报告，请核对报告编号。');

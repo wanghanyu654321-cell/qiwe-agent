@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import childProcess from 'node:child_process';
 import {syncBuiltinESMExports} from 'node:module';
-import {admitControlledRealDockerRun,admitDockerControl,admitDockerShell,admitLocalDockerSpawn} from './real-container-boundary.mjs';
+import {admitControlledRealDockerRun,frontClawArgs,frontClawName,admitDockerControl,admitDockerShell,admitLocalDockerSpawn} from './real-container-boundary.mjs';
 import {inspectLocalDockerReceipt,translateLocalMounts,localDocker,localEndpoint} from './full-host-local-docker.mjs';
 
 let transportInstalled=false;
@@ -25,26 +25,29 @@ export function installControlledRealContainerTransport(options){
  if(receipt.version!==3||JSON.stringify(receipt.controlledRealPilot)!==JSON.stringify(scope))fail('SCOPE');
  const facts=inspectLocalDockerReceipt(receipt);
  const originals=Object.fromEntries(['spawn','exec','execFile','execFileSync','execSync','spawnSync','fork'].map(name=>[name,childProcess[name]]));
- const owned=new Set(),prefix='miniclaw-'+folder+'-';let expectedMounts,gate,started=false,active=false,exited=false,closed=false,child;
- const route=(command,args)=>['--host',localEndpoint,...admitDockerControl(command,args,owned,prefix)];
+ const owned=new Set(),prefix='frontclaw-'+folder+'-';let expectedMounts,gate,started=false,active=false,exited=false,closed=false,child;
+ const route=(command,args)=>['--host',localEndpoint,...admitDockerControl(command,frontClawArgs(args,prefix),owned,prefix)];
  const ports={
   execFileSync:(command,args,...rest)=>originals.execFileSync(localDocker,route(command,args),...rest),
   execFile:(command,args,...rest)=>originals.execFile(localDocker,route(command,args),...rest),
-  exec:(command,...rest)=>originals.execFile(localDocker,['--host',localEndpoint,...admitDockerShell(command,owned,prefix)],...rest),
+  exec:(command,...rest)=>originals.execFile(localDocker,['--host',localEndpoint,...admitDockerShell(frontClawName(command,prefix),owned,prefix)],...rest),
   spawn:(command,args,spawnOptions)=>{
+   args=frontClawArgs(args,prefix);
+   // One live owned runner at a time. After it exits, a later conversation turn
+   // may spawn again under the same pilot scope until expiry or close().
    admitLocalDockerSpawn(command,args,spawnOptions,{ready:active&&gate?.phase()==='ready'&&Date.now()<scope.expiresAt,alreadyStarted:started,ownedContainerPrefix:prefix});
    const identity=JSON.parse(originals.execFileSync(localDocker,['--host',localEndpoint,'info','--format','{{json .SecurityOptions}}'],{encoding:'utf8',timeout:20000}));
    if(!Array.isArray(identity)||identity.some(value=>/rootless|userns/i.test(value)))fail('IDENTITY');
    const admitted=admitControlledRealDockerRun(args,{root,preload,modelModule,image,runId:scope.runId,controlledRealPilot:scope,maxRequests:8,maxOutputTokens:1024,originalShell,expectedMounts,expectedIdentity:'direct',expectedUid:1000,expectedGid:1000,ownedContainerPrefix:prefix});
    const translated=translateLocalMounts(admitted.args,facts.mountpoint);
-   // Reserve the only runner before any daemon side effect; unknown failures
-   // cannot become automatic retries or consume a fresh model allowance.
-   started=true;
+   // Reserve the current runner slot before any daemon side effect; unknown
+   // failures cannot become automatic retries or stack a second live runner.
+   started=true;exited=false;
    const fd=fs.openSync(manifest,fs.constants.O_WRONLY|fs.constants.O_APPEND|fs.constants.O_NOFOLLOW);
    try{const stat=fs.fstatSync(fd);if(!stat.isFile()||stat.nlink!==1)fail('MANIFEST');fs.writeSync(fd,admitted.name+'\n');}finally{fs.closeSync(fd);}
    owned.add(admitted.name);
    child=originals.spawn(localDocker,['--host',localEndpoint,...translated],spawnOptions);
-   child.once('close',()=>{exited=true;owned.delete(admitted.name);});
+   child.once('close',()=>{exited=true;started=false;owned.delete(admitted.name);});
    return child;
   },
  };
