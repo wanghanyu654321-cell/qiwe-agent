@@ -9,6 +9,9 @@ import {createBotConversationDelivery} from './wecom-bot-delivery.js';
 import type {BotConversationIntakePort,BotConversationReceipt,BotRoleWorkspacePort} from './wecom-bot-conversations.js';
 import type {BotConversationActor,BotTaskStore} from './wecom-bot-task-store.js';
 
+import {startPendingReportSweeper,type PendingReportOwner} from './wecom-bot-task-store.js';
+import type {BotReportExtractor} from './wecom-bot-report-model.js';
+export {createModelReportExtractor} from './wecom-bot-report-model.js';
 export interface WecomBotPilotExecution {
   /** Borrowed original queue identity. The pilot never controls its lifecycle. */
   readonly queue: unknown;
@@ -24,7 +27,9 @@ export interface WecomBotPilotOptions {
   identity: WecomBotAssemblyOptions['identity'];
   /** Trusted outbound subject; incoming subjects still come from SDK events. */
   readSubject: WecomBotContextOptions['readSubject'];
-  business: Pick<WecomBotAssemblyOptions['businesses'][number], 'scope' | 'employees' | 'ledger'> & {store: BotTaskStore};
+  business: Pick<WecomBotAssemblyOptions['businesses'][number], 'scope' | 'employees' | 'ledger'> & {store: BotTaskStore; reportExtractor?: BotReportExtractor; summaryReadOnly?: boolean};
+  /** Pending-report reminder/expiry scheduler in this long-running process (default every 90 s). `false` disables it. */
+  pendingSweep?: false | {intervalMs?: number; remindAfterMs?: number; endHour?: number; now?: () => Date};
   initializeExecution(options: {
     mode: 'isolated-synthetic';
     authorize(receipt: (BotConversationReceipt & {actor: BotConversationActor}) | undefined): boolean;
@@ -73,6 +78,7 @@ function createPilot(options:SharedPilotOptions) {
   let assembly: ReturnType<typeof createWecomBotAssembly> | undefined;
   let authority: ReturnType<typeof createWecomBotContext> | undefined;
   let sender: ReturnType<typeof createBotSender> | undefined;
+  let sweeper: ReturnType<typeof startPendingReportSweeper> | undefined;
   let adapter: ReturnType<typeof createBotSdkAdapter> | undefined;
   let delivery: Delivery | undefined;
   const pending = new Set<Promise<unknown>>(), physical = new Set<Promise<void>>();
@@ -93,7 +99,7 @@ function createPilot(options:SharedPilotOptions) {
   function stopOwned() {
     stopped = true;
     const errors: unknown[] = [];
-    for (const close of [() => assembly?.close(), () => sender?.close(), () => adapter?.close(), () => authority?.close()]) {
+    for (const close of [() => {void sweeper?.stop();}, () => assembly?.close(), () => sender?.close(), () => adapter?.close(), () => authority?.close()]) {
       try {close();} catch (error) {errors.push(error);}
     }
     if (errors.length) throw new AggregateError(errors, 'pilot_cleanup_failed');
@@ -159,8 +165,18 @@ function createPilot(options:SharedPilotOptions) {
             readSubject: scope => track(readSubject(scope), recoveryReads.getStore()), readBinding: (subject, scope) => track(identity.readBinding(subject, scope), recoveryReads.getStore()), readNative: (id, scope) => track(identity.readNative(id, scope), recoveryReads.getStore())});
           delivery = createBotConversationDelivery({authority, ledger: business.ledger, sender, intake, gate: deliveryGate, scope: business.scope, employees: business.employees});
           const assemblyOptions={botId, corpId, client, identity,
-            businesses: [{scope: business.scope, employees: business.employees, ledger: business.ledger, conversations: {store: business.store, native: roles, intake, deliveryGate: execution.gate}}], sender: {sdk}, executionBoundary: boundary, ...(requestTimeoutMs !== undefined ? {requestTimeoutMs} : {}), ...(onOutcome ? {onOutcome} : {})};
+            businesses: [{scope: business.scope, employees: business.employees, ledger: business.ledger, conversations: {store: business.store, native: roles, intake, deliveryGate: execution.gate, ...(business.reportExtractor ? {reportExtractor: business.reportExtractor} : {}), ...(business.summaryReadOnly ? {summaryReadOnly: true} : {})}}], sender: {sdk}, executionBoundary: boundary, ...(requestTimeoutMs !== undefined ? {requestTimeoutMs} : {}), ...(onOutcome ? {onOutcome} : {})};
           assembly=real?createControlledRealWecomBotAssembly({...assemblyOptions,mode:'controlled-real-pilot',memberId:real.memberId}):createWecomBotAssembly({...assemblyOptions,mode:'isolated-synthetic'});
+          const pendingReports = business.store.pendingReports, sweep = options.pendingSweep;
+          if (sweep !== false && pendingReports) {
+            const owned = (o: PendingReportOwner) => o.botId === botId && o.corpId === corpId && o.tenant === business.scope.tenant && o.store === business.scope.store && o.workspace === business.scope.workspace;
+            sweeper = startPendingReportSweeper({store: pendingReports, filter: owned, shouldRun: active, ...(sweep ?? {}),
+              deliver: async action => {
+                const target = sender; if (!active() || !target) throw Error('pilot_not_active');
+                const outcome = await target.notify(action.record.owner.memberId, action.message, {signal: AbortSignal.timeout(10000), deadline: performance.now() + 10000}, async () => {if (!active()) throw Error('pilot_not_active');});
+                if (outcome.state !== 'accepted') throw Error('pending_notice_failed');
+              }});
+          }
           return {close: stopOwned, idle};
         } catch (error) {
           try {stopOwned();} catch (cleanupError) {throw new AggregateError([error, cleanupError], 'pilot_assembly_cleanup_failed');}
@@ -192,7 +208,7 @@ export function createControlledRealWecomBotPilot(options:ControlledRealWecomBot
   if(options.mode!=='controlled-real-pilot'||!a||a.mode!=='controlled-real-pilot'||a.environment!=='local-test'||
     ![a.runId,a.botId,a.corpId,a.memberId,a.accountId,a.tenantId,a.storeId,a.configVersion,a.credentialFingerprint,a.workspaceFingerprint].every(valid)||
     !Number.isSafeInteger(a.expiresAt)||a.expiresAt<=Date.now()||a.expiresAt>Date.now()+3_600_000||!Number.isSafeInteger(a.bindingVersion)||a.bindingVersion<1||
-    !Array.isArray(a.roles)||!a.roles.length||new Set(a.roles).size!==a.roles.length||a.roles.some(r=>!['marketing','ads','manager'].includes(r))||
+    !Array.isArray(a.roles)||!a.roles.length||new Set(a.roles).size!==a.roles.length||a.roles.some(r=>!['reception','frontdesk','marketing','ads','manager','qa','training'].includes(r))||
     typeof options.secret!=='string'||!options.secret.trim()||['createClient','connect','disconnect','readSubject'].some(k=>k in options)||
     options.identity.tenantId!==a.tenantId||!a.roles.every(r=>options.identity.roles.includes(r))||!options.identity.stores.some(s=>s.id===a.storeId)||
     options.business.scope.tenant!==a.tenantId||options.business.scope.store!==a.storeId||options.business.employees.length!==1||options.business.employees[0]?.accountId!==a.accountId)

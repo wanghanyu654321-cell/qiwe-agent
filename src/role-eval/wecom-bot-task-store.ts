@@ -98,9 +98,13 @@ function cancelOutcome(value:unknown):BotTaskCancelOutcome{
 /** Durable channel references only; no backend execution, scheduler or retries. */
 export class BotTaskStore {
  private db:DatabaseSync;
+ private readonly file:string;
+ private pending?:BotPendingReports;
+ /** Unconfirmed report pointers in the same persisted file; tables are created on first use only. */
+ get pendingReports():BotPendingReports{return this.pending??=new BotPendingReports(this.file);}
  constructor(file:string){
   check(typeof file==='string'&&file.trim().length>0&&!file.includes('\u0000'));
-  this.db=new DatabaseSync(file);
+  this.file=file;this.db=new DatabaseSync(file);
   try{this.db.exec('PRAGMA busy_timeout=3000; CREATE TABLE IF NOT EXISTS bot_task_refs(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bot_conversation_events(id TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bot_conversation_current(id TEXT PRIMARY KEY,event_id TEXT NOT NULL);');}catch(error){this.db.close();throw error;}
  }
  private transaction<T>(work:()=>T,guard?:()=>void):T{
@@ -229,5 +233,127 @@ export class BotTaskStore {
    this.db.prepare('DELETE FROM bot_conversation_current WHERE id=?').run(key);return {state:'exited'};
   },guard);
  }
- close():void{this.db.close();}
+ close():void{this.pending?.closeStore();this.db.close();}
+}
+
+/**
+ * Per employee/conversation pointer to a ManagerStore report that is still `pending` (unconfirmed).
+ * The ledger stays the system of record: a pending ledger report never counts in summaries.
+ * This table only tracks which pending report the next 「对」/「确认」/「改」 refers to, plus the
+ * reminder/expiry lifecycle. It lives in the same persisted SQLite file as BotTaskStore.
+ */
+export interface PendingReportOwner {tenant:string;store:string;workspace:string;employeeId:string;corpId:string;botId:string;memberId:string;accountId:string;}
+export type PendingReportState='pending'|'confirmed'|'replaced'|'expired';
+export interface PendingReportRecord {key:string;owner:PendingReportOwner;reportId:string;reportHash:string;businessDate:string;createdAt:string;remindedAt?:string;state:PendingReportState;closedAt?:string;}
+export interface PendingSweepAction {kind:'remind'|'expire';record:PendingReportRecord;message:string;}
+export const PENDING_REMIND_AFTER_MS=30*60*1000;
+const sha=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
+const valid=(v:unknown)=>typeof v==='string'&&!!v.trim()&&v.length<=200&&!/[\u0000-\u001f]/.test(v);
+export function pendingOwnerKey(owner:PendingReportOwner):string{
+ const fields=[owner.tenant,owner.store,owner.workspace,owner.employeeId,owner.corpId,owner.botId,owner.memberId,owner.accountId];
+ if(!fields.every(valid))throw Error('invalid_pending_owner');
+ return sha(['bot-pending-report',...fields]);
+}
+/** Business day in Asia/Shanghai for an instant. */
+export function businessDate(at:Date):string{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(at);}
+export class BotPendingReports {
+ private db:DatabaseSync;
+ constructor(file:string){
+  if(typeof file!=='string'||!file.trim()||file.includes('\u0000'))throw Error('invalid_pending_store');
+  this.db=new DatabaseSync(file);
+  try{this.db.exec('PRAGMA busy_timeout=3000; CREATE TABLE IF NOT EXISTS bot_pending_reports(key TEXT PRIMARY KEY,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bot_pending_report_history(id INTEGER PRIMARY KEY AUTOINCREMENT,key TEXT NOT NULL,body TEXT NOT NULL);');}catch(error){this.db.close();throw error;}
+ }
+ private tx<T>(work:()=>T,guard?:()=>void):T{this.db.exec('BEGIN IMMEDIATE');try{guard?.();const r=work();guard?.();this.db.exec('COMMIT');return r;}catch(e){this.db.exec('ROLLBACK');throw e;}}
+ private row(key:string):PendingReportRecord|undefined{const r=this.db.prepare('SELECT body FROM bot_pending_reports WHERE key=?').get(key) as {body:string}|undefined;return r?JSON.parse(r.body) as PendingReportRecord:undefined;}
+ /** Conditional update: applies only if the row is still exactly `previous` and still pending. */
+ private transition(previous:PendingReportRecord,next:PendingReportRecord):boolean{
+  if(previous.state!=='pending')return false;
+  const changed=this.db.prepare("UPDATE bot_pending_reports SET body=? WHERE key=? AND body=? AND json_extract(body,'$.state')='pending'").run(JSON.stringify(next),previous.key,JSON.stringify(previous)).changes;
+  if(Number(changed)!==1)return false;
+  this.db.prepare('INSERT INTO bot_pending_report_history(key,body) VALUES (?,?)').run(next.key,JSON.stringify(next));return true;
+ }
+ private write(record:PendingReportRecord){
+  this.db.prepare('INSERT INTO bot_pending_reports(key,body) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body').run(record.key,JSON.stringify(record));
+  this.db.prepare('INSERT INTO bot_pending_report_history(key,body) VALUES (?,?)').run(record.key,JSON.stringify(record));
+ }
+ /** The open pending report for this owner, or undefined. A record from an earlier business day is never open. */
+ current(owner:PendingReportOwner,now:Date):PendingReportRecord|undefined{
+  const r=this.row(pendingOwnerKey(owner));
+  return r&&r.state==='pending'&&r.businessDate===businessDate(now)?r:undefined;
+ }
+ /** Opens a new pending pointer; an existing open one is closed as `replaced` (kept in history). */
+ open(owner:PendingReportOwner,report:{id:string;hash:string},now:Date,guard?:()=>void):PendingReportRecord{
+  const key=pendingOwnerKey(owner);
+  if(!/^[a-f0-9]{64}$/.test(report.id)||!/^[a-f0-9]{64}$/.test(report.hash))throw Error('invalid_pending_report');
+  return this.tx(()=>{
+   const previous=this.row(key),at=now.toISOString();
+   if(previous?.state==='pending'&&previous.reportId===report.id)return previous;
+   if(previous?.state==='pending'&&!this.transition(previous,{...previous,state:'replaced',closedAt:at}))throw Error('pending_report_conflict');
+   const next:PendingReportRecord={key,owner:{...owner},reportId:report.id,reportHash:report.hash,businessDate:businessDate(now),createdAt:at,state:'pending'};
+   this.write(next);return next;
+  },guard);
+ }
+ close(owner:PendingReportOwner,reportId:string,state:'confirmed'|'expired',now:Date,guard?:()=>void):PendingReportRecord|undefined{
+  const key=pendingOwnerKey(owner);
+  return this.tx(()=>{const r=this.row(key);if(!r||r.reportId!==reportId||r.state!=='pending')return undefined;const next={...r,state,closedAt:now.toISOString()};return this.transition(r,next)?next:undefined;},guard);
+ }
+ history(owner:PendingReportOwner):PendingReportRecord[]{
+  return (this.db.prepare('SELECT body FROM bot_pending_report_history WHERE key=? ORDER BY id').all(pendingOwnerKey(owner)) as {body:string}[]).map(r=>JSON.parse(r.body) as PendingReportRecord);
+ }
+ /**
+  * Reminder/expiry transitions, driven by `startPendingReportSweeper` in the long-running process:
+  * one reminder 30 minutes after an unconfirmed echo; at the end of its business day
+  * (Asia/Shanghai, `endHour` 0-24) it expires without being saved.
+  * Returns the messages the caller must deliver; delivery is the caller's job.
+  */
+ sweep(now:Date,options:{remindAfterMs?:number;endHour?:number;filter?:(owner:PendingReportOwner)=>boolean}={}):PendingSweepAction[]{
+  const remindAfter=options.remindAfterMs??PENDING_REMIND_AFTER_MS,endHour=options.endHour??24;
+  if(!Number.isFinite(remindAfter)||remindAfter<0||!Number.isInteger(endHour)||endHour<0||endHour>24)throw Error('invalid_pending_sweep');
+  const today=businessDate(now),hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',hourCycle:'h23'}).format(now));
+  return this.tx(()=>{
+   const actions:PendingSweepAction[]=[],at=now.toISOString();
+   for(const {body} of this.db.prepare("SELECT body FROM bot_pending_reports WHERE json_extract(body,'$.state')='pending'").all() as {body:string}[]){
+    const r=JSON.parse(body) as PendingReportRecord;
+    if(options.filter&&!options.filter(r.owner))continue;
+    if(r.businessDate<today||r.businessDate===today&&hour>=endHour){
+     const next={...r,state:'expired' as const,closedAt:at};if(!this.transition(r,next))continue;
+     actions.push({kind:'expire',record:next,message:`你在${r.businessDate}发送的报数一直未确认，已作废，未入账、不计入汇总。如需记录，请重新发送完整报数。`});
+    }else if(!r.remindedAt&&now.getTime()-Date.parse(r.createdAt)>=remindAfter){
+     const next={...r,remindedAt:at};if(!this.transition(r,next))continue;
+     actions.push({kind:'remind',record:next,message:`你有一条报数尚未确认（报告编号：${r.reportId}）。回复「对」或「确认」入账，回复「改」修正；当天营业结束仍未确认将作废。`});
+    }
+   }
+   return actions;
+  });
+ }
+ closeStore():void{this.db.close();}
+}
+
+export interface PendingReportSweeperOptions {
+ store:Pick<BotPendingReports,'sweep'>;
+ /** Delivers one reminder/expiry message. Failures are swallowed; a state change is never retried (at most once). */
+ deliver(action:PendingSweepAction):Promise<unknown>|unknown;
+ /** Default 90 s (allowed 1 s - 10 min for tests and operators). */
+ intervalMs?:number;remindAfterMs?:number;endHour?:number;now?:()=>Date;
+ filter?:(owner:PendingReportOwner)=>boolean;
+ /** When false the tick is skipped entirely (no state change), e.g. while the bot connection is not active. */
+ shouldRun?:()=>boolean;
+ onError?(error:unknown):void;
+}
+/** Periodic sweep in the long-running bot process. Safe to run concurrently: transitions are conditional. */
+export function startPendingReportSweeper(options:PendingReportSweeperOptions){
+ const intervalMs=options.intervalMs??90_000,now=options.now??(()=>new Date());
+ if(!options?.store||typeof options.deliver!=='function'||!Number.isInteger(intervalMs)||intervalMs<1||intervalMs>600_000)throw Error('invalid_pending_sweeper');
+ let stopped=false,running:Promise<PendingSweepAction[]>|undefined;
+ const tick=():Promise<PendingSweepAction[]>=>{if(running)return running;const work=(async()=>{
+  await Promise.resolve();
+  try{
+   if(stopped||(options.shouldRun&&!options.shouldRun()))return [];
+   const actions=options.store.sweep(now(),{...(options.remindAfterMs!==undefined?{remindAfterMs:options.remindAfterMs}:{}),...(options.endHour!==undefined?{endHour:options.endHour}:{}),...(options.filter?{filter:options.filter}:{})});
+   for(const action of actions){try{await options.deliver(action);}catch(error){options.onError?.(error);}}
+   return actions;
+  }catch(error){options.onError?.(error);return [];}
+ })();running=work;void work.finally(()=>{if(running===work)running=undefined;});return work;};
+ const timer=setInterval(()=>{void tick();},intervalMs);(timer as {unref?:()=>void}).unref?.();
+ return Object.freeze({tick,stop(){stopped=true;clearInterval(timer);return running??Promise.resolve([]);},get intervalMs(){return intervalMs;}});
 }

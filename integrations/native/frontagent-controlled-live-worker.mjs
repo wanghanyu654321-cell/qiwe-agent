@@ -116,6 +116,7 @@ export async function startControlledLiveWorker(options){
   pilot=await prepareExistingFrontagentPilot({descriptor,gate:host.fullHostBootGate,db,host,grants,ledger,tasks,
    readBindings:()=>JSON.parse(fs.readFileSync(bindingFile,'utf8')),readApproved:()=>JSON.parse(fs.readFileSync(approvedFile,'utf8')),
    readCredentials:checkedCredentials,runId:scope.runId,expiresAt:scope.expiresAt,journalDirectory:path.join(root,'unused-existing-role-journal'),modules,
+   ...(typeof botPilot.createModelReportExtractor==='function'?{reportExtractor:botPilot.createModelReportExtractor({baseUrl:model.baseUrl,model:model.model,readApiKey:()=>{const m=readModelCredentials();return m&&m.apiKey===model.apiKey?m.apiKey:'';}})}:{}),
    ...(options.onDelivery?{onDelivery:(_id,result)=>options.onDelivery({states:(result.deliveries??[]).map(delivery=>delivery.state),deferred:!!result.deferred})}:{}),
    onOutcome:outcome=>{dbg('worker_outcome',{state:outcome?.state??null,detail:outcome?.detail??null,deliveryStates:(outcome?.result?.deliveries??[]).map(d=>d?.state)});if(options.onOutcome)return options.onOutcome(outcome);},
   });

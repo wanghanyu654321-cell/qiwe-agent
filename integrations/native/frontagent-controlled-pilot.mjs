@@ -1,4 +1,6 @@
 import {createHash} from 'node:crypto';
+const PILOT_KNOWN_ROLES=['reception','frontdesk','marketing','ads','manager','qa','training'];
+const pilotRolesOk=roles=>Array.isArray(roles)&&roles.length>0&&new Set(roles).size===roles.length&&roles.every(r=>PILOT_KNOWN_ROLES.includes(r))&&roles.includes('marketing');
 
 const dbg=(event,fields={})=>{if(process.env.WECOM_DEBUG==='1')try{console.log('WECOM_DEBUG '+JSON.stringify({t:new Date().toISOString(),event,...fields}));}catch{}};
 const mask=v=>typeof v==='string'&&v?'***'+(v.length>=12?v.slice(-4):'')+'(len='+v.length+')':'<none>';
@@ -28,7 +30,7 @@ export async function prepareExistingFrontagentPilot(options){
  const binding=structuredClone(rows[0]);
  const grant=grants.get(descriptor.accountId);
  dbg('provision_grant',{active:!!grant?.active,storeMatch:grant?.storeId===descriptor.storeId,roles:grant?.roles,version:grant?.version});
- if(!grant?.active||grant.storeId!==descriptor.storeId||grant.roles?.length!==1||grant.roles[0]!=='marketing'||!Number.isSafeInteger(grant.version))throw denied();
+ if(!grant?.active||grant.storeId!==descriptor.storeId||!pilotRolesOk(grant.roles)||!Number.isSafeInteger(grant.version))throw denied();
  const grantVersion=grant.version;
  const verifyResources=()=>{
   const user=db.getUserById(descriptor.accountId),homes=db.getGroupsByOwner(descriptor.accountId),group=db.getRegisteredGroup(descriptor.workspaceJid),profile=db.getAgentProfileForUser(descriptor.profileId,descriptor.accountId);
@@ -46,13 +48,13 @@ export async function prepareExistingFrontagentPilot(options){
   if(gate.phase()!=='ready'||Date.now()>=expiresAt)throw denied();
   const now=matching(),g=grants.get(descriptor.accountId),creds=readCredentials();
   if(now.length!==1||['botId','corpId','memberId','accountId','version'].some(key=>now[0][key]!==binding[key])||
-     !g?.active||g.version!==grantVersion||g.storeId!==descriptor.storeId||g.roles?.length!==1||g.roles[0]!=='marketing'||
+     !g?.active||g.version!==grantVersion||g.storeId!==descriptor.storeId||!pilotRolesOk(g.roles)||
      creds?.botId!==botId||creds?.corpId!==corpId||creds?.secret!==secret)throw denied();
   approval();verifyResources();
  };
  live();
  dbg('provision_live_ok',{memberId:mask(binding.memberId)});
- const identity={tenantId:descriptor.tenantId,stores:[{id:descriptor.storeId}],roles:['marketing'],store:grants,
+ const identity={tenantId:descriptor.tenantId,stores:[{id:descriptor.storeId}],roles:[...grant.roles],store:grants,
   readBinding:modules.createWecomBotBindingReader(async()=>readBindings()),
   readNative:async accountId=>{if(accountId!==descriptor.accountId)throw denied();live();return {user:db.getUserById(accountId),workspaceJid:descriptor.homeJid};}};
  const authority=modules.createControlledRealWecomBotContext({...identity,mode:'controlled-real-pilot',botId,corpId,readSubject:async()=>({botId,memberId:binding.memberId})});
@@ -72,8 +74,8 @@ export async function prepareExistingFrontagentPilot(options){
   const fingerprint=()=>{live();return {botId,corpId,ownerId:descriptor.accountId,configVersion:String(binding.version),credentialFingerprint:digest(secret),workspaceFingerprint:digest(descriptor.workspaceJid)};};
   const f=fingerprint();
   pilot=modules.createControlledRealWecomBotPilot({mode:'controlled-real-pilot',requestTimeoutMs:25000,
-   admission:{mode:'controlled-real-pilot',environment:'local-test',runId,expiresAt,botId,corpId,memberId:binding.memberId,accountId:descriptor.accountId,tenantId:descriptor.tenantId,storeId:descriptor.storeId,roles:['marketing'],bindingVersion:binding.version,configVersion:f.configVersion,credentialFingerprint:f.credentialFingerprint,workspaceFingerprint:f.workspaceFingerprint},
-   secret,identity,business:{scope:{tenant:descriptor.tenantId,store:descriptor.storeId,workspace:descriptor.homeJid},employees:[{...descriptor.employee,accountId:descriptor.accountId}],ledger,store:tasks},
+   admission:{mode:'controlled-real-pilot',environment:'local-test',runId,expiresAt,botId,corpId,memberId:binding.memberId,accountId:descriptor.accountId,tenantId:descriptor.tenantId,storeId:descriptor.storeId,roles:[...grant.roles],bindingVersion:binding.version,configVersion:f.configVersion,credentialFingerprint:f.credentialFingerprint,workspaceFingerprint:f.workspaceFingerprint},
+   secret,identity,business:{scope:{tenant:descriptor.tenantId,store:descriptor.storeId,workspace:descriptor.homeJid},employees:[{...descriptor.employee,accountId:descriptor.accountId}],ledger,store:tasks,summaryReadOnly:true,...(typeof options.reportExtractor==='function'?{reportExtractor:options.reportExtractor}:{})},...(options.pendingSweep!==undefined?{pendingSweep:options.pendingSweep}:{}),
    initializeExecution:input=>{const execution=initialize(input);if(execution.queue!==host.fullHostQueue||execution.gate!==gate)throw Error('FRONTAGENT_HOST_EXECUTION_CHANGED');return execution;},
    authorize:receipt=>{try{live();return !!receipt&&receipt.role==='marketing'&&Object.entries(actor).every(([key,value])=>receipt.actor?.[key]===value);}catch{return false;}},
    createIntake:execution=>modules.createControlledRealBotConversationNativePort({mode:'controlled-real-pilot',gate:execution.gate,native:db,readActor,execution}),

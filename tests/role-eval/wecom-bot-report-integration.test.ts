@@ -33,7 +33,7 @@ it('reopens the explicit original ledger, grant and Native databases and queries
   text('今天销售成交88.88元','first');const pending=await app.handler.handle(request()),r=app.ledger.getReport(actor,pending.reportId!)!;
   frame={cmd:'aibot_event_callback',headers:{req_id:'confirmation'},body:{aibotid:'bot',msgid:'card',chattype:'single',from:{userid:'member'},msgtype:'event',event:{eventtype:'template_card_event',task_id:pending.reply.body.template_card!.task_id,event_key:'confirm:'+r.hash}}};
   expect((await app.handler.handle(request())).status).toBe('confirmed');app.close();app=open();
-  text('查询 '+r.id,'after-reopen');const result=await app.handler.handle(request());expect(result).toMatchObject({status:'confirmed',reportId:r.id});expect(result.reply.body.stream.content).toContain('88.88元');
+  text('查询 '+r.id,'after-reopen');const result=await app.handler.handle(request());expect(result).toMatchObject({status:'confirmed',reportId:r.id});expect(result.reply.body.stream.content).toContain('88.88 元');
   expect(app.ledger.getReport(actor,legacy.id)).toEqual(legacy);expect(app.ledger.getReport(actor,r.id)?.delivery).toMatchObject({state:'prepared',attempt:0});
   expect(readFileSync(nativeFile)).toEqual(nativeBefore);
   writer.exec("UPDATE users SET status='disabled' WHERE id='account'");await expect(app.handler.handle(request())).rejects.toThrow('access_denied');

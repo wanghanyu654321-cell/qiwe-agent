@@ -29,7 +29,7 @@ function setup(hooks:{upload?:()=>void|Promise<void>}={}){
 }
 it('prepares an explicit correction and only replaces the old entry after the existing confirmation',async()=>{
  const s=setup(),original=s.seed();s.text(`更正 ${original.id} 1 200元`);const pending=await s.app.handle(s.request());expect(pending.result.status).toBe('pending');
- const correction=s.ledger.getReport(s.actor,pending.result.reportId!)!;expect(correction.proposed.items[0]).toMatchObject({amountCents:20000,supersedes:original.entries[0]!.id});expect(pending.result.reply.body.stream.content).toContain('250.00元');expect(s.ledger.summary(s.actor,'2026-10-18','month').salesCents).toBe(25000);
+ const correction=s.ledger.getReport(s.actor,pending.result.reportId!)!;expect(correction.proposed.items[0]).toMatchObject({amountCents:20000,supersedes:original.entries[0]!.id});expect(pending.result.reply.body.stream.content).toContain('原 250 元 改为 200 元');expect(s.ledger.summary(s.actor,'2026-10-18','month').salesCents).toBe(25000);
  s.confirm(correction.id,correction.hash);expect((await s.app.handle(s.request())).result.status).toBe('confirmed');expect(s.ledger.summary(s.actor,'2026-10-18','month').salesCents).toBe(20000);
  s.text('查询 '+original.id);expect((await s.app.handle(s.request())).result.reply.body.stream.content).toContain('已更正');
 });

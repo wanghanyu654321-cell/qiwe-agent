@@ -73,7 +73,11 @@ function createSender(options:SenderOptions){
    if(typeof sdk.updateTemplateCard!=='function')return Promise.resolve(outcome('blocked','card_update_unavailable'));
    return execute(scope,beforeSend,child=>sdk.updateTemplateCard!({headers:{req_id:copy.reqId}},copy.update!,child),copy.reqId);
   }
-  return execute(scope,beforeSend,child=>sdk.reply({headers:{req_id:copy.reqId}},copy.body,child),copy.reqId);
+  const first=execute(scope,beforeSend,child=>sdk.reply({headers:{req_id:copy.reqId}},copy.body,child),copy.reqId);
+  if(copy.body.msgtype!=='stream_with_template_card')return first;
+  // A card the SDK refused before admission (never on the wire) falls back once to the same text as a plain stream.
+  const plain={msgtype:'stream' as const,stream:copy.body.stream};
+  return first.then(result=>result.state==='blocked'&&result.detail==='sdk_not_started'?execute(scope,beforeSend,child=>sdk.reply({headers:{req_id:copy.reqId}},plain,child),copy.reqId):result);
  },
  notify(member:string,content:string,scope:BotReadScope,beforeSend:(scope:BotReadScope)=>Promise<void>){
   if(!safe(member)||member.length>120||typeof content!=='string'||!content.trim()||Buffer.byteLength(content)>16384)throw Error('invalid_bot_reply');

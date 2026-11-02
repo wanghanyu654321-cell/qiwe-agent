@@ -33,7 +33,7 @@ it('reports, confirms server amounts and queries the same persistent report with
  const report=s.ledger.getReport(s.actor(),pending.reportId!)!;expect(report.proposed.items[0]?.amountCents).toBe(12345);expect(report.state).toBe('pending');
  s.card(report.id,report.hash);const confirmed=await s.handler.handle(s.request());expect(confirmed.status).toBe('confirmed');
  expect(s.ledger.getReport(s.actor(),report.id)?.entries[0]?.amountCents).toBe(12345);expect(s.ledger.getReport(s.actor(),report.id)?.delivery?.state).toBe('prepared');
- s.text('查询 '+report.id,'query');const query=await s.handler.handle(s.request());expect(query).toMatchObject({status:'confirmed',reportId:report.id});expect(query.reply.body.stream.content).toContain('123.45元');expect(query.reply.body.template_card).toBeUndefined();expect(query.reply.body.stream.content).not.toMatch(/https?:/);
+ s.text('查询 '+report.id,'query');const query=await s.handler.handle(s.request());expect(query).toMatchObject({status:'confirmed',reportId:report.id});expect(query.reply.body.stream.content).toContain('123.45 元');expect(query.reply.body.template_card).toBeUndefined();expect(query.reply.body.stream.content).not.toMatch(/https?:/);
 });
 it('replays text and confirmation without duplicating totals or consuming notification intent',async()=>{
  const s=setup();s.text();const first=await s.handler.handle(s.request());s.setTime(new Date('2026-10-18T01:00:00Z'));expect((await s.handler.handle(s.request())).reportId).toBe(first.reportId);
@@ -100,7 +100,7 @@ it('uses official task_id characters and separate card IDs for different query e
 it('returns the exact original integer cents even near the safe integer limit',async()=>{
  const s=setup();s.text('今天销售成交90071992547409.90元');const result=await s.handler.handle(s.request());
  expect(s.ledger.getReport(s.actor(),result.reportId!)?.proposed.items[0]?.amountCents).toBe(9007199254740990);
- expect(result.reply.body.stream.content).toContain('90071992547409.90元');
+ expect(result.reply.body.stream.content).toContain('90,071,992,547,409.90 元');
 });
 it('accepts the official nested card event and plans a private dedicated update with the original task id',async()=>{
  const s=setup();s.text();const pending=await s.handler.handle(s.request()),r=s.ledger.getReport(s.actor(),pending.reportId!)!;

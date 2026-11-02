@@ -1,0 +1,20 @@
+import {createRequire} from 'node:module';
+import {afterEach,expect,it} from 'vitest';
+import {createControlledRealBotSdkAdapter} from '../../src/role-eval/wecom-bot-sdk.js';
+import {createControlledRealBotSender} from '../../src/role-eval/wecom-bot-sender.js';
+const {WSClient}=createRequire(import.meta.url)('@wecom/aibot-node-sdk') as typeof import('@wecom/aibot-node-sdk');
+const cleanup:(()=>void)[]=[];afterEach(()=>{cleanup.splice(0).forEach(fn=>fn());});
+it('pilot SDK refuses a confirm card before admission; the sender resends the same text once as a plain stream',async()=>{
+ const client=new WSClient({botId:'bot',secret:'synthetic-placeholder',logger:{debug(){},info(){},warn(){},error(){}}});
+ const manager=Reflect.get(client,'wsManager') as any;Object.defineProperty(manager,'isConnected',{get:()=>true});
+ const sent:any[]=[];manager.sendReply=async(reqId:string,body:unknown,cmd:string)=>{sent.push(structuredClone({reqId,body,cmd}));return {headers:{req_id:reqId},errcode:0};};
+ const sdk=createControlledRealBotSdkAdapter({mode:'controlled-real-pilot',client,botId:'bot',corpId:'corp',memberId:'member',admit:()=>true});
+ cleanup.push(()=>sdk.close());client.emit('authenticated');
+ manager.onMessage({cmd:'aibot_msg_callback',headers:{req_id:'callback-1'},body:{msgid:'m1',aibotid:'bot',msgtype:'text',chattype:'single',from:{userid:'member',corpid:'corp'},text:{content:'今天销售4500'}}});
+ const content='今天销售 4,500 元，对吗？回「对」保存，回「改」修改';
+ const card={reqId:'callback-1',body:{msgtype:'stream_with_template_card' as const,stream:{id:'s',finish:true as const,content},template_card:{card_type:'button_interaction' as const,main_title:{title:'核对本人报数'},task_id:'report-x',button_list:[{text:'确认入账',key:'confirm:'+'a'.repeat(64),style:1 as const}]}}};
+ const sender=createControlledRealBotSender({sdk,timeoutMs:500});cleanup.unshift(()=>sender.close());
+ const result=await sender.reply(card,{signal:new AbortController().signal,deadline:performance.now()+3000},async()=>{});
+ expect(sent).toHaveLength(1);expect(sent[0].body).toEqual({msgtype:'stream',stream:{id:'s',finish:true,content}});
+ expect(result.state).toBe('accepted');
+});

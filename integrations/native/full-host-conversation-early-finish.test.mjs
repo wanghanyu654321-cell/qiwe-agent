@@ -12,7 +12,7 @@ const runner=tree.statements.filter(node=>ts.isVariableStatement(node)&&node.dec
 assert.equal(runner.length,1);
 // Execute the actual generated full-host D3 runner with fake ports only.
 const body=ts.transpileModule(`async function exercise(ports:any){
- const {runContainerAgent,finishConversationBatch,assertConversationBatchCurrent,conversationBatchActive,noteConversationSession,invalidateConversationProjection,logger}=ports;
+ const {runContainerAgent,finishConversationBatch,hasQueuedConversationReceipt,queue,assertConversationBatchCurrent,conversationBatchActive,noteConversationSession,invalidateConversationProjection,logger}=ports;
  let d3TerminalRunner:any=undefined;let d5OnCompleted:any=ports.onCompleted;
  ${runner[0].getText(tree)}
  return d3Runner;
@@ -20,7 +20,7 @@ const body=ts.transpileModule(`async function exercise(ports:any){
 return exercise;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText;
 const exercise=new Function(body)();
 const ports=()=>{const s={finished:[],notified:[],outputs:[],release:undefined};
- s.ports={finishConversationBatch:(...a)=>{s.finished.push(a);return a[2]==='completed'?['receipt-1']:[];},assertConversationBatchCurrent:()=>{},conversationBatchActive:()=>true,
+ s.ports={hasQueuedConversationReceipt:()=>false,queue:{enqueueMessageCheck:()=>{}},finishConversationBatch:(...a)=>{s.finished.push(a);return a[2]==='completed'?['receipt-1']:[];},assertConversationBatchCurrent:()=>{},conversationBatchActive:()=>true,
   noteConversationSession:()=>{},invalidateConversationProjection:()=>{},logger:{warn:()=>{}},onCompleted:ids=>{s.notified.push(ids);},
   runContainerAgent:async(_g,_i,_p,onOutput)=>{await onOutput({status:'success',result:'synthetic',inputTurnCompleted:true,inputTurnId:'turn-1',turnId:'turn-1',newSessionId:'session-1'});return new Promise(r=>{s.release=r;});}};
  return s;};

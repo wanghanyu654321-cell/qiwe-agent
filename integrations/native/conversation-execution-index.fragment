@@ -5,7 +5,7 @@ let d3Bound=false;
 let d5OnCompleted:((ids:string[])=>Promise<void>|void)|undefined;
 const d3Runner:typeof runContainerAgent=async(group,input,onProcess,onOutput,ownerHomeFolder)=>{
  // Scoped inside d3Runner so extracted/executed runner text is self-contained.
- const FRONT_CLAW_IDENTITY='你是 Front Claw，门店前台岗位助理；请按当前岗位职责、已审资料与授权范围回答。';
+ const FRONT_CLAW_IDENTITY='你是 Front Claw，门店岗位助理；请按当前岗位职责、已审资料与授权范围回答。回复要求：像门店同事一样用口语短句，一般不超过5行；不用表格、标题或加粗；不提系统、模型、会话、编号、版本等内部信息；不要说已记下、已保存或已入账，报数只由确认流程保存；不知道就直说，并给一个下一步。';
  const withFrontClawIdentity=<T extends {prompt:string}>(input:T):T=>typeof input.prompt!=='string'||input.prompt.startsWith(FRONT_CLAW_IDENTITY)?input:{...input,prompt:FRONT_CLAW_IDENTITY+'\n\n'+input.prompt};
  if(!d3TerminalRunner||!input.queryRunId||!input.turnId)throw Error('D3_NOT_BOUND');
  const queryId=input.queryRunId,initialTurnId=input.turnId;

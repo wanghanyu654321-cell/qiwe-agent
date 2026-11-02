@@ -97,7 +97,7 @@ it('routes selected natural text to a fixed Native receipt and resolves it after
  s.offline.frame(text('member-a','select-receipt','岗位 内容营销'));await app.idle();
  const before=s.counts().reports;s.offline.frame(text('member-a','d2-natural','写三条朋友圈文案'));await app.idle();
  const reply=JSON.stringify(s.offline.sent.at(-1)?.body),receiptId=createHash('sha256').update(JSON.stringify(['corp','bot','member-a','d2-natural'])).digest('hex');
- expect(reply).toContain(receiptId);expect(reply).toContain('已保存需求');expect(reply).toContain('本次未生成答案');
+ expect(reply).toContain('收到，正在处理');expect(reply).not.toContain(receiptId);
  expect(receipts.get(receiptId)).toMatchObject({role:'marketing',workspaceJid:'web:marketing-a',profileId:'profile-a'});expect(submits).toBe(1);expect(s.counts().reports).toBe(before);
  s.offline.frame(text('member-a','d2-natural','报数 本月销售100元'));await app.idle();
  expect(s.outcomes.at(-1)?.detail).toBe('bot_reply_conflict');expect(submits).toBe(1);expect(s.counts().reports).toBe(before);
@@ -197,7 +197,7 @@ it('gives a deterministic lookup hint for an unconfirmed Native submit without r
  s.offline.frame(text('member-a','uncertain-select','岗位 内容营销'));await app.idle();
  const before=s.counts().reports;s.offline.frame(text('member-a','uncertain-submit','写文案'));await app.idle();
  const id=createHash('sha256').update(JSON.stringify(['corp','bot','member-a','uncertain-submit'])).digest('hex');
- expect(s.outcomes.at(-1)?.state).toBe('handled');expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('受理结果待核实');expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain(id);
+ expect(s.outcomes.at(-1)?.state).toBe('handled');expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('处理状态暂时无法确认');expect(JSON.stringify(s.offline.sent.at(-1)?.body)).not.toContain(id);
  expect(submits).toBe(1);expect(s.counts().reports).toBe(before);
  s.offline.frame(text('member-a','bad-query','查询对话 bad'));await app.idle();
  expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('完整编号');expect(submits).toBe(1);expect(s.counts().reports).toBe(before);
@@ -206,8 +206,8 @@ it('keeps a completed unknown conversation reply out of original reporting on re
  const s=setup();s.app.close();let submissions=0;
  const app=createWecomBotAssembly({...s.options,businesses:s.options.businesses.map(b=>({...b,conversations:{store:s.tasks,native:{async readRoleWorkspace(){return {state:'ready' as const,workspaceJid:'web:marketing-a',profileId:'profile-a',ownerAccountId:'a',storeId:'store-b',role:'marketing' as const};},async prepareRoleWorkspace(){throw Error('unexpected_create');}},intake:{async readReceipt(){return undefined;},async submitMessage(){submissions++;throw Error('synthetic_unknown');}}}}))});cleanup.push(()=>app.close());s.offline.authenticate();
  s.offline.frame(text('member-a','unknown-conversation-select','岗位 内容营销'));await app.idle();
- const source=text('member-a','unknown-conversation','本月销售100元');s.offline.frame(source);await app.idle();
- expect(s.counts().reports).toBe(0);expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('受理结果待核实');
+ const source=text('member-a','unknown-conversation','本月销售怎么提升');s.offline.frame(source);await app.idle();
+ expect(s.counts().reports).toBe(0);expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('处理状态暂时无法确认');
  s.offline.frame(source);await app.idle();
  expect(submissions).toBe(1);expect(s.counts().reports).toBe(0);expect(s.outcomes.at(-1)?.state).toBe('handled');
 });
@@ -228,7 +228,7 @@ it('reconciles a reserved delivery against Native before deciding whether to sub
  const selected=s.tasks.currentConversation({tenantId:'tenant',storeId:'store-b',accountId:'a',corpId:'corp',botId:'bot',memberId:'member-a',bindingVersion:1,grantVersion:1})!;
  receipt={receiptId:id,messageId:'native-input-uuid',acceptedAt:'2026-10-22T00:00:00.000Z',state:'accepted',role:'marketing',workspaceJid:'web:marketing-a',profileId:'profile-a',selectionId:selected.eventId,fingerprint};
  s.offline.frame(source);await app.idle();
- expect(s.outcomes.at(-1)?.state).toBe('handled');expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('已保存需求');expect(submissions).toBe(0);expect(s.counts().reports).toBe(0);
+ expect(s.outcomes.at(-1)?.state).toBe('handled');expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('收到，正在处理');expect(submissions).toBe(0);expect(s.counts().reports).toBe(0);
 });
 it('retains the original gate ticket until a timed-out Native intake physically settles',async()=>{
  const s=setup();s.app.close();let release!:()=>void;const wait=new Promise<void>(resolve=>{release=resolve;});let started=false,entered=0,closed=0;
@@ -248,7 +248,7 @@ it('allows explicit reselection after a grant version change while stale ordinar
  }}}))});cleanup.push(()=>app.close());s.offline.authenticate();
  s.offline.frame(text('member-a','first-select','岗位 内容营销'));await app.idle();
  s.grants.change('admin',{accountId:'a',storeId:'store-b',roles:['marketing'],active:true,expectedVersion:1,requestKey:'remove-manager'});
- const before=s.counts().reports;s.offline.frame(text('member-a','stale-draft','本月销售100元'));await app.idle();
+ const before=s.counts().reports;s.offline.frame(text('member-a','stale-draft','本月销售怎么提升'));await app.idle();
  expect(s.outcomes.at(-1)?.state).toBe('rejected');expect(s.counts().reports).toBe(before);
  s.offline.frame(text('member-a','fresh-select','岗位 内容营销'));await app.idle();
  expect(JSON.stringify(s.offline.sent.at(-1)?.body)).toContain('已选择');

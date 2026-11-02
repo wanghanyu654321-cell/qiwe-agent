@@ -81,7 +81,7 @@ it.each(['absent','legacy-record'] as const)('shares original Web business facts
   expect(s.ledger.confirm(s.actor,original.id,original.hash,original.proposed.items)).toEqual(original);
   expect(s.ledger.list(s.actor)).toHaveLength(1);
   expect(original.source).toEqual(legacySource);expect(original.botSource).toBeUndefined();
-  const query=await s.text('查询 '+original.id);expect(query.result.reportId).toBe(original.id);expect(query.result.reply.body.stream.content).toContain('250.00元');
+  const query=await s.text('查询 '+original.id);expect(query.result.reportId).toBe(original.id);expect(query.result.reply.body.stream.content).toContain('250 元');
   const correctionReply=await s.text(`更正 ${original.id} 1 200元`),correction=s.ledger.getReport(s.actor,correctionReply.result.reportId!)!;
   expect(correctionReply.result.status).toBe('pending');expect(correction.correction).toEqual({reportId:original.id,entryId:original.entries[0]!.id,previousAmountCents:25000});
   expect(s.ledger.summary(s.actor,'2026-10-20','month').salesCents).toBe(25000);
@@ -99,7 +99,7 @@ it.each(['absent','legacy-record'] as const)('shares original Web business facts
   s.web(false);const stoppedCalls={...s.calls};s.reopen();
   expect((await s.text('查询 '+original.id)).result).toMatchObject({status:'confirmed',reportId:original.id});
   expect((await s.text('查询 '+original.id)).result.reply.body.stream.content).toContain('已更正');
-  expect((await s.text('查询 '+correction.id)).result.reply.body.stream.content).toContain('200.00元');
+  expect((await s.text('查询 '+correction.id)).result.reply.body.stream.content).toContain('200 元');
   expect((await s.text('查询汇总 '+snapshotId)).result.snapshotId).toBe(snapshotId);
   expect((await s.text('查询文件 '+snapshotId)).delivery?.state).toBe('accepted');
   expect(s.uploads).toHaveLength(2);expect(s.uploads[1]).toEqual(bytes);expect(s.files).toEqual(['member-employee','member-employee']);

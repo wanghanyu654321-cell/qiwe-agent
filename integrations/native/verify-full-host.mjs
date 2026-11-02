@@ -10,7 +10,7 @@ import {createFullHostCandidate} from './full-host-candidate.mjs';
 import {createRestorationSupervisorReceipt} from './full-host-restoration-supervisor.mjs';
 import {prepareOriginalPiRunner} from './role-capabilities-runner.mjs';
 import {d4OriginalHashes,d4SkillHashes} from './role-capabilities-overlay.mjs';
-import {applyFullHostPiDrain,applyFullHostPiAbort} from './full-host-restoration-pi-overlay.mjs';
+import {applyFullHostPiDrain,applyFullHostPiAbort,applyFullHostPiInputQueue} from './full-host-restoration-pi-overlay.mjs';
 import {verifyOriginalShellImage,prepareOriginalShellCandidate} from './original-shell.mjs';
 import {cleanupOwnedContainers} from './real-container-cleanup.mjs';
 import {prepareExistingFrontagentState,parseExistingFrontagentStateOption,disableExistingPilotPluginScan,restrictExistingPilotSessionKey,restrictExistingPilotSettings} from './frontagent-existing-state.ts';
@@ -70,7 +70,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  }
  const piRunner=options.restorationPiScenario||options.restorationRealContainer?prepareOriginalPiRunner({source,root:directory,skillRoot,trueMain:options.restorationRealContainer}):undefined;
  if(piRunner)fs.writeFileSync(piRunner.entryFile,applyFullHostPiDrain(fs.readFileSync(piRunner.entryFile,'utf8')));
- if(piRunner){const runtimeFile=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runner.ts');fs.writeFileSync(runtimeFile,applyFullHostPiAbort(fs.readFileSync(runtimeFile,'utf8')));}
+ if(piRunner){const runtimeFile=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runner.ts');fs.writeFileSync(runtimeFile,applyFullHostPiInputQueue(applyFullHostPiAbort(fs.readFileSync(runtimeFile,'utf8'))));}
  if(options.controlledRealPilot){const runtime=path.join(piRunner.runnerTarget,'src/runtime/pi/pi-runtime.ts');fs.writeFileSync(runtime,disableControlledRealPiRetries(fs.readFileSync(runtime,'utf8')));}
  let originalShell;
  if(options.restorationRealContainer){

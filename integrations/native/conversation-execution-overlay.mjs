@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 const once=(source,before,after)=>{if(source.split(before).length!==2)throw Error('D3_ANCHOR_CHANGED: '+before.slice(0,100));return source.replace(before,after);};
-export const FRONT_CLAW_IDENTITY='你是 Front Claw，门店前台岗位助理；请按当前岗位职责、已审资料与授权范围回答。';
+export const FRONT_CLAW_IDENTITY='你是 Front Claw，门店岗位助理；请按当前岗位职责、已审资料与授权范围回答。回复要求：像门店同事一样用口语短句，一般不超过5行；不用表格、标题或加粗；不提系统、模型、会话、编号、版本等内部信息；不要说已记下、已保存或已入账，报数只由确认流程保存；不知道就直说，并给一个下一步。';
 export function applyConversationExecution(files,native,{fullHost=false}={}){
  if(typeof fullHost!=='boolean')throw Error('D3_INVALID_FULL_HOST_SCOPE');
  for(const name of ['index.ts','group-queue.ts','conversation-history.ts'])if(!native.has(name))throw Error('D3_SOURCE_MISSING: '+name);
@@ -36,6 +36,15 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
     }`, '    // Do not convert legacy receipts into executable work during O startup.');
   db+=`\nexport function conversationBatchActive(chatJid:string,queryId:string):boolean {
  return !!db.prepare("SELECT 1 FROM wecom_conversation_execution WHERE workspace_jid=? AND query_id=? AND state IN ('running','cancelling') LIMIT 1").get(chatJid,queryId);
+}
+// A conversation receipt is owned by exactly one batch; it is never piped into
+// another receipt's running query (the runner would answer it under a foreign turn).
+export function conversationReceiptsInBatch(chatJid:string,messageIds:string[]):boolean {
+ const stmt=db.prepare('SELECT 1 FROM wecom_conversation_receipts WHERE message_id=? AND workspace_jid=? LIMIT 1');
+ return messageIds.some(id=>!!stmt.get(id,chatJid));
+}
+export function hasQueuedConversationReceipt(chatJid:string):boolean {
+ return !!db.prepare("SELECT 1 FROM wecom_conversation_execution WHERE workspace_jid=? AND state='queued' LIMIT 1").get(chatJid);
 }\n`;
  }
  db=once(db,'const rows = rawRows.map((r) => normalizeMessageRow(r));','const rows = rawRows.map((r) => normalizeMessageRow(r)).filter(r=>conversationMessageAllowed(r.id,r.chat_jid));');
@@ -51,10 +60,11 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
  // Legacy D3 retains N Web/queue compatibility. Full-host mode preserves O's
  // existing Web and queue gate and only adds a query-identity alias.
  let history=original('conversation-history.ts').replace("import { getMessagesPage }", "import { getMessagesPage, conversationMessageAllowed }");
+ history=history.replace("m.is_from_me ? 'Miniclaw' : m.sender_name","m.is_from_me ? 'Front Claw' : m.sender_name").replace('这些只是 Miniclaw 持久化','这些只是 Front Claw 持久化');
  history=once(history,'.filter((m) => !pendingMessageIds.has(m.id))','.filter((m) => !pendingMessageIds.has(m.id))\n    .filter(m=>conversationMessageAllowed(m.id,chatJid,true))');result.set('conversation-history.ts',history);
  let index=original('index.ts');
  const imports="import {bindConversationAuthority,listQueuedConversationReceipts,conversationSessionStale,startConversationBatch,finishConversationBatch,noteConversationSession,assertConversationBatchCurrent,cancelConversationReceipt,queueConversationReceipt,readBotConversationReceipt,noteConversationProjection,invalidateConversationProjection} from './db.js';\n";
- index=fullHost?once(index,"import './load-env.js';","import './load-env.js';\nimport {conversationBatchActive} from './db.js';\n"+imports):imports+index;
+ index=fullHost?once(index,"import './load-env.js';","import './load-env.js';\nimport {conversationBatchActive,conversationReceiptsInBatch,hasQueuedConversationReceipt} from './db.js';\n"+imports):imports+index;
  index=once(index,'  // Get all messages since last agent interaction',`  if(conversationSessionStale(chatJid)) {
     deleteSession(effectiveGroup.folder); delete sessions[effectiveGroup.folder]; recoveryGroups.add(chatJid);
   }
@@ -73,6 +83,15 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
               }
               lastReplyMsgId = replySendOutcome.messageId;`);
  if(fullHost)index=once(index,'noteConversationProjection(chatJid,queue.getConversationQueryId(chatJid)??undefined,','noteConversationProjection(chatJid,conversationBatchQueryId,');
+ // Rapid follow-ups with their own receipt wait for their own batch instead of
+ // IPC injection: enqueueMessageCheck drains the active runner, then O's queue
+ // starts a fresh owned batch, so every receipt is answered exactly once.
+ if(fullHost)index=once(index,'          const sendResult = queue.sendMessage(\n            chatJid,',`          if(conversationReceiptsInBatch(chatJid,messagesToSend.map(m=>m.id))){
+            queue.enqueueMessageCheck(chatJid);
+            continue;
+          }
+          const sendResult = queue.sendMessage(
+            chatJid,`);
  index=once(index,'        runContainerAgent,\n        group,','        d3Runner,\n        group,');
  const main=`main().catch((err) => {
   logger.error({ err }, 'Failed to start miniclaw');
@@ -120,6 +139,7 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
    convDbg('conv_turn_completed',{elapsedMs:Date.now()-convStartedAt});
    const frozen=finishConversationBatch(input.chatJid,queryId,'completed',event.status!=='error'&&!event.providerFailure?event.newSessionId:undefined);
    convDbg('conv_batch_finish',{state:frozen.length?'completed':'unknown',recorded:frozen.length,trigger:'turn_completed'});
+   if(hasQueuedConversationReceipt(input.chatJid))queue.enqueueMessageCheck(input.chatJid);
    if(frozen.length&&d5OnCompleted){convDbg('conv_notify_start',{count:frozen.length});try{await d5OnCompleted(frozen);convDbg('conv_notify_ok',{count:frozen.length});}catch(error){convDbg('conv_notify_err',{});logger.warn({err:error},'Conversation notification deferred');}}
   };`);
    // After the early finish the first turn is frozen; late owned callbacks are fenced like a settled runner.
@@ -129,7 +149,7 @@ export function applyConversationExecution(files,native,{fullHost=false}={}){
   convDbg('runner_exit',{elapsedMs:Date.now()-convStartedAt,early:batchFinished,status:output.status});
   if(batchFinished)return output;
   if(ownsInitial(output))observe(output);`);
-   fragment=once(fragment,'  // Delivery failure cannot change',"  convDbg('conv_batch_finish',{recorded:frozen.length,trigger:'runner_exit'});\n  // Delivery failure cannot change");
+   fragment=once(fragment,'  // Delivery failure cannot change',"  convDbg('conv_batch_finish',{recorded:frozen.length,trigger:'runner_exit'});\n  if(hasQueuedConversationReceipt(input.chatJid))queue.enqueueMessageCheck(input.chatJid);\n  // Delivery failure cannot change");
   fragment+=fs.readFileSync(new URL('./full-host-conversation-index.fragment',import.meta.url),'utf8');
  }
  index=once(index,main,fragment+(fullHost?'\n'+main.replace('Failed to start miniclaw','Failed to start Front Claw'):''));

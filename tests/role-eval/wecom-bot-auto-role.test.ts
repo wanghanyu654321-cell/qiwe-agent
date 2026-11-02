@@ -28,21 +28,28 @@ function setup(granted:WorkbenchRole[],{bound=true}:{bound?:boolean}={}){
 it('auto-selects the single granted role and routes plain text to the model',async()=>{
  const s=setup(['marketing']);const reply=await s.send('帮我写一条周末活动文案');
  expect(s.submitted).toEqual([{role:'marketing',text:'帮我写一条周末活动文案'}]);
- expect(reply?.reply).toContain('已保存需求');expect(reply?.reply).not.toContain('可切换岗位');
- await s.send('再来一条');expect(s.submitted.map(x=>x.role)).toEqual(['marketing','marketing']);expect(s.prepared).toEqual(['marketing']);
+ expect(reply?.reply).toContain('收到，正在处理');expect(reply?.reply).not.toContain('可切换岗位');
+ await s.send('再来一条');expect(s.submitted.map(x=>x.role)).toEqual(['marketing','marketing']);expect(new Set(s.prepared)).toEqual(new Set(['marketing']));
 });
 it('with several roles picks by content, falls back to the first, and hints how to switch',async()=>{
  const s=setup(['marketing','ads']);const reply=await s.send('这周投放预算怎么分配');
- expect(s.submitted[0]?.role).toBe('ads');expect(reply?.reply).toContain('岗位 <名称>');expect(reply?.reply).toContain('投放辅助');
+ expect(s.submitted[0]?.role).toBe('ads');expect(reply?.reply).toBe('收到，正在处理，稍后回复你。');
  const f=setup(['marketing','ads']);const fallback=await f.send('你好');
- // Fallback is the first approved role in grant order (ads sorts first).
- expect(f.submitted[0]?.role).toBe('ads');expect(fallback?.reply).toContain('岗位 <名称>');
- expect(pickAutoRole(['qa','reception'],'今天天气')).toEqual({role:'qa',multiple:true});
+ // Fallback is marketing (the default role) whenever it is granted, regardless of grant order.
+ expect(f.submitted[0]?.role).toBe('marketing');expect(fallback?.reply).not.toMatch(/岗位|[a-f0-9]{64}/);
+ expect(pickAutoRole(['qa','reception'],'今天天气')).toEqual({role:'reception',multiple:true});
  expect(pickAutoRole(['manager'],'报数')).toBeUndefined();
 });
 it('manual 岗位 command still switches after auto selection',async()=>{
- const s=setup(['marketing','ads']);await s.send('你好');expect(s.submitted[0]?.role).toBe('ads');
- expect((await s.send('岗位 内容营销'))?.reply).toContain('内容营销');await s.send('随便聊聊');expect(s.submitted[1]?.role).toBe('marketing');
+ const s=setup(['marketing','ads']);await s.send('你好');expect(s.submitted[0]?.role).toBe('marketing');
+ expect((await s.send('岗位 投放辅助'))?.reply).toContain('投放辅助');await s.send('随便聊聊');expect(s.submitted[1]?.role).toBe('ads');
+});
+it('re-evaluates an auto selection per message, defaulting to reception, but keeps a manual choice',async()=>{
+ const s=setup(['reception','marketing']);
+ await s.send('你好');await s.send('帮我写个小红书文案');await s.send('顾客问营业时间');
+ expect(s.submitted.map(x=>x.role)).toEqual(['reception','marketing','reception']);
+ await s.send('岗位 内容营销');await s.send('顾客问营业时间');await s.send('你好');
+ expect(s.submitted.slice(-2).map(x=>x.role)).toEqual(['marketing','marketing']);
 });
 it('denies an ungranted role and an unbound identity',async()=>{
  const s=setup(['marketing']);await expect(s.send('岗位 投放辅助')).rejects.toThrow('access_denied');

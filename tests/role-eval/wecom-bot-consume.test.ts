@@ -12,7 +12,7 @@ function setup(beforeWork?:Parameters<typeof createBotReportHandler>[0]['beforeW
 }
 it('only consumes a factory issued result and keeps its original reply and recipient private',async()=>{const s=setup();try{const r=await s.handler.handle(s.request());r.reply.body.stream.content='forged-content';s.frame.body.from.userid='other';let calls=0;
  await expect(s.handler.consumeReply({...r},async()=>++calls)).rejects.toThrow('access_denied');
- const value=await s.handler.consumeReply(r,async value=>{calls++;expect(value.event.memberId).toBe('member');expect(value.result.reply.body.stream.content).toContain('1.23元');expect(value.result.reply.body.stream.content).not.toContain('forged-content');value.result.reply.body.stream.content='port-mutation';return 'accepted';});expect(value).toBe('accepted');
+ const value=await s.handler.consumeReply(r,async value=>{calls++;expect(value.event.memberId).toBe('member');expect(value.result.reply.body.stream.content).toContain('1.23 元');expect(value.result.reply.body.stream.content).not.toContain('forged-content');value.result.reply.body.stream.content='port-mutation';return 'accepted';});expect(value).toBe('accepted');
  await s.handler.consumeReply(r,async value=>{expect(value.result.reply.body.stream.content).not.toContain('port-mutation');});expect(calls).toBe(1);
  }finally{s.close();}});
 it('rechecks revocation before consuming a prior result',async()=>{const s=setup();try{const r=await s.handler.handle(s.request());s.grants.change('admin',{accountId:'a',storeId:'b',roles:['manager'],active:false,expectedVersion:1,requestKey:'revoke'});let calls=0;await expect(s.handler.consumeReply(r,async()=>calls++)).rejects.toThrow('access_changed');expect(calls).toBe(0);}finally{s.close();}});

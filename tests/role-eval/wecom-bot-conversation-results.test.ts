@@ -25,7 +25,7 @@ function setup(content='完整合成答案'){
  return {service,ledger,result,receipt,sent,request,grants,gate,reads:()=>reads,pause:()=>{paused=true;},code:(n:number)=>{code=n;},tickets:()=>tickets,hook:(fn:(input:any)=>unknown)=>{readHook=fn;},notifyHook:(fn:()=>void)=>{notifyHook=fn;},late:()=>resolveAck?.({headers:{req_id:'fresh-notify'},errcode:0})};
 }
 it('recovers durable frozen answer via existing intent/notify for marketing-only employee and suppresses repeats',async()=>{
- const s=setup();const delivered=await s.service.recover(s.request(),s.result.receiptId);expect(delivered.deliveries[0]?.state).toBe('accepted');expect(s.sent).toEqual([{member:'member',content:conversationResultPages(s.result)[0]}]);
+ const s=setup();const delivered=await s.service.recover(s.request(),s.result.receiptId);expect(delivered.deliveries[0]?.state).toBe('accepted');expect(s.sent).toEqual([{member:'member',content:conversationResultPages(s.result,false,true)[0]}]);
  await s.service.recover(s.request(),s.result.receiptId);expect(s.sent).toHaveLength(1);
 });
 it('retries known rejected only explicitly; suppresses unknown and late ACK without rerunning',async()=>{
@@ -53,7 +53,7 @@ it('serializes re-entrant recovery and keeps an unknown prior revision when a la
  const s=setup();s.code(-1);await s.service.recover(s.request(),s.result.receiptId);s.late();
  s.result.revision=2;s.result.digest='d'.repeat(64);s.result.content='第二版本完整答案';s.code(0);
  await Promise.all([s.service.recover(s.request(),s.result.receiptId),s.service.recover(s.request(),s.result.receiptId)]);
- expect(s.sent).toHaveLength(2);expect(s.sent[0]?.content).toContain('版本1');expect(s.sent[1]?.content).toContain('版本2');
+ expect(s.sent).toHaveLength(2);expect(s.sent[0]?.content).toBe('完整合成答案');expect(s.sent[1]?.content).toBe('第二版本完整答案');
 });
 
 const nativePortModule='../../integrations/native/conversation-overlay.mjs';

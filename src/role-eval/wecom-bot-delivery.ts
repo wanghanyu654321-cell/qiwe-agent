@@ -114,7 +114,7 @@ export function createBotConversationDelivery(options:{
   const intents=[];let next:{afterRevision:number;afterPage:number}|undefined;
   for(const result of results){
    if(result.receiptId!==id||!Number.isSafeInteger(result.revision)||result.revision<=afterRevision)throw Error('authority_unavailable');
-   const pages=conversationResultPages(result);
+   const pages=conversationResultPages(result,false,true);
    for(let n=0;n<pages.length;n++){
     if(result.revision===afterRevision+1&&n<afterPage)continue;
     if(intents.length===32){next={afterRevision:result.revision-1,afterPage:n};break;}

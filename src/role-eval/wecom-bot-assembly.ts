@@ -12,6 +12,7 @@ import {wecomDebug, maskWecomValue} from './wecom-bot-preparation.js';
 
 type Client = Pick<WSClient, 'on' | 'off' | 'isConnected'>;
 /** A bound trusted gate adapter. It must register a real write ticket before work starts. */
+import type {BotReportExtractor} from './wecom-bot-report-model.js';
 export interface WecomBotExecutionBoundary {
   admit(): boolean;
   enter(): unknown;
@@ -23,7 +24,7 @@ export interface WecomBotAssemblyBusiness {
   scope: BotReportOptions['scope']; employees: BotReportOptions['employees'];
   ledger: BotReportOptions['ledger']; artifacts?: BotReportOptions['artifacts'];
   tasks?: Omit<BotTasksOptions, 'mode' | 'authority'>;
-  conversations?: {store:BotTaskStore;native:BotRoleWorkspacePort;intake?:BotConversationIntakePort;deliveryGate?:Parameters<typeof createBotConversationDelivery>[0]['gate']};
+  conversations?: {store:BotTaskStore;native:BotRoleWorkspacePort;intake?:BotConversationIntakePort;deliveryGate?:Parameters<typeof createBotConversationDelivery>[0]['gate'];reportExtractor?:BotReportExtractor;summaryReadOnly?:boolean};
 }
 export interface WecomBotAssemblyOutcome {
   state: 'handled' | 'rejected'; detail: string;
@@ -83,7 +84,7 @@ function createAssembly(options:AssemblyOptions) {
       // Capture admitted capabilities once; shared service state and live authority readers stay shared.
       ...(training ? {training: {enabled: training.enabled, resolve: training.resolve.bind(training)}} : {}),
       ...(native ? {native: {start: native.start.bind(native), query: native.query.bind(native), cancel: native.cancel.bind(native), close: native.close.bind(native)}} : {}),
-    }} : {}),...(conversations?{conversations:{store:conversations.store,...(conversations.deliveryGate?{deliveryGate:{isPaused:conversations.deliveryGate.isPaused.bind(conversations.deliveryGate),beginWrite:conversations.deliveryGate.beginWrite.bind(conversations.deliveryGate),finishWrite:conversations.deliveryGate.finishWrite.bind(conversations.deliveryGate)}}:{}),native:{readRoleWorkspace:conversations.native.readRoleWorkspace.bind(conversations.native),prepareRoleWorkspace:conversations.native.prepareRoleWorkspace.bind(conversations.native)},...(conversations.intake?{intake:{readReceipt:conversations.intake.readReceipt.bind(conversations.intake),...(conversations.intake.readResults?{readResults:conversations.intake.readResults.bind(conversations.intake)}:{}),submitMessage:conversations.intake.submitMessage.bind(conversations.intake),...(conversations.intake.cancelReceipt?{cancelReceipt:conversations.intake.cancelReceipt.bind(conversations.intake)}:{})}}:{})}}:{})};
+    }} : {}),...(conversations?{conversations:{store:conversations.store,...(typeof conversations.reportExtractor==='function'?{reportExtractor:conversations.reportExtractor}:{}),...(conversations.summaryReadOnly===true?{summaryReadOnly:true}:{}),...(conversations.deliveryGate?{deliveryGate:{isPaused:conversations.deliveryGate.isPaused.bind(conversations.deliveryGate),beginWrite:conversations.deliveryGate.beginWrite.bind(conversations.deliveryGate),finishWrite:conversations.deliveryGate.finishWrite.bind(conversations.deliveryGate)}}:{}),native:{readRoleWorkspace:conversations.native.readRoleWorkspace.bind(conversations.native),prepareRoleWorkspace:conversations.native.prepareRoleWorkspace.bind(conversations.native)},...(conversations.intake?{intake:{readReceipt:conversations.intake.readReceipt.bind(conversations.intake),...(conversations.intake.readResults?{readResults:conversations.intake.readResults.bind(conversations.intake)}:{}),submitMessage:conversations.intake.submitMessage.bind(conversations.intake),...(conversations.intake.cancelReceipt?{cancelReceipt:conversations.intake.cancelReceipt.bind(conversations.intake)}:{})}}:{})}}:{})};
   });
   if (businesses.some(b => !b.scope || !Object.values(b.scope).every(valid) || !b.employees.length || b.employees.some(e => ![e.accountId, e.employeeId, e.employeeName].every(valid))) || new Set(businesses.map(b => JSON.stringify([b.scope.tenant, b.scope.store]))).size !== businesses.length) throw Error('invalid_bot_assembly');
   let closed = false, authenticated = false, epoch = 0;
@@ -176,7 +177,7 @@ function createAssembly(options:AssemblyOptions) {
         const tasks = business.tasks ? createBotTasks({...business.tasks, mode: 'isolated-synthetic', authority}) : undefined;
         if (tasks) resources.push(() => tasks.close());
         const answerDelivery=business.conversations?.intake&&business.conversations.deliveryGate?createBotConversationDelivery({authority,ledger:business.ledger,sender,intake:business.conversations.intake,scope:business.scope,employees:business.employees,gate:business.conversations.deliveryGate}):undefined;
-        const conversations=business.conversations?createBotConversations({store:business.conversations.store,authority,...(answerDelivery?{prepareAnswer:answerDelivery.prepare}:{}),native:{
+        const conversations=business.conversations?createBotConversations({store:business.conversations.store,authority,...(business.conversations.reportExtractor?{reportExtractor:business.conversations.reportExtractor}:{}),...(business.conversations.summaryReadOnly?{summaryReadOnly:true}:{}),...(answerDelivery?{prepareAnswer:answerDelivery.prepare}:{}),native:{
           readRoleWorkspace:input=>trackPhysical(business.conversations!.native.readRoleWorkspace(input)),
           prepareRoleWorkspace:input=>trackPhysical(business.conversations!.native.prepareRoleWorkspace(input)),
         },...(business.conversations.intake?{intake:{...(business.conversations.intake.readResults?{readResults:(input:Parameters<NonNullable<BotConversationIntakePort['readResults']>>[0])=>trackPhysical(business.conversations!.intake!.readResults!(input))}:{}),readReceipt:input=>trackPhysical(business.conversations!.intake!.readReceipt(input)),submitMessage:input=>trackPhysical(business.conversations!.intake!.submitMessage(input)),...(business.conversations.intake.cancelReceipt?{cancelReceipt:(input:Parameters<BotConversationIntakePort['readReceipt']>[0])=>trackPhysical(business.conversations!.intake!.cancelReceipt!(input))}:{})}}:{})}):undefined;

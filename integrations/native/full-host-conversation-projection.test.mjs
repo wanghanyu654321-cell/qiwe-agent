@@ -43,7 +43,7 @@ for(const successor of [null,'successor-query'])test('Pi queryIdle keeps the ori
 });
 
 const d3=find(tree,node=>ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>d.name.getText(tree)==='d3Runner'));
-const bind=new Function('ports',ts.transpileModule(`const {runContainerAgent,conversationBatchActive,assertConversationBatchCurrent,noteConversationSession,finishConversationBatch,invalidateConversationProjection,logger}=ports;let d5OnCompleted=ports.onCompleted;${d3.getText(tree)};return d3Runner;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText);
+const bind=new Function('ports',ts.transpileModule(`const {runContainerAgent,conversationBatchActive,assertConversationBatchCurrent,noteConversationSession,finishConversationBatch,invalidateConversationProjection,logger,hasQueuedConversationReceipt=()=>false,queue={enqueueMessageCheck:()=>{}}}=ports;let d5OnCompleted=ports.onCompleted;${d3.getText(tree)};return d3Runner;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.None}}).outputText);
 for(const rejected of [false,true])test('settled runner cannot forward late output, while active warm output remains valid: '+rejected,async()=>{
  let callback;const forwarded=[];
  const warm={status:'success',result:'warm',inputTurnId:'warm',inputTurnCompleted:true};

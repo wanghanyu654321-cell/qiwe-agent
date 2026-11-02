@@ -9,6 +9,8 @@ const fail=()=>{throw Error('LOCAL_DOCKER_BOUNDARY_UNVERIFIED');};
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const uuid=value=>/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value??'');
 const overlaps=(a,b)=>a===b||a.startsWith(b==='/'?'/':b+'/')||b.startsWith(a==='/'?'/':a+'/');
+const byMountDest=(a,b)=>String(a?.Destination).localeCompare(String(b?.Destination),'en');
+const sameMounts=(a,b)=>JSON.stringify([...(a??[])].sort(byMountDest))===JSON.stringify([...(b??[])].sort(byMountDest));
 function invoke(args){return execute(localDocker,['--host',localEndpoint,...args],{encoding:'utf8',timeout:20000,maxBuffer:8*1024*1024});}
 export function validateControlledRealPilotScope(scope,runId){
  if(!scope||JSON.stringify(Object.keys(scope).sort())!==JSON.stringify(['environment','expiresAt','mode','networkName','runId'])||
@@ -40,7 +42,7 @@ export function validateLocalDockerFacts(facts,expected){
  const {host,volume,containers}=facts??{};
  if(facts.daemonId!==expected.daemonId||volume?.Name!==expected.volume||volume.Mountpoint!==expected.mountpoint||volume.Driver!=='local'||volume.Labels?.['qiwe.verification-run']!==expected.runId||
   host?.Id!==expected.hostId||host.Config?.User!=='1000:1000'||host.Config?.Labels?.['qiwe.verification-run']!==expected.runId||!host.State?.Running||!host.HostConfig||(!expected.controlledRealPilot&&host.HostConfig.NetworkMode!=='none')||!host.HostConfig.ReadonlyRootfs||host.HostConfig.Privileged||!host.HostConfig.CapDrop?.includes('ALL')||!host.HostConfig.SecurityOpt?.includes('no-new-privileges')||
-  JSON.stringify(host.Mounts)!==JSON.stringify(expected.hostMounts)||!Array.isArray(containers))return fail();
+  !sameMounts(host.Mounts,expected.hostMounts)||!Array.isArray(containers))return fail();
  if(expected.controlledRealPilot)validatePilotNetwork(facts,expected);
  const mount=host.Mounts.find(m=>m.Destination==='/tmp');
  if(mount?.Type!=='volume'||mount.Name!==expected.volume||mount.Source!==expected.mountpoint||mount.RW!==true)return fail();
@@ -103,7 +105,7 @@ export async function observeLocalDockerBoundary(input){
  const scope=input.controlledRealPilot;
  if(scope)pilotEnvironment(scope);else if(process.env.QIWE_CONTROLLED_REAL_PILOT==='1')return fail();
  const initial=readLocalDockerFacts(),runId=process.env.QIWE_LOCAL_DOCKER_RUN_ID;
- const expected={runId,daemonId:initial.daemonId,volume:initial.volume.Name,mountpoint:initial.volume.Mountpoint,hostId:initial.host.Id,hostMounts:initial.host.Mounts,
+ const expected={runId,daemonId:initial.daemonId,volume:initial.volume.Name,mountpoint:initial.volume.Mountpoint,hostId:initial.host.Id,hostMounts:[...initial.host.Mounts].sort(byMountDest),
   ...(scope?{controlledRealPilot:scope,network:networkIdentity(initial.network)}:{})};
  validateLocalDockerFacts(initial,expected);
  expected.controls=controlFiles();

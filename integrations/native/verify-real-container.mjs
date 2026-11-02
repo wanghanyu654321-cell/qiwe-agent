@@ -8,7 +8,7 @@ import {createFullHostCandidate} from './full-host-candidate.mjs';
 import {nativeVerificationOptions} from './verification-options.mjs';
 import {verifyPreparedNativeSqlite} from './prepare-native-sqlite.mjs';
 import {prepareOriginalPiRunner} from './role-capabilities-runner.mjs';
-import {applyFullHostPiDrain,applyFullHostPiAbort} from './full-host-restoration-pi-overlay.mjs';
+import {applyFullHostPiDrain,applyFullHostPiAbort,applyFullHostPiInputQueue} from './full-host-restoration-pi-overlay.mjs';
 import {linuxImage} from './linux-runtime.mjs';
 import {runLocalVerification,cleanupOwnedContainers} from './real-container-cleanup.mjs';
 import {verifyOriginalShellImage,prepareOriginalShellCandidate} from './original-shell.mjs';
@@ -50,7 +50,7 @@ try{
  const runner=prepareOriginalPiRunner({source,root,skillRoot,trueMain:true});
  fs.writeFileSync(runner.entryFile,applyFullHostPiDrain(fs.readFileSync(runner.entryFile,'utf8')));
  const runtime=path.join(runner.runnerTarget,'src/runtime/pi/pi-runner.ts');
- fs.writeFileSync(runtime,applyFullHostPiAbort(fs.readFileSync(runtime,'utf8')));
+ fs.writeFileSync(runtime,applyFullHostPiInputQueue(applyFullHostPiAbort(fs.readFileSync(runtime,'utf8'))));
  if(originalShellImage){
   audit.originalShell=verifyOriginalShellImage({source,buildInput:originalShellBuildInput,image:originalShellImage,docker,endpoint:localEndpoint,runId,manifest:ownedManifest,runnerHashes:runner.runnerSourceHashes});
   prepareOriginalShellCandidate(runner);save();
