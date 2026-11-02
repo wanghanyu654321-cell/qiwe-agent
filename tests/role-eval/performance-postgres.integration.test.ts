@@ -7,7 +7,7 @@ import { Client } from 'pg';
 import { WORKBENCH_ROLES, type WorkbenchRole } from '../../src/role-eval/workbench-access.js';
 import type { PerformanceStore, Person } from '../../src/role-eval/performance-store.js';
 import { FRONT_CLAW_DATABASE_URL, openPerformanceStore, type OpenedPerformanceStore } from '../../src/role-eval/performance-open.js';
-import { createWecomBotHandler } from '../../src/role-eval/wecom-bot-handler.js';
+import { createWecomBotHandler } from '../../src/role-eval/wecom-bot-unified-handler.js';
 
 const roles = [...WORKBENCH_ROLES] as WorkbenchRole[];
 const bin = '/usr/lib/postgresql/16/bin';

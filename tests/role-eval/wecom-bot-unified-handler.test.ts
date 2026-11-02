@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 import { WORKBENCH_ROLES, type WorkbenchRole } from '../../src/role-eval/workbench-access.js';
 import { MemoryPerformanceStore, type Person } from '../../src/role-eval/performance-store.js';
 import { createAssistantTools } from '../../src/role-eval/assistant-tools.js';
-import { createWecomBotHandler, type ModelInput, type ModelOutput, type SendResult } from '../../src/role-eval/wecom-bot-handler.js';
+import { createWecomBotHandler, type ModelInput, type ModelOutput, type SendResult } from '../../src/role-eval/wecom-bot-unified-handler.js';
 import { QIXUN_CONFIG_KEY } from '../../src/role-eval/metrics.js';
 import { CHATS } from './report-corpus.js';
 
@@ -62,7 +62,7 @@ const report = `27号明川店
 李秋：98（小周）`;
 
 it('keeps one unified entry and leaves export closed', async () => {
-  const source = readFileSync(new URL('../../src/role-eval/wecom-bot-handler.ts', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../src/role-eval/wecom-bot-unified-handler.ts', import.meta.url), 'utf8');
   expect(source).not.toMatch(/authorize\s*\(/);
   expect(source).not.toMatch(/handleManager|managerBypass|bypass/);
   const world = salon();
