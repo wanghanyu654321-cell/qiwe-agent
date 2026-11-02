@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { MemoryPerformanceStore, type LedgerEntry, type PerformanceStore, type Person } from '../../src/role-eval/performance-store.js';
-import { PERFORMANCE_MIGRATION_SQL } from '../../src/role-eval/performance-migration.js';
-import { createPostgresPerformanceStore, migratePerformance } from '../../src/role-eval/performance-postgres.js';
+import { PERFORMANCE_MIGRATION_PATH, PERFORMANCE_MIGRATION_SQL, PERFORMANCE_SCHEMA } from '../../src/role-eval/performance-migration.js';
+import { createPostgresPerformanceStore, migratePerformance, migrationStatements } from '../../src/role-eval/performance-postgres.js';
+import { FRONT_CLAW_DATABASE_URL, openPerformanceStore } from '../../src/role-eval/performance-open.js';
 import { MemorySql } from './sql-fixture.js';
 
 const person = (tier: Person['tier'] = 'employee'): Person => ({
@@ -55,11 +56,25 @@ it('keeps report history in memory and behind the Postgres store', async () => {
   await contract(createPostgresPerformanceStore(sql));
 });
 
-it('ships the Postgres migration without a connection string', () => {
-  const file = readFileSync(new URL('../../migrations/001_performance.sql', import.meta.url), 'utf8').trim();
+it('keeps migration 007 inside its own schema and uses memory when the database url is unset', async () => {
+  const file = readFileSync(new URL(`../../${PERFORMANCE_MIGRATION_PATH}`, import.meta.url), 'utf8').trim();
   expect(file).toBe(PERFORMANCE_MIGRATION_SQL);
+  expect(PERFORMANCE_MIGRATION_PATH).toBe('migrations/007_front_claw_perf.sql');
+  const statements = migrationStatements(file);
+  expect(statements.some(statement => /^(drop|alter)\b/i.test(statement))).toBe(false);
+  expect(statements[0]?.replace(/\s+/g, ' ')).toBe(`CREATE SCHEMA IF NOT EXISTS ${PERFORMANCE_SCHEMA}`);
+  expect(statements.slice(1).every(statement => statement.includes(`${PERFORMANCE_SCHEMA}.`))).toBe(true);
   const source = readFileSync(new URL('../../src/role-eval/performance-postgres.ts', import.meta.url), 'utf8');
-  expect(source).not.toMatch(/DATABASE_URL|from 'pg'|sqlite/);
+  expect(source).not.toMatch(/DATABASE_URL|from 'pg'|sqlite|password\s*=/);
   const memory = readFileSync(new URL('../../src/role-eval/performance-store.ts', import.meta.url), 'utf8');
   expect(memory).not.toMatch(/sqlite/);
+  const opener = readFileSync(new URL('../../src/role-eval/performance-open.ts', import.meta.url), 'utf8');
+  expect(opener).toContain(FRONT_CLAW_DATABASE_URL);
+  expect(opener).not.toMatch(/postgres:\/\/\w+:[^@\s]+@/);
+  const opened = await openPerformanceStore({});
+  expect(opened.driver).toBe('memory');
+  await opened.close();
+  const blank = await openPerformanceStore({ [FRONT_CLAW_DATABASE_URL]: '   ' });
+  expect(blank.driver).toBe('memory');
+  await blank.close();
 });

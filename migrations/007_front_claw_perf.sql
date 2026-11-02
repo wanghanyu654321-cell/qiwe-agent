@@ -1,4 +1,6 @@
-CREATE TABLE IF NOT EXISTS performance_people (
+CREATE SCHEMA IF NOT EXISTS front_claw_perf;
+
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_people (
   person_id text PRIMARY KEY,
   account_id text NOT NULL UNIQUE,
   member_id text NOT NULL UNIQUE,
@@ -10,14 +12,14 @@ CREATE TABLE IF NOT EXISTS performance_people (
   active boolean NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS performance_aliases (
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_aliases (
   store_id text NOT NULL,
   alias text NOT NULL,
   person_id text NOT NULL,
   PRIMARY KEY (store_id, alias)
 );
 
-CREATE TABLE IF NOT EXISTS performance_entries (
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_entries (
   entry_id text PRIMARY KEY,
   store_id text NOT NULL,
   business_day text NOT NULL,
@@ -34,9 +36,9 @@ CREATE TABLE IF NOT EXISTS performance_entries (
 );
 
 CREATE INDEX IF NOT EXISTS performance_entries_reporter_idx
-  ON performance_entries (reporter_person_id, business_day, store_id);
+  ON front_claw_perf.performance_entries (reporter_person_id, business_day, store_id);
 
-CREATE TABLE IF NOT EXISTS performance_revisions (
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_revisions (
   revision_id text PRIMARY KEY,
   entry_id text NOT NULL,
   editor_person_id text NOT NULL,
@@ -46,7 +48,7 @@ CREATE TABLE IF NOT EXISTS performance_revisions (
   created_at text NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS performance_targets (
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_targets (
   store_id text NOT NULL,
   person_id text NOT NULL,
   period_month text NOT NULL,
@@ -56,7 +58,7 @@ CREATE TABLE IF NOT EXISTS performance_targets (
   PRIMARY KEY (store_id, person_id, period_month)
 );
 
-CREATE TABLE IF NOT EXISTS performance_drafts (
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_drafts (
   draft_id text PRIMARY KEY,
   reporter_person_id text NOT NULL,
   store_id text NOT NULL,
@@ -71,7 +73,7 @@ CREATE TABLE IF NOT EXISTS performance_drafts (
   closed_at text
 );
 
-CREATE TABLE IF NOT EXISTS performance_appointments (
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_appointments (
   appointment_id text PRIMARY KEY,
   store_id text NOT NULL,
   employee_person_id text NOT NULL,
@@ -82,7 +84,7 @@ CREATE TABLE IF NOT EXISTS performance_appointments (
   created_at text NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS performance_notifications (
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_notifications (
   notification_id text PRIMARY KEY,
   kind text NOT NULL,
   recipient_person_id text NOT NULL,
@@ -93,7 +95,7 @@ CREATE TABLE IF NOT EXISTS performance_notifications (
   sent_at text
 );
 
-CREATE TABLE IF NOT EXISTS performance_config (
+CREATE TABLE IF NOT EXISTS front_claw_perf.performance_config (
   key text PRIMARY KEY,
   value text NOT NULL
 );

@@ -2,14 +2,17 @@ import type { SqlClient } from '../../src/role-eval/performance-postgres.js';
 
 type Row = Record<string, unknown>;
 
+const ident = String.raw`(?:\w+\.)?\w+`;
+
 /** Executes the narrow SQL shape used by the Postgres store. Not a server. */
 export class MemorySql implements SqlClient {
   private tables = new Map<string, Row[]>();
 
   async query<T = Row>(sql: string, params: readonly unknown[] = []): Promise<{ rows: T[] }> {
     const compact = sql.replace(/\s+/g, ' ').trim();
+    if (/^CREATE SCHEMA\b/i.test(compact)) return { rows: [] };
     if (/^CREATE TABLE/i.test(compact)) {
-      const name = /CREATE TABLE IF NOT EXISTS (\w+)/i.exec(compact)?.[1];
+      const name = new RegExp(String.raw`CREATE TABLE IF NOT EXISTS (${ident})`, 'i').exec(compact)?.[1];
       if (!name) throw Error(compact);
       if (!this.tables.has(name)) this.tables.set(name, []);
       return { rows: [] };
@@ -28,7 +31,7 @@ export class MemorySql implements SqlClient {
   }
 
   private insert(sql: string, params: readonly unknown[]): Row {
-    const match = /^INSERT INTO (\w+) \(([^)]+)\) VALUES \(([^)]+)\)(?: ON CONFLICT \(([^)]+)\) DO UPDATE SET (.+))?$/i.exec(sql);
+    const match = new RegExp(String.raw`^INSERT INTO (${ident}) \(([^)]+)\) VALUES \(([^)]+)\)(?: ON CONFLICT \(([^)]+)\) DO UPDATE SET (.+))?$`, 'i').exec(sql);
     if (!match || !match[1] || !match[2]) throw Error(sql);
     const table = this.rows(match[1]);
     const columns = match[2].split(',').map(column => column.trim());
@@ -53,7 +56,7 @@ export class MemorySql implements SqlClient {
   }
 
   private select(sql: string, params: readonly unknown[]): Row[] {
-    const match = /^SELECT \* FROM (\w+)(?: WHERE (.+))?$/i.exec(sql);
+    const match = new RegExp(String.raw`^SELECT \* FROM (${ident})(?: WHERE (.+))?$`, 'i').exec(sql);
     if (!match?.[1]) throw Error(sql);
     const table = this.rows(match[1]);
     if (!match[2]) return table.map(row => ({ ...row }));
@@ -61,7 +64,7 @@ export class MemorySql implements SqlClient {
   }
 
   private update(sql: string, params: readonly unknown[]): Row[] {
-    const match = /^UPDATE (\w+) SET (.+) WHERE (\w+)=\$(\d+)$/i.exec(sql);
+    const match = new RegExp(String.raw`^UPDATE (${ident}) SET (.+) WHERE (\w+)=\$(\d+)$`, 'i').exec(sql);
     if (!match?.[1] || !match[2] || !match[3] || !match[4]) throw Error(sql);
     const table = this.rows(match[1]);
     const key = match[3];
