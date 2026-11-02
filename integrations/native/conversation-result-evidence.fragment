@@ -1,0 +1,75 @@
+  // This local witness describes current persisted relationships only. It is
+  // neither an execution/authorization receipt nor a sender/old-writer fence.
+  // Every value is read under the scanner's existing transaction and budgets.
+  function conversationResultEvidence(metadata: Row): {version:string;evidence:string[]} {
+    const material: unknown[] = [metadata];
+    const read = (table:string, where:string, args:unknown[]):Row|undefined => {
+      if (!budget()) return undefined;
+      const schema=appointmentInventorySchemas.find(item=>item.name===table)!;
+      const columns=schema.columns.map(item=>item[0]);
+      const size=columns.map(column=>'COALESCE(length(CAST('+quoted(column)+' AS BLOB)),0)').join('+');
+      // Probe lengths before transferring bodies/JSON; the same SQLite read
+      // snapshot prevents a probe/read swap. Point lookups use original keys.
+      const probe=connection.prepare<unknown[],Row>('SELECT ('+size+')*6+'+
+        (columns.length*32+192)+' AS "bytes" FROM main.'+quoted(table)+' WHERE '+where+' LIMIT 1').safeIntegers().get(...args);
+      rowsEstimated++;
+      if(rowsEstimated>100000){blockers.add('BUDGET:ROWS');return undefined;}
+      if(!probe){material.push([table,null]);return undefined;}
+      if(typeof probe.bytes!=='bigint'||probe.bytes<0n||probe.bytes>BigInt(Number.MAX_SAFE_INTEGER))throw Error('invalid_result_evidence_size');
+      estimatedBytes=Math.min(64*1024*1024+1,estimatedBytes+Number(probe.bytes));
+      if(estimatedBytes>64*1024*1024){blockers.add('BUDGET:BYTES');return undefined;}
+      if(!budget())return undefined;
+      const row=connection.prepare<unknown[],Row>('SELECT '+columns.map(quoted).join(',')+
+        ' FROM main.'+quoted(table)+' WHERE '+where+' LIMIT 1').get(...args);
+      material.push([table,row??null]);
+      if(!row)return undefined;
+      for(const [name,type,notnull] of schema.columns){
+        const value=row[name];
+        if(value===null){if(notnull===1)return undefined;continue;}
+        if(type==='TEXT'?typeof value!=='string':type==='INTEGER'?
+          typeof value!=='number'||!Number.isSafeInteger(value):type==='REAL'?
+          typeof value!=='number'||!Number.isFinite(value):true)return undefined;
+      }
+      return row;
+    };
+    let verified=false;
+    try {
+      const result=read('wecom_conversation_results','receipt_id=? AND revision=?',[metadata.receipt_id,metadata.revision]);
+      const receipt=read('wecom_conversation_receipts','receipt_id=?',[metadata.receipt_id]);
+      const execution=read('wecom_conversation_execution','receipt_id=?',[metadata.receipt_id]);
+      const input=receipt?read('messages','chat_jid=? AND id=?',[receipt.workspace_jid,receipt.message_id]):undefined;
+      const ids=result?JSON.parse(result.source_ids_json as string):undefined;
+      const sourceId=Array.isArray(ids)&&ids.length===1&&typeof ids[0]==='string'&&ids[0]?ids[0]:undefined;
+      const output=receipt&&sourceId?read('messages','chat_jid=? AND id=?',[receipt.workspace_jid,sourceId]):undefined;
+      // finishConversationBatch intentionally permits a session argument that
+      // differs from the canonical message/session cache. Bind all of it in the
+      // hash, without inventing an equality requirement the producer lacks.
+      const actor=receipt?JSON.parse(receipt.actor_json as string):undefined;
+      const inputs=execution?.input_json?JSON.parse(execution.input_json as string):undefined;
+      verified=!!result&&!!receipt&&!!execution&&!!input&&!!output&&
+        actor!==null&&typeof actor==='object'&&!Array.isArray(actor)&&
+        receipt.receipt_id===digest(JSON.stringify([actor.corpId,actor.botId,actor.memberId,receipt.origin_message_id]))&&
+        input.source_jid===receipt.workspace_jid&&input.sender===actor.accountId&&
+        input.timestamp===receipt.accepted_at&&input.is_from_me===0&&
+        receipt.text_hash===digest(JSON.stringify(input.content))&&
+        execution.workspace_jid===receipt.workspace_jid&&execution.message_id===receipt.message_id&&
+        execution.state==='completed'&&execution.query_id===result.query_id&&execution.turn_id===result.turn_id&&
+        Array.isArray(inputs)&&inputs.length>0&&inputs.every(id=>typeof id==='string'&&id.length>0)&&
+        inputs.includes(receipt.message_id)&&inputs.includes(result.turn_id)&&
+        // Nullable batch_size exists on migrated rows; the source only fixes
+        // it when starting a batch, so absence alone is not a new invalidity.
+        (execution.batch_size===null||execution.batch_size===inputs.length)&&
+        Number.isSafeInteger(result.revision)&&(result.revision as number)>0&&
+        typeof result.query_id==='string'&&result.query_id.length>0&&
+        output.is_from_me===1&&output.turn_id===result.turn_id&&output.content===result.content&&
+        result.digest===digest(result.content as string);
+      if(!budget())verified=false;
+    } catch {
+      // Malformed/unknown relationships remain blocked and are not repaired.
+      verified=false;
+    }
+    return {version:digest(JSON.stringify(material)),evidence:[
+      verified?'d5_frozen_result_verified':'d5_result_relation_unverified',
+      'current_snapshot_only','result_delivery_unverified','old_writer_ownership_unverified',
+    ]};
+  }

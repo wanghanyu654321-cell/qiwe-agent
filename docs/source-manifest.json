@@ -1,9 +1,142 @@
 {
-  "recordedAt": "2026-10-17",
+  "recordedAt": "2026-10-21",
   "sourceBaseline": "4ed22180b765eb359e8d8482bde9fc8d641086be",
-  "sourceState": "baseline plus reviewed T0/T1 working-tree changes; no source history imported",
-  "normalization": "CRLF normalized to LF; source and export content otherwise identical",
+  "publicBase": "2590fa5f7dcca42a31ded5daf5ed2dbcc23da643",
+  "sourceState": "Selected T0-T6 implementation, T7 channel and Native isolation verification, recovery inspection, queue obligations and isolated WeCom preparation; four global proofs, successful appointment restoration and real channel acceptance remain blocked; no private history, Native source copy, binaries or business data imported",
+  "normalization": "sha256 covers current exported source normalized CRLF to LF; sourceSha256 records original raw snapshot; t0t1Sha256/t2Sha256/t3Sha256/t4Sha256 preserve earlier public versions where adapted; t7PreparationSha256 preserves the pre-controlled T7 public version where adapted; t7ControlledSha256 preserves the pre-readiness T7 public version where adapted; t7ReadinessSha256 preserves the pre-full-host T7 public version where adapted; t7FullHostSha256 preserves the pre-recovery-inspection T7 public version where adapted; t7InspectionSha256 preserves the pre-recovery-evidence T7 public version where adapted",
   "files": [
+    {
+      "path": "integrations/native/bot-preparation-native.test.mts",
+      "sha256": "6dfbda4ce0c1a09d6f699e84da4cc7a27ad66e1eb3fe31447f115a2434dfa720",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
+    },
+    {
+      "path": "integrations/native/emit-patch.mjs",
+      "sha256": "823ccbfe575ef1704557a3ceafb944086a88bfbd66dc62c47df7235e1c58cc62",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+    },
+    {
+      "path": "integrations/native/full-host-candidate.mjs",
+      "sha256": "895d8f8a83272f5452e43bac6f963dde087444323536fd4021df537129a41a12",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7FullHostSha256": "622b324494b817ff3a549ff3a21650a3e95d6bb402a6ea435387bc7bf2ba24a5",
+      "t7InspectionSha256": "1705eb80f71f5f966a659824e4e202120afa47b9852735fdf16a9f9a131c21b0"
+    },
+    {
+      "path": "integrations/native/full-host.test.mts",
+      "sha256": "08c2c52d7788f251c6060534ae4e4010986465d890bad9d4ccd8f21e29854ce8",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7FullHostSha256": "bcd764d00c057828b53a2f15beb65fa7a559576dc791e84439a685593b197dd0",
+      "t7InspectionSha256": "244b33f6f943edf4ff9247ea0c0c7e76a46b294f846670d851fd1aca6543a1d3"
+    },
+    {
+      "path": "integrations/native/host-candidate.mjs",
+      "sha256": "c3b47072415533310b63823bd5ac184163b3a47ad361edea8c2eaf6e2d761a77",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/host-readiness.test.mts",
+      "sha256": "8f4a535445eac26babbd414924057365c278dbff46f0517c2a1af295c3420668",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/linux-runtime.mjs",
+      "sha256": "1bb958a56cb884eb77bafa14c21725f2c458598f6fd703eab975f66f17041975",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7InspectionSha256": "ae1a854860d0d25b1cbddc8ca49e7b1d7ad3a178853862ec4e9978eba4321061"
+    },
+    {
+      "path": "integrations/native/linux-runtime.test.mjs",
+      "sha256": "54d1ce7e81da1973024037c57c327ce8af5e1d0b07f48d36b4944f3ce241ff1c",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7InspectionSha256": "497777b27eccdb0da087d4affba17d2d44c1695012e0505cb7f34e3aa4cd90a4"
+    },
+    {
+      "path": "integrations/native/prepare-native-sqlite.mjs",
+      "sha256": "ff439b951588c06420361ad74dd5c2c11857048103f042ef342807e2240ba91c",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/prepare-native-sqlite.test.mjs",
+      "sha256": "246b4a024f2e8889373a412ae7bfaa76c9f7c8b5cc6795ca28574c46645a80e2",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/project-residue-overlay.mjs",
+      "sha256": "c2014298e8e0a58812e65390430a539337cff2d9f5746c27e44f25004e29e8d3",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
+    },
+    {
+      "path": "integrations/native/project-residue.test.mts",
+      "sha256": "f416f165c8c7430fcb617f8f841e056860b519b1ff6223f1830f8f9c585734a3",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported"
+    },
+    {
+      "path": "integrations/native/queue-recovery-overlay.mjs",
+      "sha256": "3ec0729adb74c5700e21ca22d27be6b213b5748cae7e01789648eb7e8873670b",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
+    },
+    {
+      "path": "integrations/native/queue-recovery.test.mts",
+      "sha256": "0dbc7e63ed40786ac3004157aa15768eec2595769a802789479c700315173790",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
+    },
+    {
+      "path": "integrations/native/recovery-inspection-overlay.mjs",
+      "sha256": "b8d58d20bb1c13b37102c4dd196de197304ce1eeceef73bc845746394ecca534",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported",
+      "t7InspectionSha256": "efc195cce72ce97db13bdc7b0d6e97210bb9206ef1194a12e056c10d39d91a0c"
+    },
+    {
+      "path": "integrations/native/recovery-inspection.ts",
+      "sha256": "7b576e0ea52b235b9165c7b82d24498fc4ffac280c0bf8555e9b1f458401b783",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported",
+      "t7InspectionSha256": "821a9a7c43fd8bf080bbc01ecd1823d0a3acd16281305f8277b9391bb8cc5ed9"
+    },
+    {
+      "path": "integrations/native/scheduler-targeted.test.mts",
+      "sha256": "d424816636525f21c3b30de966c9b777aa2b494224798d690b5a1de215976d19",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository",
+      "t7ControlledSha256": "f16f4ecdf0e2d11c1099e5ba69294ab4e8773d9a6358633dc8907a0f469d78ff"
+    },
+    {
+      "path": "integrations/native/sqlite-driver.test.mts",
+      "sha256": "574f930169cc18114b8f83ae8d220257fc734a96cfad66e3b7de7c112a018e2c",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/targeted-execution.mjs",
+      "sha256": "d4ce2c6e6cfb050c0c68d6a2454b1a11c7f41643628f1bc45472c930d8a0d41a",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+    },
+    {
+      "path": "integrations/native/targeted-execution.patch",
+      "sha256": "e05f86b0b2d06a4a73ae2bc30751ee4431250f2f0734194456eee13c4e22154f",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+    },
+    {
+      "path": "integrations/native/verification-options.mjs",
+      "sha256": "50692cfe4efec7779e6263da4d37e3db36a12c81f96498e01232a5d50d97a8c6",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/verification-options.test.mjs",
+      "sha256": "3cfe238ace0541f2dffcb47d88eb9fe779613d1d344b56d4e9d5b2e2e376a2b7",
+      "origin": "T7 protocol/host/native-driver readiness verification in this repository; no Native implementation or binary copied"
+    },
+    {
+      "path": "integrations/native/verify-full-host.mjs",
+      "sha256": "b906dbe3ffe3dd973c46aee3d9a33de3773bedd27ee9b0b1a162e4c043d5478a",
+      "origin": "T7 full Native host lifecycle and local Linux isolation verification; no original Native source, driver binary or business data imported",
+      "t7FullHostSha256": "790a0c099130cc34ec784755b7eaa2aab7ff06480c7e431b895a3a3552a57bcc",
+      "t7InspectionSha256": "ba5b3667f3fb11fac080942c8beaccfa2b99a673ee3136ab3d942564101fb092"
+    },
+    {
+      "path": "integrations/native/verify-targeted.mjs",
+      "sha256": "78aa8bca8e7c4248fff0953fd2be4104e76ba70ffdbde80245bfec5675d40c31",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository",
+      "t7ControlledSha256": "4d51bfc20297c8acd048c9838302b3c80a9fc43d8f9bb1b4e0f4412dc8b74b87"
+    },
     {
       "path": "src/role-eval/file-journal.ts",
       "sha256": "a053379774e49a7e5d3fad8bfe0579e95f781cb331b07aaa51049cf9b7dbcc91",
@@ -15,9 +148,96 @@
       "sourceSha256": "92f893d7c24e8f3d9e467f653666310b5000ff6327467d0f071bc9bfe9163137"
     },
     {
+      "path": "src/role-eval/manager-artifacts.ts",
+      "sha256": "3000437217ba62ec58eae7e6c5a62afc9177c317781f2a278ba66786207c385c",
+      "origin": "T4 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/manager-commands.ts",
+      "sha256": "699811c53c7db189af519754c6f300d3e3591070f2590d52818f48b73b4ba03c",
+      "origin": "T4 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/manager-report.ts",
+      "sha256": "5d8610b14c5c46ccf1ee02b2aab327a6c529a74004808c03209e7c1c6a101d12",
+      "sourceSha256": "9dcf8cd5d51d2ffe998f40e61e056f37a7c0744cf0101aba5eb43ff6eaeedd2c",
+      "sourceCanonicalSha256": "5d8610b14c5c46ccf1ee02b2aab327a6c529a74004808c03209e7c1c6a101d12",
+      "origin": "Original business working-tree snapshot 2026-10-17",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "src/role-eval/manager-store.ts",
+      "sha256": "c4cde331a9450484c0583aa6f3701d8c33212d072163ed96065fd9e45a13a9de",
+      "sourceSha256": "af9adc7a6d532bbea29e686bf394a66cf28c84c025299039d72cbac705907834",
+      "sourceCanonicalSha256": "486f740fd6c5bec96b7c48e38ad0337f1a1d5ae0c20fb99e97b7a4a3e0b992be",
+      "origin": "Original business working-tree snapshot 2026-10-17",
+      "adaptation": "Compatible botSource, receiveBot, own lookup and confirm guard",
+      "t2Sha256": "6fb4e5fe58eab6467c74b92f8b181f61964efbc48bcaa171d0f387e549747e90",
+      "t3Adaptation": "Event reservation, controlled result consumption, delivery recovery or compatibility regression",
+      "t3Sha256": "60a076724e03669f4ad5a0d57a1779b9be9d401fc9800a83860d9a3f92821bbd",
+      "t4Adaptation": "Confirmed correction, scoped snapshot/file adaptation, persisted delivery lookup or bounded file send",
+      "t7PreparationSha256": "27d0766b52cf46014f7e4430874fd4ea9ab757ad22ad06c20295d5c7072bede5"
+    },
+    {
+      "path": "src/role-eval/native-bot-execution.ts",
+      "sha256": "f140ef0176b51d581d51a17c8c1e2403cf191dcee714886d9ba0de588bf43cf2",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+    },
+    {
       "path": "src/role-eval/native-bot-identity.ts",
       "sha256": "cabf7176e1ca18cb8ed1d2dc1b3e34f6967b4f497a23148f00ef873d1199499f",
       "sourceSha256": "cabf7176e1ca18cb8ed1d2dc1b3e34f6967b4f497a23148f00ef873d1199499f"
+    },
+    {
+      "path": "src/role-eval/native-bot-service.ts",
+      "sha256": "2c6693908578ec51fd6a01e450ce998473de24843330805c9979e7a1f60499b2",
+      "origin": "T7 isolated assembly or read-only Native projection in this repository",
+      "t7PreparationSha256": "85798fa85954d4aeb32d03269f1dda71990edeffb7f6d653fdb683b8a4ee2e4c"
+    },
+    {
+      "path": "src/role-eval/native-bot-tasks.ts",
+      "sha256": "c2eff5e0e37e4f93fc9d1019d6670be584aa7a682cfd990771e9d213af0d3dee",
+      "origin": "T5 local implementation or synthetic tests in this repository",
+      "t7PreparationSha256": "3a72afafbedad2c950cddcc8b20bbcff67d76febd8744bb52a684e93a17eb3c1"
+    },
+    {
+      "path": "src/role-eval/training-generation.ts",
+      "sha256": "75b6e71cd05831fcb10c761a4b0b96362f9bafbb050a659c5934b0948e973ef1",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "28d4e9c6071cc6015d869010c526ae46c8aa52c9fa74a03d61566a9f08bd634a",
+      "sourceCanonicalSha256": "c247080e38c5de505ad13c3f1434bc1a7ac3e6c33662d890a1a6d529f92133f3",
+      "adaptation": "Exact-run cancellation, immutable arguments and outputs, late-result fence and optional authorization recheck"
+    },
+    {
+      "path": "src/role-eval/training-knowledge.ts",
+      "sha256": "a297f34248afe8b51316a9b1daac342ffd1c97462eb0fa87b2f5e98785e4a126",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "ccb8541fa1b123e422f9326febf7dd5625d699879d0b3ac6dcb97645cb95e9da",
+      "sourceCanonicalSha256": "a297f34248afe8b51316a9b1daac342ffd1c97462eb0fa87b2f5e98785e4a126",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "src/role-eval/training-output.ts",
+      "sha256": "28a28986add61ed8a7302401feb0614bb4eeba850e9e36c1a5c7863989caefd5",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "624b40f155e763b1790bd60e833ac72b92c2a4a167d5922f469ccdc97263871e",
+      "sourceCanonicalSha256": "28a28986add61ed8a7302401feb0614bb4eeba850e9e36c1a5c7863989caefd5",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "src/role-eval/unified-workbook.ts",
+      "sha256": "472dd88fd8ecfac823c2b117417a431a6edafa5ee900b60461808d2ac121a17f",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "effe08ea2b7cef4df4f6a7eeb96216d3eec47dba55e9189fec891901e1210ff6",
+      "sourceCanonicalSha256": "472dd88fd8ecfac823c2b117417a431a6edafa5ee900b60461808d2ac121a17f",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-assembly.ts",
+      "sha256": "d8a4ee8080984d3b7966e64b8db0d8745d4f61b66fd035c36e85a2734cf2ac5b",
+      "origin": "T7 isolated assembly or read-only Native projection in this repository",
+      "t7PreparationSha256": "572eb4c7ac975929b3e4faaa2a6d1eeaabd4cd026efe0a7c23b32d2ebdae0c08",
+      "t7InspectionSha256": "044c2a6cc7479c9d9130b6ee2c3b988d71032c7403e8b547cb51381ea53561b6"
     },
     {
       "path": "src/role-eval/wecom-bot-bindings.ts",
@@ -26,8 +246,76 @@
     },
     {
       "path": "src/role-eval/wecom-bot-context.ts",
-      "sha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71",
-      "sourceSha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71"
+      "sha256": "116bc7a8ef8e0f35dc77f7f70f197c24a30b060f2397132f5bd13a6e0b712ca1",
+      "sourceSha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71",
+      "t0t1Sha256": "336b04e67f26b8c06092f982902f530d2c3ca45c0af5e73ac62fc186d77e4f71",
+      "adaptation": "T2 authenticated channel metadata and guarded synchronous business seam"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-delivery.ts",
+      "sha256": "e22d4ddf2a575dbdfc710eba40cb7ef57fe5eae43062f597695d9a5ff9922324",
+      "origin": "T3 local implementation or synthetic tests in this repository",
+      "t3Sha256": "d42afd509db773a790c10455ceaceea3fe717bc5f9e72e237de683b8c92fa8fc",
+      "t4Adaptation": "Confirmed correction, scoped snapshot/file adaptation, persisted delivery lookup or bounded file send",
+      "t7PreparationSha256": "a7203229ac3c77b8b20431b2cfcb376d280286614fbd37fc7a81f91b85417228"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-handler.ts",
+      "sha256": "f9119a1559abdacbf7ca0220b22b8e5cbaea97079494ecc92d3d673a5025a1ab",
+      "origin": "T2 implementation and synthetic tests in this repository",
+      "t2Sha256": "8af7e3ec577d05a84c855354d234f44ba3f095eace3421a9d8cfc0b8a003c6ff",
+      "t3Adaptation": "Event reservation, controlled result consumption, delivery recovery or compatibility regression",
+      "t3Sha256": "08da63945089666034f06b119b2af24476013d39d415ff0cbeb74e87b0152e13",
+      "t4Adaptation": "Confirmed correction, scoped snapshot/file adaptation, persisted delivery lookup or bounded file send",
+      "t4Sha256": "30efe1c5d081b8bf939eb3a500cf6a7a13aa15d04ba8e765840dae956bf1046e",
+      "t5Adaptation": "Role-authorized task routing through original reply outbox",
+      "t7PreparationSha256": "85f64b92e717e995318ce8b39a42743e7270f6e6cdd2648a37daea1b1db6ff5d"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-notice.ts",
+      "sha256": "b46740f0a74fee0608cbca94a470a55343509e83d5d0412a0d7284d78bf03f1d",
+      "origin": "T4 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-preparation.ts",
+      "sha256": "1cc0aa45043c08f9fbfb0ac6252bac34a4ccf505249578548e8f8c2d38e21aa2",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-sdk.ts",
+      "sha256": "5620bfef7fb02c35b06b2babd2331692e82aedf456c2a2f872ec58d0f2cb3cd2",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository",
+      "t7ControlledSha256": "9e67aeb55ebbb77e84874292927540e602d1cd7d3feed2ef5792bbbb05bcdd89"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-sender.ts",
+      "sha256": "f4f7e977e0ce5dfdc4226971843156f62a9a974518c7d1e9c75fa74476a95847",
+      "origin": "T3 local implementation or synthetic tests in this repository",
+      "t3Sha256": "8c3435482046efa82e3d2515b2ca066cd147e18f28cd8856c1415ce15a147ba5",
+      "t4Adaptation": "Confirmed correction, scoped snapshot/file adaptation, persisted delivery lookup or bounded file send",
+      "t7PreparationSha256": "9d92c62bdc9e6cb10112e3bf930ccc102301b9f2f26ddd997d8c3eeeee6d82c0"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-task-commands.ts",
+      "sha256": "46698ea05b4c7bbab71d64532ec8d8bb4081bc174c0809ee9995eced88b5f9d1",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-task-store.ts",
+      "sha256": "e6ee7f430ebd579b1dc4a1a5982999dcb5252212cf18fa5b8ebb71c507159cdb",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-tasks.ts",
+      "sha256": "80725a843a7895be7cfb1ddf11eaba80871d4d1d34e30bc7145301cb1aecca8b",
+      "origin": "T5 local implementation or synthetic tests in this repository",
+      "t7PreparationSha256": "baeaefd8ff0f067d31c1658b9872ebae6195fd520994c1edbb6e02206ab2e6ad"
+    },
+    {
+      "path": "src/role-eval/wecom-bot-transport.ts",
+      "sha256": "1e49821f916fe69976737dbc2aec737abb5515d81b0b2449d67a2b3952f17943",
+      "origin": "T2 implementation and synthetic tests in this repository",
+      "t7PreparationSha256": "4e1d50780267a8093ab4472be1d86d7fb2ccd3b2b6c837cb57708d1c2f757bc6"
     },
     {
       "path": "src/role-eval/workbench-access.ts",
@@ -50,9 +338,132 @@
       "sourceSha256": "b7f07dab43fbd0c8bc91af8b6047d06ef2bb987821e4e107bc3483785c3bde6d"
     },
     {
+      "path": "tests/fixtures/offline-bot-sdk.ts",
+      "sha256": "31a51f1e3c599560df4bdd6bb95430ac6b6ff2e081ca49f61a7a2f2cb9016e57",
+      "origin": "T7 synthetic integration/SDK contract test or offline fixture in this repository",
+      "t7PreparationSha256": "cb241a36cf8f291f72cc4178b6e1f64faf68c28c7581b7bbe00f0da63b22ff36"
+    },
+    {
+      "path": "tests/recovery-inspection.test.ts",
+      "sha256": "5e9cbdb1adb6f5e3630111623447a2fc042a2da7ba4dc017697693d1c53dce22",
+      "origin": "T7 read-only recovery inspection and project configuration metadata coverage; original walker and host reused only in isolated candidates, no private source, data or credentials imported",
+      "t7InspectionSha256": "a28359d319d7680f4b9f1e1ea5979483a02be7f9403a501ea939a9ad2d707745"
+    },
+    {
+      "path": "tests/role-eval/local-performance-output.test.ts",
+      "sha256": "3d3f8c9303e22da6872709d84ecfa9c3300a8962bf37dcc0345e0e380647271f",
+      "origin": "T6 synthetic acceptance tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/manager-artifacts.test.ts",
+      "sha256": "bbf1e6cf9655815d86915b31badff973ac0c468eafbec542c2e7e6d416a50aa4",
+      "origin": "T4 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/manager-bot-correction.test.ts",
+      "sha256": "094658b3e1f4545c03edfa0850e686e85d8d4526e8c924edd937d594248c99e9",
+      "origin": "T4 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/manager-bot-delivery-store.test.ts",
+      "sha256": "f73f0ee168ed9250143aab9a5cb45a45b27cb8e1c069701504d0cb10b6378604",
+      "origin": "T3 local implementation or synthetic tests in this repository",
+      "t7PreparationSha256": "f2f27b63a20bb915c4c2c2233a81dbc47fac3af87318b8ac8135d6823a9863ef"
+    },
+    {
+      "path": "tests/role-eval/manager-bot-store.test.ts",
+      "sha256": "77ce16c3f973ea9ced6097ae476db2e7e01f24cf5304acb68960f664b52d45de",
+      "origin": "Original manager-store and manager-return-store assertions plus T2 synthetic seam tests"
+    },
+    {
+      "path": "tests/role-eval/manager-commands.test.ts",
+      "sha256": "e480431ca7e77e2bb7dc43ef3ef236c81f8417023bd4863d31e7c26862e8b7fe",
+      "origin": "T4 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/manager-report.test.ts",
+      "sha256": "4c462a5a04df98698414f6ba968f0ad8e6d41ece3e1d1117ef3b4793c4d5c2cf",
+      "sourceSha256": "020d83b344e654c30cc77287a0e02fda5cc2e31897bb92c9f3b0c1828d8f8905",
+      "sourceCanonicalSha256": "4c462a5a04df98698414f6ba968f0ad8e6d41ece3e1d1117ef3b4793c4d5c2cf",
+      "origin": "Original business working-tree snapshot 2026-10-17",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "tests/role-eval/native-bot-execution.test.ts",
+      "sha256": "1f14d154b0234303b882017bb7160cac00fbc31071795c37ffa496e1094b4769",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository"
+    },
+    {
       "path": "tests/role-eval/native-bot-identity.test.ts",
       "sha256": "a333b284ebb1b340a074b7c0a66d8ff78545126d1048df40f3d5572d1ff4dc92",
       "sourceSha256": "a333b284ebb1b340a074b7c0a66d8ff78545126d1048df40f3d5572d1ff4dc92"
+    },
+    {
+      "path": "tests/role-eval/native-bot-service.test.ts",
+      "sha256": "94e470e840370a7757018cbc6542cebda70d2605838c5e28921be4ff1630cf68",
+      "origin": "T7 synthetic integration/SDK contract test or offline fixture in this repository",
+      "t7PreparationSha256": "8dac87a860f681d0940e87fd65fa7659f32d06d83b21a625f0eff85b879cd6ef"
+    },
+    {
+      "path": "tests/role-eval/native-bot-tasks.test.ts",
+      "sha256": "6d4583d8d3ca206f325695d7d3f61a736339655d85414f7ca2facc65a503d944",
+      "origin": "T5 local implementation or synthetic tests in this repository",
+      "t7PreparationSha256": "1ef9d2aeb8d0140e236add5231c97517a36cc78a52aff5a37ff7ac67b014fc57"
+    },
+    {
+      "path": "tests/role-eval/training-cancel.test.ts",
+      "sha256": "26f67ffcd4f42e22c0ff6d4678cedb06b9b92b2cbc0ab321cc7381a18068a8f5",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/training-generation.test.ts",
+      "sha256": "9705f688dbef9819f2fca28964214c4e549c7461b277f5c13a3eb3029ce0033e",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "f2d20e856cee2f45e967206d47275b223c0a594efbcab947f33490de4834553b",
+      "sourceCanonicalSha256": "9705f688dbef9819f2fca28964214c4e549c7461b277f5c13a3eb3029ce0033e",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "tests/role-eval/training-knowledge.test.ts",
+      "sha256": "473a06546e163da0c99df747a769835cdd75365e78ab6183e9d0eb36021280be",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "768c0a7f0f8bf99d46afa7762d1101e36cddcb18dcdc289e22381568b175ba57",
+      "sourceCanonicalSha256": "473a06546e163da0c99df747a769835cdd75365e78ab6183e9d0eb36021280be",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "tests/role-eval/training-output.test.ts",
+      "sha256": "2eaf1d04f6689e726839ae4623b4310205b246e9e12987eeb60e9ac15844cbd2",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "e70e38267bc65fa8978881aca2c8e565b45974e47e872e28477551356a3ec271",
+      "sourceCanonicalSha256": "2eaf1d04f6689e726839ae4623b4310205b246e9e12987eeb60e9ac15844cbd2",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "tests/role-eval/unified-workbook.test.ts",
+      "sha256": "8ec39d2cded7e3dc64c411f7b1f8c94f9a2c46faf11c3478cad89adee5f5d4f7",
+      "origin": "Original business working-tree snapshot 2026-10-18",
+      "sourceSha256": "e99ca18c98b94f39d5666ed262d036b583847d9ae8c216bd388baa9ff7b5d134",
+      "sourceCanonicalSha256": "8ec39d2cded7e3dc64c411f7b1f8c94f9a2c46faf11c3478cad89adee5f5d4f7",
+      "adaptation": "Unchanged"
+    },
+    {
+      "path": "tests/role-eval/wecom-assembly-native.test.ts",
+      "sha256": "759c0282a8453e15fe15580a24b5638e143d9b749d2d72de12f6cf57aba2f0cf",
+      "origin": "T7 synthetic integration/SDK contract test or offline fixture in this repository",
+      "t7PreparationSha256": "7faa4fb8f0d5643d6c2408178df69b22f7c509976a247ef728e64c41ebdc061e"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-assembly.test.ts",
+      "sha256": "382c8f2143c8f3ddc3bfebf06b1bf9f4d41b74666733fa94fd4309084618987c",
+      "origin": "T7 synthetic integration/SDK contract test or offline fixture in this repository",
+      "t7PreparationSha256": "6a3440036f55604053cc850ada2c010e7dfb8f551904c4850d5de923077ff7b1",
+      "t7InspectionSha256": "2b89b396aa0ce89f48725892ab6d9ede774629e245c75b4e273b77ada65c9a51"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-consume.test.ts",
+      "sha256": "a24979468cf51e87f3de75292cb46203c9d7647ec13ee140ed7bb495f7642067",
+      "origin": "T3 local implementation or synthetic tests in this repository"
     },
     {
       "path": "tests/role-eval/wecom-bot-context.test.ts",
@@ -60,9 +471,106 @@
       "sourceSha256": "fe7b7e8bfc02dcf29354f09de34bc17edf7a45772ad6b11dc6072097c67bb1c8"
     },
     {
+      "path": "tests/role-eval/wecom-bot-delivery.test.ts",
+      "sha256": "6b0fcd7d12459560742f6d8979080a400891c61ed409c75860ef3bd718867509",
+      "origin": "T3 local implementation or synthetic tests in this repository",
+      "t7PreparationSha256": "045eb6472d006d713be98c8a97e11884c9ad0aff9c3cea6cf529eec9aeaefac7"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-execution.test.ts",
+      "sha256": "e2421c749c3658c4dd9480f0f9b08655951f06c74e8e438d56e8b6a06ec1c09a",
+      "origin": "T2 implementation and synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-file-sender.test.ts",
+      "sha256": "e82d01865719fcd7556e9219705f2cd34fbbfb6c7cd80f0ec7b6ba39222b8573",
+      "origin": "T4 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-handler.test.ts",
+      "sha256": "f7d4f0b9c9948b13f1fc0dc257b6c65b40fa4bef41be0a8a4115ef31271960c9",
+      "origin": "T2 implementation and synthetic tests in this repository",
+      "t2Sha256": "a0e9f0d2693737c1d99525130494880b1e9e9913675615a979d67277b7c4746d",
+      "t3Adaptation": "Event reservation, controlled result consumption, delivery recovery or compatibility regression",
+      "t7PreparationSha256": "905dfa49045554d7d76e87b22989a7378082c95a146c33b07e6c54b647dc1476"
+    },
+    {
       "path": "tests/role-eval/wecom-bot-identity-integration.test.ts",
       "sha256": "c568d40fa530577715d74b8d3f62443c3f47d70ecc068990385cec0be7e2c847",
       "sourceSha256": "c568d40fa530577715d74b8d3f62443c3f47d70ecc068990385cec0be7e2c847"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-multimember.test.ts",
+      "sha256": "8de3a017437912eb41b81bcb85f20e38d6ade2199b653503c65667dcd5dbf724",
+      "origin": "T6 synthetic acceptance tests in this repository",
+      "t7PreparationSha256": "cc95623c33d0f23c73d5c59fda5120466f4b389a97b098ccc312474258343507"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-operations.test.ts",
+      "sha256": "2905328d28d1a6cfe8954c0346dd119c2f259d4495b800d3de911da0f1e5ddf4",
+      "origin": "T4 local implementation or synthetic tests in this repository",
+      "t7PreparationSha256": "d3d28d66abf1671651da4b0bbfe6f9a1e8ea8e1c96e44f37bd1dad07c399b736"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-preparation.test.ts",
+      "sha256": "dc4099eb74e7ed6bfeec449ed01d3a9d4032466b82dfc1a164ebdb918850b382",
+      "origin": "T7 original-queue observation and isolated synthetic WeCom preparation/actual-gate integration; no private implementation, runtime data, binary or credential imported"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-report-integration.test.ts",
+      "sha256": "503b66829ae9b32fa6be8a63f7a32f6f798806f2b6883b48be162d2971692e4e",
+      "origin": "T2 implementation and synthetic tests in this repository",
+      "t2Sha256": "d63a80c9103f173592f71f86e13d9da1ebe9b4c19788cf4c66359d91056ef185",
+      "t3Adaptation": "Event reservation, controlled result consumption, delivery recovery or compatibility regression"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-sdk.test.ts",
+      "sha256": "c9bef6292f1f75c3cb34cf7a9a6637e447b334188ac4f6547d0cd6f67078b3ce",
+      "origin": "T7 controlled channel/Native adaptation or isolated synthetic verification in this repository",
+      "t7ControlledSha256": "cb91f9c7ee3d80dd3893b8956e36489b96c15dbbb106c99ff3058a1b9aec5720"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-sender.test.ts",
+      "sha256": "cdae28723428dd7d02e0e1905ccd27856a0954529fdc0d289ae6abea40ce1649",
+      "origin": "T3 local implementation or synthetic tests in this repository",
+      "t7PreparationSha256": "106b018a27de9a77cbaa5b44c408314c8cf8f0f01839b574124df86d6916b502"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-sqlite-contention.test.ts",
+      "sha256": "3f965a13125570464e1d4cfebf0c940f31a5d8110c841c596ffeabc2e6d39a8d",
+      "origin": "T6 synthetic acceptance tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-task-commands.test.ts",
+      "sha256": "d7040aa08bded25b74c3df2ef2d69b7d118bedbdf74bea6243db5aa173c97335",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-task-store.test.ts",
+      "sha256": "00e30f1c74d6a568f1bbedc8e0675ed76fe45168da19de3ac23f890b1408a600",
+      "origin": "T5 local implementation or synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-tasks.test.ts",
+      "sha256": "56f737a649e45883792ad12dc49e5458e92d286ba75a58b6df0651c39845888a",
+      "origin": "T5 local implementation or synthetic tests in this repository",
+      "t7PreparationSha256": "7d312aca4283596f537e656f6bd58e0b698ed12b8ea32e414bc0315e34a456f1"
+    },
+    {
+      "path": "tests/role-eval/wecom-bot-transport.test.ts",
+      "sha256": "5eba5352b5bdcff2dc7240a0b3e6b15aa9afe6158000742eec9ea03944f9a42e",
+      "origin": "T2 implementation and synthetic tests in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-sdk-queue.test.ts",
+      "sha256": "727dbb67f8a956987f784a5c27258d620d0271f6afdaa616116d1bdf53687db0",
+      "origin": "T7 synthetic integration/SDK contract test or offline fixture in this repository"
+    },
+    {
+      "path": "tests/role-eval/wecom-web-compat.test.ts",
+      "sha256": "ab53da2da628b1071844d6ec876966a4ebbf2ca0ea5a62fa692b30bacc248e7a",
+      "origin": "T6 synthetic acceptance tests in this repository",
+      "t7PreparationSha256": "52e29df0048cfabb2bf47a8e0f5351cd845eedd0113d5738b6effe884b48c941"
     },
     {
       "path": "tests/role-eval/workbench-access.test.ts",
@@ -74,5 +582,15 @@
       "sha256": "bd424647f8ef1cf7285faa10bad31abc52ff935534bae703a3f86434115f9452",
       "sourceSha256": "b404912c496d44f82ce3a847c1c843030158e35246609a2be6a3cf18f98d3445"
     }
-  ]
+  ],
+  "stageBase": "50471d3517eb6d4936e5599f1e1a31a1e107bb00",
+  "t4Base": "19629f700485f12c186cf7c98683132a82ed2321",
+  "t5Base": "70ae2d209c85b0b05d648afb0f19c514afde5c15",
+  "t6Base": "ad835dd53590c0f5ebae349eeed5d47aa575f605",
+  "t7Base": "cd767c1aef057063948e1de786ab47bdf9523094",
+  "t7ControlledBase": "69090a7cf13a65d3629cb7081527dbaa8c1bd6ee",
+  "t7ReadinessBase": "f8673f351828d9f431fc2a108674e7ed0f19b095",
+  "t7FullHostBase": "9fe2de5969126685b850fd8b942f0e2417cfe03d",
+  "t7RecoveryPreparationBase": "6045b3fafcf359abf3850afe2e3c1386402465c5",
+  "t7RecoveryEvidenceBase": "05f90289baffa191b39d1456808fdc1643fcd7d4"
 }

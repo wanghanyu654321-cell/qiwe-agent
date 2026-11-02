@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -101,6 +102,27 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cluster?.stop();
+});
+
+it('opens Postgres through Node ESM pg.default.Pool and openPerformanceStore', async () => {
+  const source = readFileSync(new URL('../../src/role-eval/performance-open.ts', import.meta.url), 'utf8');
+  expect(source).toContain("(await import('pg')).default");
+  expect(source).not.toMatch(/const\s*\{\s*Pool\s*\}\s*=\s*await import\('pg'\)/);
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    const loaded = await import('pg');
+    if (typeof loaded.Pool === 'function') process.exit(2);
+    if (typeof loaded.default?.Pool !== 'function') process.exit(3);
+    const pool = new loaded.default.Pool({ connectionString: process.env.FRONT_CLAW_TEST_URL });
+    const client = await pool.connect();
+    try { const row = await client.query('select 1 as ok'); if (row.rows[0].ok !== 1) process.exit(4); }
+    finally { client.release(); await pool.end(); }
+  `], { encoding: 'utf8', env: { ...process.env, FRONT_CLAW_TEST_URL: cluster.url } });
+  expect(result.status, result.stderr).toBe(0);
+  const opened = await open(cluster.url);
+  expect(opened.driver).toBe('postgres');
+  await opened.store.setConfig('pg_open_probe', '1');
+  expect(await opened.store.getConfig('pg_open_probe')).toBe('1');
+  await opened.close();
 });
 
 it('applies migration 007 twice and leaves existing public tables alone', async () => {

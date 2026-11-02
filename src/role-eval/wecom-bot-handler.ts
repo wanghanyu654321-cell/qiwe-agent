@@ -1,0 +1,224 @@
+import {createHash} from 'node:crypto';
+import type {ManagerStore,StaffContext,StaffReport,BotReplyAttachment} from './manager-store.js';
+import type {ManagerArtifactStore,ManagerSnapshot,ManagerArtifact} from './manager-artifacts.js';
+import {parseManagerCommand} from './manager-commands.js';
+import {botDeliveryNotice} from './wecom-bot-notice.js';
+import {parseBotTaskCommand} from './wecom-bot-task-commands.js';
+import type {createBotTasks} from './wecom-bot-tasks.js';
+import type {createBotConversations} from './wecom-bot-conversations.js';
+import type {BotContextRequest,BotReadScope,WecomBotContext,createWecomBotContext} from './wecom-bot-context.js';
+import {normalizeBotFrame,type BotEvent,type BotReplyPlan} from './wecom-bot-transport.js';
+import type {PendingReportOwner} from './wecom-bot-task-store.js';
+import {looksLikeReport,validateExtractedReport} from './wecom-bot-report-model.js';
+import {REPORT_GUIDE,isShortConfirm,looksLikeReportAttempt,parseSummaryIntent} from './wecom-bot-intents.js';
+import {auditUnrecognizedReport,SUMMARY_DENIED,botToolAllowed,createBotReportTools,isCompleteReport,tryParseReport,withSupersedes} from './wecom-bot-report-tools.js';
+export interface BotReportOptions {
+ mode:'isolated-synthetic';authority:ReturnType<typeof createWecomBotContext>;ledger:ManagerStore;
+ artifacts?:ManagerArtifactStore;
+ tasks?:ReturnType<typeof createBotTasks>;
+ conversations?:ReturnType<typeof createBotConversations>;
+ scope:{tenant:string;store:string;workspace:string};
+ employees:readonly {accountId:string;employeeId:string;employeeName:string}[];
+ /** Already authenticated SDK callback snapshot, never an HTTP/client payload. Synchronous and bounded by caller. */
+ readEvent():unknown;now?:()=>Date;
+ /** When set, every text message is handled by the single Front Claw assistant. */
+ unifiedAssistant?: { handleMessage(input: { memberId: string; text: string; signal?: AbortSignal; deadline?: number }): Promise<{ replies: readonly string[] }> };
+ /** Trusted synchronous reservation; a persisted file result can short-circuit regeneration on replay. */
+ beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):{replayState:'none'|'reserved'|'completed-report'|'completed-nonreport';cached?:BotReportResult}|void;
+}
+export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file'|'task';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;taskId?:string;taskStatus?:string;reply:BotReplyPlan;}
+export interface BotReplyExecution {beforeReply?:(scope:BotReadScope)=>Promise<void>;context:WecomBotContext;event:BotEvent;actor:StaffContext;result:BotReportResult;}
+export function createBotReportHandler(options:BotReportOptions){
+ if(options.mode!=='isolated-synthetic')throw Error('invalid_report_catalog');
+ return createReportHandler(options);
+}
+export function createControlledRealBotReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'controlled-real-pilot'}){
+ if(options.mode!=='controlled-real-pilot'||options.tasks||options.artifacts)throw Error('invalid_report_catalog');
+ return createReportHandler(options);
+}
+function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolated-synthetic' | 'controlled-real-pilot'}){
+ const valid=(s:unknown):s is string=>typeof s==='string'&&!!s.trim()&&s.length<=120&&!/[\u0000-\u001f]/.test(s);
+ if(!options.scope||Object.values(options.scope).length!==3||!['tenant','store','workspace'].every(k=>valid(Reflect.get(options.scope,k)))||!Array.isArray(options.employees)||!options.employees.length||options.employees.some(p=>!p||![p.accountId,p.employeeId,p.employeeName].every(valid))||new Set(options.employees.map(p=>p.accountId)).size!==options.employees.length||new Set(options.employees.map(p=>p.employeeId)).size!==options.employees.length)throw Error('invalid_report_catalog');
+ const scope={...options.scope},employees=structuredClone(options.employees),{authority,ledger,artifacts,tasks,conversations,readEvent,beforeWork}=options,now=options.now??(()=>new Date());
+ const roster=employees.map(e=>({...scope,employeeId:e.employeeId,employeeName:e.employeeName}));
+ const money=(cents:number|null)=>cents===null?'未知':`${cents<0?'-':''}${Math.trunc(Math.abs(cents)/100)}.${String(Math.abs(cents)%100).padStart(2,'0')}元`;
+ const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
+ const issued=new WeakMap<object,BotReplyExecution>();
+ const resolveActor=(context:WecomBotContext):StaffContext=>{
+  if(scope.tenant!==context.identity.tenantId||scope.store!==context.identity.storeId)throw Error('access_denied');
+  const employee=employees.find(p=>p.accountId===context.identity.accountId);if(!employee)throw Error('access_denied');
+  return {...scope,employeeId:employee.employeeId,employeeName:employee.employeeName};
+ };
+ return {
+ async consumeReply<T>(result:BotReportResult,work:(value:BotReplyExecution)=>Promise<T>):Promise<T>{
+  const own=result&&issued.get(result);if(!own)throw Error('access_denied');await authority.assertCurrent(own.context);
+  return work({context:own.context,event:structuredClone(own.event),actor:{...own.actor},result:structuredClone(own.result),...(own.beforeReply?{beforeReply:own.beforeReply}:{})});
+ },
+ async consumeReport<T>(request:BotContextRequest,id:string,work:(value:{context:WecomBotContext;actor:StaffContext;report:StaffReport})=>Promise<T>):Promise<T>{
+  if(!/^[a-f0-9]{64}$/.test(id))throw Error('report_not_found');const context=await authority.authorize(request,'manager'),actor=resolveActor(context);
+  const report=await authority.withCurrent(context,check=>{
+   const r=ledger.getReport(actor,id);if(!r)throw Error('report_not_found');const source=r.botSource,c=context.channel,i=context.identity;
+   if(r.state!=='confirmed'||!r.delivery||!source||source.corpId!==c.corpId||source.botId!==c.botId||source.memberId!==c.memberId||source.accountId!==i.accountId||source.workspaceJid!==i.workspaceJid||source.storeId!==i.storeId||source.bindingVersion!==c.bindingVersion)throw Error('access_denied');check();return r;
+  });
+  return work({context,actor,report});
+ },
+ async handle(request:BotContextRequest):Promise<BotReportResult>{
+  const input={correlationId:request.correlationId,signal:request.signal,deadline:request.deadline};
+  let frame:unknown;try{frame=structuredClone(readEvent());}catch{throw Error('event_unavailable');}
+  const event=normalizeBotFrame(frame),taskCommand=event.action.kind==='text'?parseBotTaskCommand(event.action.text):undefined,context=await authority.authorize(input,conversations?null:taskCommand?.role??'manager');
+  if(event.botId!==context.channel.botId||event.memberId!==context.channel.memberId||event.corpId!==undefined&&event.corpId!==context.channel.corpId||scope.tenant!==context.identity.tenantId||scope.store!==context.identity.storeId)throw Error('access_denied');
+  const actor=resolveActor(context);
+  // Reserve the original reply fingerprint before a role route may persist a selection or call Native.
+  const reservation=conversations?await authority.withCurrent(context,checkActive=>{const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();return replay?structuredClone(replay):undefined;}):undefined;
+  const reservedReply=reservation?.cached;
+  // 报数 fast path (regex parseStaffReport, no model). Only a COMPLETE report, or 「对」/「确认」/「改」 against
+  // this conversation's open pending report, bypasses the conversation. Nothing is saved before confirmation.
+  const pendingReports=conversations?.pendingReports,reportTools=pendingReports?createBotReportTools({ledger,pendingReports}):undefined;
+  const nowAt=now(),businessDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(event.createTime===undefined?nowAt:new Date(event.createTime*1000));
+  const pendingOwner:PendingReportOwner={tenant:scope.tenant,store:scope.store,workspace:scope.workspace,employeeId:actor.employeeId,corpId:context.channel.corpId,botId:context.channel.botId,memberId:context.channel.memberId,accountId:context.identity.accountId};
+  const reportSource={kind:'wecom-bot' as const,corpId:context.channel.corpId,botId:context.channel.botId,memberId:context.channel.memberId,messageId:event.messageId,accountId:context.identity.accountId,workspaceJid:context.identity.workspaceJid,storeId:context.identity.storeId,bindingVersion:context.channel.bindingVersion,...(event.createTime!==undefined?{createTime:event.createTime}:{})};
+  const reportKey='bot-'+hash(JSON.stringify([reportSource.corpId,reportSource.botId,reportSource.memberId,reportSource.messageId]));
+  // Natural-language summary request (manager-only, read-only); never sent to the model or the report path.
+  const nlSummary=conversations&&event.action.kind==='text'&&!taskCommand?parseSummaryIntent(event.action.text.trim(),businessDay):undefined;
+  let reportAction:{kind:'confirm'}|{kind:'report';text:string}|{kind:'revise-help'}|{kind:'guide'}|undefined;
+  if(reportTools&&!reservedReply&&!taskCommand&&!nlSummary&&event.action.kind==='text'&&context.roles.length>0){
+   const raw=event.action.text.trim(),open=pendingReports!.current(pendingOwner,nowAt),revise=/^改(?:$|[\s:：]+([\s\S]*)$)/.exec(raw);
+   if(open&&isShortConfirm(raw))reportAction={kind:'confirm'};
+   else if(open&&revise){const rest=(revise[1]??'').trim(),parsed=rest?tryParseReport(rest,businessDay):undefined;reportAction=parsed&&isCompleteReport(parsed)?{kind:'report',text:rest}:{kind:'revise-help'};}
+   else if(!parseManagerCommand(raw)&&!/^查询/.test(raw)){
+    const body=raw.replace(/^报数\s*/,''),parsed=tryParseReport(body,businessDay);
+    if(parsed&&isCompleteReport(parsed))reportAction={kind:'report',text:body};
+    else if(conversations?.reportExtractor&&looksLikeReport(raw)){
+     // Vague report: the model's report_numbers tool call extracts fields, which must pass the same
+     // parseStaffReport validation and then follow the same pending echo + 对/确认 flow. No other save path.
+     const budget=Math.min(8000,input.deadline-performance.now()-3000),started=performance.now();
+     let outcome='no_budget',count=0;
+     if(budget>=500){const child=AbortSignal.any([input.signal,AbortSignal.timeout(Math.floor(budget))]);
+      const items=await conversations.reportExtractor({text:body||raw,date:businessDay,signal:child}).catch(()=>undefined);
+      const canonical=items?validateExtractedReport(items,businessDay):undefined;count=items?.length??0;
+      outcome=input.signal.aborted?'aborted':canonical?'ok':items?'invalid':'none';
+      if(canonical&&!input.signal.aborted)reportAction={kind:'report',text:canonical};}
+     // Fixed guidance instead of a model answer that might claim the numbers were recorded.
+     if(!reportAction&&!input.signal.aborted&&looksLikeReportAttempt(raw))reportAction={kind:'guide'};
+     // Ordered, content-free trace: outcome, item count and latency only. No message text, no ids.
+     console.info(JSON.stringify({event:'report_extract',outcome,items:count,guided:reportAction?.kind==='guide',ms:Math.round(performance.now()-started)}));
+     if(!reportAction||reportAction.kind==='guide')auditUnrecognizedReport(raw);
+    }
+   }
+  }
+  const conversationResult=reportAction||nlSummary?undefined:await conversations?.route(context,event,input,reservation?.replayState??'none');
+  // With role conversations enabled, unrouted plain text gets a hint instead of a silent denial. Manager is
+  // no longer a bypass: it only grants the summary tool. Explicit commands still reach their handlers.
+  const plainText=event.action.kind==='text'?event.action.text.trim():'';
+  const explicitCommand=event.action.kind==='text'&&(!!parseManagerCommand(plainText)||!!nlSummary||/^查询(?:\s|$)/.test(plainText));
+  const managerCommand=event.action.kind==='text'?parseManagerCommand(plainText)??nlSummary:undefined;
+  // A cached summary/file reply is never replayed after manager permission is removed.
+  const summaryReplayDenied=!!conversations&&!!reservedReply&&!!managerCommand&&managerCommand.kind!=='correction'&&managerCommand.kind!=='invalid'&&!botToolAllowed('get_summary',context.roles);
+  const selectHint=!!conversations&&!taskCommand&&!conversationResult&&!reportAction&&event.action.kind==='text'&&!explicitCommand&&context.roles.length>0&&!reservedReply;
+  if(summaryReplayDenied||taskCommand&&!context.roles.includes(taskCommand.role)||conversations&&!context.roles.length||!conversations&&(!taskCommand&&!conversationResult&&!context.roles.includes('manager')||conversationResult?.reportText&&!context.roles.includes('manager')))throw Error('access_denied');
+  const plan=(status:BotReportResult['status'],content:string,report?:StaffReport,card=false):BotReportResult=>({status,...(report?{reportId:report.id}:{}),reply:{reqId:event.reqId,body:{msgtype:(card=card&&options.mode!=='controlled-real-pilot')?'stream_with_template_card':'stream',stream:{id:hash('report-reply|'+event.reqId),finish:true,content},...(card&&report?{template_card:{card_type:'button_interaction' as const,main_title:{title:'核对本人报数'},task_id:'report-'+report.id+'-'+hash(JSON.stringify([context.channel.corpId,event.botId,event.memberId,event.messageId,event.reqId])).slice(0,32),button_list:[{text:'确认入账',key:'confirm:'+report.hash,style:1 as const}]}}:{})}}});
+  const yuan=(cents:number)=>{const abs=Math.abs(cents),whole=String(Math.trunc(abs/100)).replace(/\B(?=(\d{3})+(?!\d))/g,','),frac=abs%100;return (cents<0?'-':'')+whole+(frac?'.'+String(frac).padStart(2,'0'):'')+' 元';};
+  const day=(d:string)=>d===businessDay?'今天':`${Number(d.slice(5,7))}月${Number(d.slice(8,10))}日`;
+  const span=(a:string,b:string)=>a===b?day(a):a.slice(0,7)===businessDay.slice(0,7)&&a.endsWith('-01')&&b.slice(0,7)===a.slice(0,7)&&Number(b.slice(8))>=28?'本月':`${day(a)}至${day(b)}`;
+  const itemText=(i:{kind:string;start:string;end:string;amountCents:number})=>`${span(i.start,i.end)}${i.kind==='sales'?'销售':'目标'} ${i.kind==='target'&&i.amountCents===0?'未开始':yuan(i.amountCents)}`;
+  const reportText=(r:StaffReport,items:readonly {kind:string;start:string;end:string;amountCents:number}[],corrected:boolean,complete:boolean):string=>{
+   const what=items.length===1?itemText(items[0]!):items.map((x,n)=>`${n+1}. ${itemText(x)}`).join('\n');
+   const corr=r.correction?`更正：原 ${yuan(r.correction.previousAmountCents)} 改为 ${yuan(items[0]!.amountCents)}。`:'';
+   if(r.state==='confirmed')return corr+`已保存：${what}${corrected?'（已更正，原记录保留为历史）':''}`;
+   if(!complete)return `还差：${r.proposed.missing.join('、')||'有效的报数'}。请重新发一条完整的，例如：今天 销售 3500元。`;
+   const fix=pendingReports?withSupersedes(ledger,actor,r.proposed.items).replaced.map(x=>`会把已保存的 ${yuan(x.previousAmountCents)} 改成 ${yuan(r.proposed.items[x.index]!.amountCents)}。`):[];
+   return corr+(items.length===1?`${what}，对吗？`:`${what}\n对吗？`)+fix.join('')+'回「对」保存，回「改」修改';
+  };
+  const view=(r:StaffReport):BotReportResult=>{
+   const complete=r.proposed.items.length>0&&r.proposed.items.length<=10&&r.proposed.missing.length===0;
+   const items=r.state==='confirmed'?r.entries:r.proposed.items;
+   const replaced=r.state==='confirmed'?ledger.supersededEntryIds(actor,r.id):[];
+   const content=reportText(r,items,replaced.length>0,complete);
+   return plan(r.state==='confirmed'?'confirmed':complete?'pending':'needs-input',content,r,r.state==='pending'&&complete);
+  };
+  const owned=(id:string)=>{const r=ledger.getReport(actor,id);return r&&(!r.botSource||r.botSource.accountId===context.identity.accountId)&&(!r.source||r.source.accountId===context.identity.accountId)?r:undefined;};
+  const owner={accountId:context.identity.accountId,actor};
+  const summaryView=(s:ManagerSnapshot):BotReportResult=>{
+   const file=ledger.getBotFileReply(actor,s.snapshotHash,{...context.channel,accountId:context.identity.accountId,workspaceJid:context.identity.workspaceJid,storeId:context.identity.storeId});
+   return {...plan('summary',[`经营汇总 ${s.period.start}至${s.period.end}`,'口径：销售成交额；不等于实收、充值或余额消耗。',`销售成交：${money(s.salesCents)}`,...(s.targetCents===0?['目标：未开始']:[`目标：${money(s.targetCents)}`,`达成率：${s.rate===null?'未知':(s.rate*100).toFixed(2)+'%'}`,`差额：${money(s.varianceCents)}`]),`期间覆盖：${s.coverage==='complete'?'完整':'部分，请核对缺报及跨期数据'}`,`快照编号：${s.snapshotHash}`,`文件投递：${file?botDeliveryNotice(file.delivery):'尚无当前成员的投递记录'}`,`查询汇总 ${s.snapshotHash}（查回汇总及文件投递状态，不会重发文件）`,`导出Excel ${s.snapshotHash}`,`查询文件 ${s.snapshotHash}（明确请求再次取得已有文件）`].join('\n')),snapshotId:s.snapshotHash};
+  };
+  const summaryReadView=(s:ReturnType<ManagerStore['summary']>):BotReportResult=>!s.entries.length?plan('summary',s.kind==='month'?'本月还没有已确认的报数':'这段时间还没有已确认的报数'):plan('summary',[`经营汇总（只读） ${s.period.start}至${s.period.end}`,'口径：销售成交额；仅含已确认报数，未确认的不计入。',`销售成交：${money(s.salesCents)}`,...(s.targetCents===0?['目标：未开始']:[`目标：${money(s.targetCents)}`,`达成率：${s.rate===null?'未知':(s.rate*100).toFixed(2)+'%'}`,`差额：${money(s.varianceCents)}`]),`期间覆盖：${s.coverage==='complete'?'完整':'部分，请核对缺报及跨期数据'}`,'试点阶段不提供快照和 Excel 导出。'].join('\n'));
+  const fileView=(info:ManagerArtifact):BotReportResult=>({...plan('file',`文件：${info.filename}\n快照编号：${info.snapshotHash}\n查询文件 ${info.snapshotHash}`),snapshotId:info.snapshotHash,attachment:{...info}});
+  let exportSnapshot:string|undefined;
+  let unifiedContent:string|undefined;
+  if(options.unifiedAssistant&&event.action.kind==='text'&&!reservedReply){
+   const unified=await options.unifiedAssistant.handleMessage({memberId:event.memberId,text:event.action.text,signal:input.signal,deadline:input.deadline});
+   unifiedContent=unified.replies.map(line=>line.trim()).filter(Boolean).join('\n')||'Front Claw：这次没有处理成。';
+  }
+  let result:BotReportResult;
+  try{
+   result=await authority.withCurrent(context,checkActive=>{
+    if(unifiedContent!==undefined)return plan('pending',unifiedContent);
+    if(reservedReply)return structuredClone(reservedReply);
+    if(!conversations){const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay?.cached)return structuredClone(replay.cached);}
+    if(conversationResult?.reply)return plan('needs-input',conversationResult.reply);
+    if(reportAction?.kind==='guide')return plan('needs-input',REPORT_GUIDE);
+    if(reportAction?.kind==='revise-help')return plan('needs-input','请在「改」后直接发送更正后的完整报数，例如：改 今天销售成交5000元。原报数仍待确认，未入账。');
+    if(reportAction?.kind==='confirm'){const done=reportTools!.confirmPending({actor,roles:context.roles,owner:pendingOwner,now:nowAt,guard:checkActive});return done.status==='confirmed'?view(done.report):plan('needs-input','没有待确认的报数，未入账。请发送完整报数（日期、目标或成交、金额）。');}
+    if(reportAction?.kind==='report'){const sent=reportTools!.reportNumbers({actor,roles:context.roles,owner:pendingOwner,messageKey:reportKey,text:reportAction.text,date:businessDay,source:reportSource,now:nowAt,guard:checkActive});if(sent.status==='pending')return view(sent.report);if(sent.status==='denied')throw Error('access_denied');}
+    if(selectHint)return plan('needs-input','请先发送：岗位 内容营销（或其他已开通岗位），再发送你的问题。');
+    if(taskCommand)return plan('needs-input','正在核实任务。');
+    if(event.action.kind==='confirm'){
+     const r=owned(event.action.reportId);if(!r)return plan('not-found','未找到你有权访问的报告，请核对报告编号。');
+     if(r.hash!==event.action.hash)return plan('conflict',`报告版本不一致，未变更入账结果。请发送：查询 ${r.id}`);
+     if(!r.proposed.items.length||r.proposed.items.length>10||r.proposed.missing.length)return view(r);
+     const saved=ledger.confirm(actor,r.id,r.hash,pendingReports?withSupersedes(ledger,actor,r.proposed.items).items:r.proposed.items,checkActive);
+     pendingReports?.close(pendingOwner,r.id,'confirmed',nowAt,checkActive);return view(saved);
+    }
+    const text=conversationResult?.reportText??event.action.text.trim();
+    const command=parseManagerCommand(text)??(conversationResult?.reportText?undefined:nlSummary);
+    if(command?.kind==='invalid')return plan('needs-input',command.message);
+    if(command&&command.kind!=='correction'){
+     if(conversations&&!botToolAllowed('get_summary',context.roles))return plan('needs-input',SUMMARY_DENIED);
+     if(!artifacts){
+      // Pilot: read-only summary from confirmed ledger entries only; snapshots and file/xlsx export stay disabled.
+      if(command.kind==='summary'&&conversations?.summaryReadOnly)return summaryReadView(ledger.summary(actor,command.date,command.period,roster));
+      return plan('needs-input',conversations?.summaryReadOnly?'文件导出暂不可用；可发送“经营汇总 日期 本月”查看只读汇总。':'汇总和文件服务暂不可用，请稍后重试。');
+     }
+     if(command.kind==='summary')return summaryView(artifacts.save(owner,ledger.summary(actor,command.date,command.period,roster),checkActive));
+     const saved=artifacts.read(owner,command.snapshotId);if(!saved)return plan('not-found','未找到你有权访问的汇总快照，请核对完整编号。');
+     if(command.kind==='snapshot')return summaryView(saved);
+     if(command.kind==='file'){const file=artifacts.artifact(owner,command.snapshotId);return file?fileView(file.info):plan('not-found','此快照尚无可用文件，请先发送“导出Excel 快照编号”；已有文件不可用时请联系管理员核实。');}
+     exportSnapshot=command.snapshotId;return plan('needs-input','文件正在生成。');
+    }
+    if(/^查询(?:\s|$)/.test(text)){
+     const match=/^查询\s+([a-f0-9]{64})$/.exec(text);if(!match)return plan('needs-input','请发送“查询 报告编号”，使用原消息中的完整编号。');
+     const r=owned(match[1]!);checkActive();return r?view(r):plan('not-found','未找到你有权访问的报告，请核对报告编号。');
+    }
+    const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(event.createTime===undefined?now():new Date(event.createTime*1000));
+    const channel=context.channel,source={kind:'wecom-bot' as const,corpId:channel.corpId,botId:channel.botId,memberId:channel.memberId,messageId:event.messageId,accountId:context.identity.accountId,workspaceJid:context.identity.workspaceJid,storeId:context.identity.storeId,bindingVersion:channel.bindingVersion,...(event.createTime!==undefined?{createTime:event.createTime}:{})};
+    const key='bot-'+hash(JSON.stringify([source.corpId,source.botId,source.memberId,source.messageId]));
+    if(command?.kind==='correction')return view(ledger.receiveBotCorrection(actor,key,text,date,source,command.reportId,command.entryIndex,command.amountCents,checkActive));
+    if(reportTools&&conversationResult?.reportText){const sent=reportTools.reportNumbers({actor,roles:context.roles,owner:pendingOwner,messageKey:key,text,date,source,now:nowAt,guard:checkActive});if(sent.status==='pending')return view(sent.report);}
+    return view(ledger.receiveBot(actor,key,text,date,source,checkActive));
+   });
+   if(taskCommand){if(!tasks)result=plan('needs-input','任务服务尚未装配，未执行。请联系管理员核实。');else{const task=await tasks.execute(context,event,taskCommand,input);result={...plan(task.status==='needs-input'?'needs-input':'task',task.content),...(task.taskId?{taskId:task.taskId}:{}),taskStatus:task.status};}}
+   else if(exportSnapshot){const id=exportSnapshot;result=fileView(await artifacts!.export(owner,id,input,async()=>{
+    await authority.assertCurrent(context);
+    await authority.withCurrent(context,guard=>{const saved=artifacts!.read(owner,id);if(!saved)throw Error('artifact_unavailable');if(ledger.summary(actor,saved.period.start,saved.kind,roster).snapshotHash!==id)throw Error('snapshot_changed');guard();});
+   }));}
+  }catch(error){
+   const code=error instanceof Error?error.message:'';
+   if(['task_conflict','task_attempt_conflict','task_reference_changed','task_command_conflict'].includes(code))result=plan('conflict','任务来源或原引用冲突，未重新执行。请核对岗位与原任务编号并查询，必要时联系管理员。');
+   else if(['message_conflict','overlapping_report','confirmation_conflict','correction_conflict','report_version_conflict'].includes(code))result=plan('conflict','该消息或期间与已有记录冲突，未重复入账。请查询原报告，使用当前有效报告编号与明细序号发起更正。');
+   else if(code==='invalid_correction_reference')result=plan('needs-input','请核对本人已确认报告的完整编号、明细序号和新金额。');
+   else if(code==='snapshot_changed')result=plan('conflict','原汇总之后账本已变化，未发送文件。请重新发送经营汇总指令，按新快照导出；旧汇总仍可查询。');
+   else if(['artifact_unavailable','artifact_snapshot_conflict','workbook_failed','invalid_workbook','invalid_workbook_size','no_confirmed_sales_data'].includes(code))result=plan('needs-input','文件尚未发送。请核对已确认报数；汇总或文件不可用时联系管理员核实，可继续在企微查询原报告和汇总。');
+   else if(['authority_cancelled','authority_timeout','context_closed','tasks_closed','access_changed','access_denied','authority_unavailable','bot_reply_conflict','invalid_bot_reply'].includes(code))throw Error(code);
+   else throw Error('report_unavailable');
+  }
+  if(event.action.kind==='confirm'&&event.action.taskId){
+   const title=result.status==='confirmed'?'已入账，可查回':result.status==='conflict'?'核对冲突，未重复入账':'请查询报告核实';
+   result.reply.update={memberId:context.channel.memberId,card:{card_type:'button_interaction',task_id:event.action.taskId,
+    main_title:{title,desc:'业务与通知状态分别保存。请发送“查询 '+event.action.reportId+'”查回完整结果。'},
+    button_list:[{text:'核对结果',key:'confirm:'+event.action.hash,style:1}]}};
+  }
+  // A committed report survives response failure. Do not roll it back or mark it delivered.
+  await authority.assertCurrent(context);issued.set(result,{context,event:structuredClone(event),actor:{...actor},result:structuredClone(result),...(conversationResult&&conversations?.beforeReply(conversationResult)?{beforeReply:conversations.beforeReply(conversationResult)!}:{})});return result;
+ }};
+}

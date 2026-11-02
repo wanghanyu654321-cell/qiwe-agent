@@ -26,10 +26,19 @@ export function readPerformanceMigration(): string {
  * When FRONT_CLAW_DATABASE_URL is set, opens Postgres and applies migration 007.
  * When it is missing or blank, returns the in-memory store.
  */
+export function maskedDatabaseFailure(error: unknown): Error {
+  const code = error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : '';
+  const safe = /^[A-Z0-9_]{1,48}$/.test(code) ? code : 'UNKNOWN';
+  return Error(`FRONT_CLAW_DATABASE_UNAVAILABLE_${safe}`);
+}
+
 export async function openPerformanceStore(env: Record<string, string | undefined> = process.env): Promise<OpenedPerformanceStore> {
   const url = env[FRONT_CLAW_DATABASE_URL]?.trim() ?? '';
   if (!url) return { store: new MemoryPerformanceStore(), driver: 'memory', async close() {} };
-  const { Pool } = await import('pg');
+  // pg 8.13.1's ESM export is only `default`. Named `Pool` is undefined.
+  const pg = (await import('pg')).default;
+  const Pool = pg?.Pool;
+  if (typeof Pool !== 'function') throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE:PG_POOL');
   const pool = new Pool({ connectionString: url });
   const client: SqlClient = {
     async query<T = Record<string, unknown>>(sql: string, params?: readonly unknown[]) {
@@ -40,8 +49,8 @@ export async function openPerformanceStore(env: Record<string, string | undefine
   try {
     await migratePerformance(client, readPerformanceMigration());
   } catch (error) {
-    await pool.end();
-    throw error;
+    await pool.end().catch(() => {});
+    throw maskedDatabaseFailure(error);
   }
   return {
     store: createPostgresPerformanceStore(client),

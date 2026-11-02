@@ -1,0 +1,61 @@
+// Explicit isolated-service initializer. The original main and all O recovery
+// paths are intentionally NOT run by this candidate.
+let d3TerminalRunner: typeof runContainerAgent|undefined;
+let d3Bound=false;
+let d5OnCompleted:((ids:string[])=>Promise<void>|void)|undefined;
+const d3Runner:typeof runContainerAgent=async(group,input,onProcess,onOutput,ownerHomeFolder)=>{
+ // Scoped inside d3Runner so extracted/executed runner text is self-contained.
+ const FRONT_CLAW_IDENTITY='你是 Front Claw，门店岗位助理；请按当前岗位职责、已审资料与授权范围回答。回复要求：像门店同事一样用口语短句，一般不超过5行；不用表格、标题或加粗；不提系统、模型、会话、编号、版本等内部信息；不要说已记下、已保存或已入账，报数只由确认流程保存；不知道就直说，并给一个下一步。';
+ const withFrontClawIdentity=<T extends {prompt:string}>(input:T):T=>typeof input.prompt!=='string'||input.prompt.startsWith(FRONT_CLAW_IDENTITY)?input:{...input,prompt:FRONT_CLAW_IDENTITY+'\n\n'+input.prompt};
+ if(!d3TerminalRunner||!input.queryRunId||!input.turnId)throw Error('D3_NOT_BOUND');
+ const queryId=input.queryRunId,initialTurnId=input.turnId;
+ let interrupted=false,completed=false;
+ try {
+  assertConversationBatchCurrent(input.chatJid,queryId);
+  const observe=(event:Awaited<ReturnType<typeof runContainerAgent>>)=>{
+   for(const supplied of [event.turnId,event.inputTurnId,event.streamEvent?.turnId]){
+    if(supplied!==undefined&&supplied!==initialTurnId)throw Error('D3_RUNNER_TURN_MISMATCH');
+   }
+   const unhealthy=event.status==='error'||!!event.providerFailure||event.finalizationReason==='truncated'||event.sourceKind==='compact_partial'||event.sourceKind==='overflow_partial'||(event.pendingBgTasks??0)>0;
+   if(unhealthy||!!event.result&&!event.inputTurnCompleted){completed=false;invalidateConversationProjection(input.chatJid,queryId);}
+   if(event.inputTurnCompleted&&!unhealthy){
+    if(event.inputTurnId!==initialTurnId)throw Error('D3_RUNNER_TURN_MISMATCH');
+    completed=true;
+   }
+  };
+  const output=await d3TerminalRunner(group,withFrontClawIdentity(input),onProcess,async event=>{
+   observe(event);
+   if(event.newSessionId&&event.status!=='error'&&!event.providerFailure)noteConversationSession(input.chatJid,queryId,event.newSessionId);
+   if(event.status==='stream'&&event.streamEvent?.eventType==='status'&&event.streamEvent.statusText==='interrupted')interrupted=true;
+   await onOutput?.(event);
+  },ownerHomeFolder);
+  observe(output);
+  const frozen=finishConversationBatch(input.chatJid,queryId,interrupted?'cancelled':output.status==='success'&&completed?'completed':output.status==='error'?'failed':'unknown',output.status==='success'?output.newSessionId:undefined);
+  // Delivery failure cannot change the already committed execution result.
+  if(frozen.length&&d5OnCompleted){try{await d5OnCompleted(frozen);}catch(error){logger.warn({err:error},'Conversation notification deferred');}}
+  return output;
+ }catch(error){finishConversationBatch(input.chatJid,queryId,'unknown');throw error;}
+};
+const runConversationAgent:typeof runAgent=async(...args)=>{
+ const chatJid=args[2],queryId=queue.getConversationQueryId(chatJid);
+ try{return await runAgent(...args);}
+ finally{if(queryId)finishConversationBatch(chatJid,queryId,'unknown');}
+};
+export function initializeIsolatedConversationExecution(options:{
+ mode:'isolated-synthetic';runner:typeof runContainerAgent;
+ onCompleted?:(receiptIds:string[])=>Promise<void>|void;
+ authorize:(receipt:ReturnType<typeof readBotConversationReceipt>)=>boolean;
+}) {
+ if(d3Bound||options.mode!=='isolated-synthetic'||typeof options.runner!=='function'||typeof options.authorize!=='function')throw Error('D3_BINDING_INVALID');
+ d3Bound=true;d3TerminalRunner=options.runner;d5OnCompleted=options.onCompleted;
+ bindConversationAuthority(options.authorize);
+ loadState();
+ queue.setProcessMessagesFn(processGroupMessages);
+ queue.setSerializationKeyResolver(jid=>registeredGroups[jid]?.folder??jid);
+ for(const id of listQueuedConversationReceipts()){const receipt=readBotConversationReceipt(id)!;queue.enqueueMessageCheck(receipt.workspaceJid);}
+ return Object.freeze({
+  enqueue(receiptId:string){const receipt=readBotConversationReceipt(receiptId);if(!receipt)throw Error('D3_RECEIPT_MISSING');queueConversationReceipt(receiptId);queue.enqueueMessageCheck(receipt.workspaceJid);},
+  cancel(receiptId:string){cancelConversationReceipt(receiptId,(jid,queryId)=>queue.interruptQuery(jid,queryId));},
+  queue,
+ });
+}

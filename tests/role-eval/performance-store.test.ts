@@ -77,4 +77,10 @@ it('keeps migration 007 inside its own schema and uses memory when the database 
   const blank = await openPerformanceStore({ [FRONT_CLAW_DATABASE_URL]: '   ' });
   expect(blank.driver).toBe('memory');
   await blank.close();
+  const secret = 'super-secret-not-logged';
+  await expect(openPerformanceStore({ [FRONT_CLAW_DATABASE_URL]: `postgres://frontclaw:${secret}@127.0.0.1:1/postgres` })).rejects.toThrow(/^FRONT_CLAW_DATABASE_UNAVAILABLE_[A-Z0-9_]+$/);
+  await openPerformanceStore({ [FRONT_CLAW_DATABASE_URL]: `postgres://frontclaw:${secret}@127.0.0.1:1/postgres` }).catch(error => {
+    expect(String(error)).not.toContain(secret);
+    expect(String(error)).not.toContain('postgres://');
+  });
 });
