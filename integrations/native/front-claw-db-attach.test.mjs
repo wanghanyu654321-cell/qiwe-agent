@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { connectRunnerDatabaseNetwork, disconnectRunnerDatabaseNetwork, loadFrontClawDatabaseEnv, withDatabaseEnvFile } from './front-claw-db-attach.mjs';
+import { connectRunnerDatabaseNetwork, disconnectRunnerDatabaseNetwork, frontClawDbNetwork, loadFrontClawDatabaseEnv, withDatabaseEnvFile } from './front-claw-db-attach.mjs';
 
 function privateFile(contents, mode = 0o600) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'front-claw-db-')), 'front-claw-db.env');
@@ -29,6 +29,20 @@ test('refuses a group-readable env file and a symlink', () => {
   const link = path.join(dir, 'link.env');
   fs.symlinkSync(real, link);
   assert.throws(() => loadFrontClawDatabaseEnv(link), /FRONT_CLAW_DB_ENV_UNREADABLE/);
+});
+
+test('uses FRONT_CLAW_DB_NETWORK when the runner must join claw-wecom-pg', () => {
+  const previous = process.env.FRONT_CLAW_DB_NETWORK;
+  process.env.FRONT_CLAW_DB_NETWORK = 'salon-pg-net';
+  try {
+    const calls = [];
+    connectRunnerDatabaseNetwork({ invoke: args => { calls.push(args); }, runner: 'qiwe-runner-1' });
+    assert.deepEqual(calls, [['network', 'connect', 'salon-pg-net', 'qiwe-runner-1']]);
+    assert.equal(frontClawDbNetwork({}), 'claw-wecom-business-isolated-20261008-r1');
+  } finally {
+    if (previous === undefined) delete process.env.FRONT_CLAW_DB_NETWORK;
+    else process.env.FRONT_CLAW_DB_NETWORK = previous;
+  }
 });
 
 test('connects the runner to the business network and disconnects it without the database url', () => {

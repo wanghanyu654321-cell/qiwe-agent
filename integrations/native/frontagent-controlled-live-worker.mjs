@@ -5,7 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {installControlledRealContainerTransport} from './controlled-real-container-transport.mjs';
 import {restoreExistingFrontagentHost} from './frontagent-pilot-restoration.mjs';
 import {prepareExistingFrontagentPilot} from './frontagent-controlled-pilot.mjs';
-import {loadFrontClawDatabaseEnv,FRONT_CLAW_DB_NETWORK,FRONT_CLAW_DB_ENV_FILE} from './front-claw-db-attach.mjs';
+import {loadFrontClawDatabaseEnv,frontClawDbNetwork,FRONT_CLAW_DB_ENV_FILE} from './front-claw-db-attach.mjs';
 
 const dbg=(event,fields={})=>{if(process.env.WECOM_DEBUG==='1')try{console.log('WECOM_DEBUG '+JSON.stringify({t:new Date().toISOString(),event,...fields}));}catch{}};
 const fail=code=>{throw Error('FRONTAGENT_LIVE_'+code);};
@@ -68,7 +68,7 @@ export async function startControlledLiveWorker(options){
  const clearKeys=['ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN'],keys=[...Object.keys(controlledEnv),...clearKeys];
  const previous=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
  for(const key of clearKeys)delete process.env[key];for(const [key,value]of Object.entries(controlledEnv))process.env[key]=value;
- let transport,host,sql,grants,ledger,tasks,pilot,timer,performance,startupFailed=false,startupError;
+ let transport,host,sql,grants,ledger,tasks,pilot,timer,startupFailed=false,startupError;
  const restoreEnvironment=()=>{for(const key of keys)if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key];};
  const closeResources=createControlledLiveShutdown({
   get initialFailure(){return startupFailed;},get pilot(){return pilot;},get host(){return host;},get transport(){return transport;},
@@ -78,16 +78,15 @@ export async function startControlledLiveWorker(options){
   // The original main owns scheduler, Web, native DB and final process exit.
   signalOriginal:()=>{if(host){if(!process.listenerCount('SIGTERM'))throw Error('missing original handler');process.emit('SIGTERM');}}
  });
- const shutdown=async()=>{if(timer)clearTimeout(timer);try{return await closeResources();}finally{await performance?.close();}};
+ const shutdown=async()=>{if(timer)clearTimeout(timer);return closeResources();};
  try{
   checkProvider();
   const databaseUrl=process.env.FRONT_CLAW_DATABASE_URL||loadFrontClawDatabaseEnv();
   if(databaseUrl)process.env.FRONT_CLAW_DATABASE_URL=databaseUrl;
-  const [{openPerformanceStore},{createWecomBotHandler}]=await Promise.all([import('./performance-open.mjs'),import('./wecom-bot-unified-handler.mjs')]);
-  performance=await openPerformanceStore();
-  const unifiedAssistant=createWecomBotHandler({mode:'isolated-synthetic',store:performance.store,now:()=>new Date(),resolve:memberId=>performance.store.getPersonByMember(memberId),send:async()=>'sent',model:{complete:async()=>({type:'chat',text:'Front Claw 在。'})}});
+  // The performance store is opened by the role-eval pilot. This worker does not import
+  // compiled siblings from integrations/native; that directory is absent on the live base.
   await preloadOriginalRestorationBoundary(root);
-  transport=installControlledRealContainerTransport({...transportOptions,databaseNetwork:FRONT_CLAW_DB_NETWORK,databaseEnvFile:FRONT_CLAW_DB_ENV_FILE});
+  transport=installControlledRealContainerTransport({...transportOptions,databaseNetwork:frontClawDbNetwork(),databaseEnvFile:FRONT_CLAW_DB_ENV_FILE});
   const load=relative=>import(pathToFileURL(path.join(root,relative)).href);
   const db=await load('src/db.js'),config=await load('src/config.js'),context=await load('src/web-context.js');
   await load('src/web.js');
@@ -119,7 +118,7 @@ export async function startControlledLiveWorker(options){
    return current;};
   dbg('provision_files',{bindingsFile:fs.existsSync(bindingFile),approvedFile:fs.existsSync(approvedFile)});
   const modules={...bindings,...botContext,...botPilot,...roleOverlay,...conversationOverlay};
-   pilot=await prepareExistingFrontagentPilot({descriptor,gate:host.fullHostBootGate,db,host,grants,ledger,tasks,unifiedAssistant,
+   pilot=await prepareExistingFrontagentPilot({descriptor,gate:host.fullHostBootGate,db,host,grants,ledger,tasks,
    readBindings:()=>JSON.parse(fs.readFileSync(bindingFile,'utf8')),readApproved:()=>JSON.parse(fs.readFileSync(approvedFile,'utf8')),
    readCredentials:checkedCredentials,runId:scope.runId,expiresAt:scope.expiresAt,journalDirectory:path.join(root,'unused-existing-role-journal'),modules,
    ...(typeof botPilot.createModelReportExtractor==='function'?{reportExtractor:botPilot.createModelReportExtractor({baseUrl:model.baseUrl,model:model.model,readApiKey:()=>{const m=readModelCredentials();return m&&m.apiKey===model.apiKey?m.apiKey:'';}})}:{}),

@@ -4,6 +4,14 @@ export const FRONT_CLAW_DB_ENV_FILE = '/home/ubuntu/qiwe-private/front-claw-db.e
 export const FRONT_CLAW_DB_NETWORK = 'claw-wecom-business-isolated-20261008-r1';
 const ENV_KEY = 'FRONT_CLAW_DATABASE_URL';
 
+/** Docker network shared with claw-wecom-pg. FRONT_CLAW_DB_NETWORK overrides the default. */
+export function frontClawDbNetwork(env = process.env) {
+  const value = typeof env.FRONT_CLAW_DB_NETWORK === 'string' ? env.FRONT_CLAW_DB_NETWORK.trim() : '';
+  if (!value) return FRONT_CLAW_DB_NETWORK;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value)) throw Error('FRONT_CLAW_DB_NETWORK_INVALID');
+  return value;
+}
+
 function reject(code) { throw Error(code); }
 
 /** Read the private env file. The returned URL must not be logged. */
@@ -44,12 +52,12 @@ export function withDatabaseEnvFile(args, file = FRONT_CLAW_DB_ENV_FILE) {
   return next;
 }
 
-export function connectRunnerDatabaseNetwork({ invoke, runner, network = FRONT_CLAW_DB_NETWORK }) {
+export function connectRunnerDatabaseNetwork({ invoke, runner, network = frontClawDbNetwork() }) {
   if (typeof invoke !== 'function' || typeof runner !== 'string' || !runner || /[\r\n\u0000]/.test(runner)) reject('FRONT_CLAW_DB_RUNNER');
   invoke(['network', 'connect', network, runner]);
 }
 
-export function disconnectRunnerDatabaseNetwork({ invoke, runner, network = FRONT_CLAW_DB_NETWORK }) {
+export function disconnectRunnerDatabaseNetwork({ invoke, runner, network = frontClawDbNetwork() }) {
   if (typeof invoke !== 'function' || typeof runner !== 'string' || !runner || /[\r\n\u0000]/.test(runner)) reject('FRONT_CLAW_DB_RUNNER');
   invoke(['network', 'disconnect', network, runner]);
 }

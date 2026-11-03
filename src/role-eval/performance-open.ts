@@ -2,14 +2,31 @@ import { readFileSync } from 'node:fs';
 import { MemoryPerformanceStore, type PerformanceStore } from './performance-store.js';
 import { PERFORMANCE_MIGRATION_PATH, PERFORMANCE_MIGRATION_SQL } from './performance-migration.js';
 import { createPostgresPerformanceStore, migratePerformance, type SqlClient } from './performance-postgres.js';
+import { createMemoryBindingStore, createPostgresBindingStore, type WecomBotBindingStore } from './directory-store.js';
+import { loadPgPool } from './pg-pool.js';
 
 /** Set this to the claw-wecom-pg connection string. Unset uses the in-memory store. */
 export const FRONT_CLAW_DATABASE_URL = 'FRONT_CLAW_DATABASE_URL';
+/** Optional hostname override, for example the Postgres container name claw-wecom-pg. */
+export const FRONT_CLAW_DATABASE_HOST = 'FRONT_CLAW_DATABASE_HOST';
 
 export interface OpenedPerformanceStore {
   store: PerformanceStore;
+  bindings: WecomBotBindingStore;
   driver: 'memory' | 'postgres';
   close(): Promise<void>;
+}
+
+/** Replace only the URL host. The secret stays in the original string and is not logged. */
+export function applyDatabaseHost(url: string, host: string | undefined): string {
+  const name = host?.trim() ?? '';
+  if (!name) return url;
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/.test(name)) throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE_HOST');
+  let parsed: URL;
+  try { parsed = new URL(url); }
+  catch { throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE_HOST'); }
+  parsed.hostname = name;
+  return parsed.href;
 }
 
 /** Prefer the checked-in migration file, which startup applies as-is. */
@@ -33,12 +50,11 @@ export function maskedDatabaseFailure(error: unknown): Error {
 }
 
 export async function openPerformanceStore(env: Record<string, string | undefined> = process.env): Promise<OpenedPerformanceStore> {
-  const url = env[FRONT_CLAW_DATABASE_URL]?.trim() ?? '';
-  if (!url) return { store: new MemoryPerformanceStore(), driver: 'memory', async close() {} };
-  // pg 8.13.1's ESM export is only `default`. Named `Pool` is undefined.
-  const pg = (await import('pg')).default;
-  const Pool = pg?.Pool;
-  if (typeof Pool !== 'function') throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE:PG_POOL');
+  const rawUrl = env[FRONT_CLAW_DATABASE_URL]?.trim() ?? '';
+  if (!rawUrl) return { store: new MemoryPerformanceStore(), bindings: createMemoryBindingStore(), driver: 'memory', async close() {} };
+  const url = applyDatabaseHost(rawUrl, env[FRONT_CLAW_DATABASE_HOST]);
+  // ESM `import('pg')` puts Pool on default. CJS `require('pg')` puts Pool on the module. Accept either.
+  const Pool = await loadPgPool();
   const pool = new Pool({ connectionString: url });
   const client: SqlClient = {
     async query<T = Record<string, unknown>>(sql: string, params?: readonly unknown[]) {
@@ -54,6 +70,7 @@ export async function openPerformanceStore(env: Record<string, string | undefine
   }
   return {
     store: createPostgresPerformanceStore(client),
+    bindings: createPostgresBindingStore(client),
     driver: 'postgres',
     async close() { await pool.end(); },
   };

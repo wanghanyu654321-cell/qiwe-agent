@@ -93,8 +93,8 @@ export interface Draft {
   kind: 'report' | 'appointment';
   payload: DraftPayload;
   status: 'pending' | 'confirmed' | 'void';
-  reminder: 'none' | 'sent' | 'unknown';
-  voidNotice: 'none' | 'sent' | 'unknown';
+  reminder: 'none' | 'claimed' | 'sent' | 'unknown';
+  voidNotice: 'none' | 'claimed' | 'sent' | 'unknown';
   createdAt: string;
   closedAt: string | null;
 }
@@ -136,6 +136,8 @@ export interface PerformanceStore {
   getPersonByMember(memberId: string): Promise<Person | null>;
   listPeople(): Promise<Person[]>;
   saveAlias(alias: AliasRecord): Promise<void>;
+  /** Insert an alias copied from the base SQLite file. Existing store+alias rows stay. */
+  importAlias(alias: AliasRecord): Promise<boolean>;
   listAliases(storeId?: string): Promise<AliasRecord[]>;
   insertEntries(entries: LedgerEntry[]): Promise<void>;
   listEntries(filter?: EntryFilter): Promise<LedgerEntry[]>;
@@ -146,6 +148,8 @@ export interface PerformanceStore {
   getTarget(storeId: string, personId: string, periodMonth: string): Promise<Target | null>;
   listTargets(storeId?: string): Promise<Target[]>;
   saveDraft(draft: Draft): Promise<void>;
+  /** One caller wins the none -> claimed transition. A lost claim must not send. */
+  claimDraftNotice(draftId: string, field: 'reminder' | 'voidNotice'): Promise<boolean>;
   getDraft(draftId: string): Promise<Draft | null>;
   getOpenDraft(reporterPersonId: string): Promise<Draft | null>;
   listDrafts(filter?: { status?: Draft['status']; kind?: Draft['kind'] }): Promise<Draft[]>;
@@ -211,6 +215,12 @@ export class MemoryPerformanceStore implements PerformanceStore {
     if (index >= 0) this.aliases[index] = next;
     else this.aliases.push(next);
   }
+  async importAlias(alias: AliasRecord): Promise<boolean> {
+    const index = this.aliases.findIndex(row => row.storeId === alias.storeId && row.alias === alias.alias);
+    if (index >= 0) return false;
+    this.aliases.push(clone(alias));
+    return true;
+  }
   async listAliases(storeId?: string): Promise<AliasRecord[]> {
     return clone(this.aliases.filter(row => storeId === undefined || row.storeId === storeId));
   }
@@ -262,6 +272,12 @@ export class MemoryPerformanceStore implements PerformanceStore {
     const index = this.drafts.findIndex(row => row.draftId === next.draftId);
     if (index >= 0) this.drafts[index] = next;
     else this.drafts.push(next);
+  }
+  async claimDraftNotice(draftId: string, field: 'reminder' | 'voidNotice'): Promise<boolean> {
+    const draft = this.drafts.find(row => row.draftId === draftId);
+    if (!draft || draft[field] !== 'none') return false;
+    draft[field] = 'claimed';
+    return true;
   }
   async getDraft(draftId: string): Promise<Draft | null> {
     return clone(this.drafts.find(row => row.draftId === draftId) ?? null);

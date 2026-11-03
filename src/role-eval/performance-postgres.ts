@@ -132,6 +132,21 @@ export function createPostgresPerformanceStore(client: SqlClient): PerformanceSt
         [alias.storeId, alias.alias, alias.personId],
       );
     },
+    async importAlias(alias) {
+      const existing = await one(`SELECT * FROM ${relation('performance_aliases')} WHERE store_id=$1 AND alias=$2`, [alias.storeId, alias.alias]);
+      if (existing) return false;
+      try {
+        await client.query(
+          `INSERT INTO ${relation('performance_aliases')} (store_id, alias, person_id) VALUES ($1,$2,$3)`,
+          [alias.storeId, alias.alias, alias.personId],
+        );
+        return true;
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error ? (error as { code?: unknown }).code : '';
+        if (code === '23505') return false;
+        throw error;
+      }
+    },
     async listAliases(storeId) {
       const rows = storeId === undefined
         ? await many(`SELECT * FROM ${relation('performance_aliases')}`)
@@ -199,6 +214,14 @@ export function createPostgresPerformanceStore(client: SqlClient): PerformanceSt
         ? await many(`SELECT * FROM ${relation('performance_targets')}`)
         : await many(`SELECT * FROM ${relation('performance_targets')} WHERE store_id=$1`, [storeId]);
       return rows.map(targetFrom);
+    },
+    async claimDraftNotice(draftId, field) {
+      const column = field === 'reminder' ? 'reminder' : 'void_notice';
+      const { rows } = await client.query(
+        `UPDATE ${relation('performance_drafts')} SET ${column}=$1 WHERE draft_id=$2 AND ${column}=$3 RETURNING draft_id`,
+        ['claimed', draftId, 'none'],
+      );
+      return rows.length > 0;
     },
     async saveDraft(draft) {
       await client.query(

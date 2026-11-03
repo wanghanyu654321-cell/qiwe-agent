@@ -1,3 +1,26 @@
+/**
+ * Pilot launcher.
+ *
+ * Postgres runs in the claw-wecom-pg container. The runner container must be
+ * attached to that container's Docker network or the bot cannot open the database.
+ *
+ * Non-secret environment:
+ *   FRONT_CLAW_DB_NETWORK     Docker network name. Default: claw-wecom-business-isolated-20261008-r1
+ *   FRONT_CLAW_DATABASE_HOST  Optional host override applied to the connection URL.
+ *                             Use claw-wecom-pg when the runner is on the database network.
+ *   FRONT_CLAW_SQLITE_PATH    Optional base SQLite file. Bindings and aliases are copied
+ *                             into Postgres when FRONT_CLAW_DATABASE_URL is set, and stay
+ *                             on the SQLite/memory fallback when it is not.
+ *   QIWE_LOCAL_DOCKER_HOST    Runner container name. When set, this process runs
+ *                             `docker network connect` before start and disconnects on exit.
+ *
+ * The password stays in the mode 600 file (default /home/ubuntu/qiwe-private/front-claw-db.env)
+ * as a single FRONT_CLAW_DATABASE_URL= line. It is not printed and is not placed on the docker argv.
+ *
+ *   docker network connect "$FRONT_CLAW_DB_NETWORK" <runner-container>
+ *   # confirm the database container is on the same network:
+ *   docker network inspect "$FRONT_CLAW_DB_NETWORK"
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';

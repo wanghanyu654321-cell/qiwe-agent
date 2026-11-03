@@ -64,14 +64,12 @@ export class MemorySql implements SqlClient {
   }
 
   private update(sql: string, params: readonly unknown[]): Row[] {
-    const match = new RegExp(String.raw`^UPDATE (${ident}) SET (.+) WHERE (\w+)=\$(\d+)$`, 'i').exec(sql);
-    if (!match?.[1] || !match[2] || !match[3] || !match[4]) throw Error(sql);
+    const match = new RegExp(String.raw`^UPDATE (${ident}) SET (.+?) WHERE (.+?)(?: RETURNING .+)?$`, 'i').exec(sql);
+    if (!match?.[1] || !match[2] || !match[3]) throw Error(sql);
     const table = this.rows(match[1]);
-    const key = match[3];
-    const expected = params[Number(match[4]) - 1];
     const updated: Row[] = [];
     for (const row of table) {
-      if (row[key] !== expected) continue;
+      if (!this.matches(match[3], params, row)) continue;
       for (const assignment of match[2].matchAll(/(\w+)=\$(\d+)/g)) {
         const column = assignment[1];
         const index = assignment[2];

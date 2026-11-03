@@ -99,3 +99,13 @@ CREATE TABLE IF NOT EXISTS front_claw_perf.performance_config (
   key text PRIMARY KEY,
   value text NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS front_claw_perf.wecom_bot_bindings (
+  bot_id text NOT NULL,
+  member_id text NOT NULL,
+  corp_id text NOT NULL,
+  account_id text NOT NULL,
+  version integer NOT NULL,
+  active boolean NOT NULL,
+  PRIMARY KEY (bot_id, member_id)
+);

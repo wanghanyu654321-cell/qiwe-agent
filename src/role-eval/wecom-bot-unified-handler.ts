@@ -172,6 +172,12 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
     for (const manager of (others.length ? others : managers)) await notify(kind, manager.personId, body, relatedId);
   }
 
+  function noticeState(result: SendResult): 'sent' | 'unknown' | 'none' {
+    if (result === 'sent') return 'sent';
+    if (result === 'unknown') return 'unknown';
+    return 'none';
+  }
+
   async function runMaintenance(): Promise<void> {
     const now = options.now();
     for (const draft of await options.store.listDrafts({ status: 'pending', kind: 'report' })) {
@@ -182,17 +188,17 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
         continue;
       }
       if (draft.reminder === 'none' && now.getTime() - Date.parse(draft.createdAt) >= REMINDER_DELAY_MS) {
+        if (!await options.store.claimDraftNotice(draft.draftId, 'reminder')) continue;
         const result = await notify('reminder', draft.reporterPersonId, `${FRONT_CLAW}：报数还没确认。回复「对」就入账，要改回复「改 1」。`, draft.draftId);
-        if (result === 'sent') draft.reminder = 'sent';
-        else if (result === 'unknown') draft.reminder = 'unknown';
+        draft.reminder = noticeState(result);
         await options.store.saveDraft(draft);
       }
     }
     for (const draft of await options.store.listDrafts({ status: 'void', kind: 'report' })) {
       if (draft.voidNotice !== 'none') continue;
+      if (!await options.store.claimDraftNotice(draft.draftId, 'voidNotice')) continue;
       const result = await notify('void', draft.reporterPersonId, `${FRONT_CLAW}：这张报数过了打烊还没确认，已作废。请重新报一次。`, draft.draftId);
-      if (result === 'sent') draft.voidNotice = 'sent';
-      else if (result === 'unknown') draft.voidNotice = 'unknown';
+      draft.voidNotice = noticeState(result);
       await options.store.saveDraft(draft);
     }
   }

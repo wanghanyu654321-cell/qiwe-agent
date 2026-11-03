@@ -106,12 +106,14 @@ afterAll(async () => {
 
 it('opens Postgres through Node ESM pg.default.Pool and openPerformanceStore', async () => {
   const source = readFileSync(new URL('../../src/role-eval/performance-open.ts', import.meta.url), 'utf8');
-  expect(source).toContain("(await import('pg')).default");
+  expect(source).toContain('loadPgPool');
   expect(source).not.toMatch(/const\s*\{\s*Pool\s*\}\s*=\s*await import\('pg'\)/);
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
     const loaded = await import('pg');
-    if (typeof loaded.Pool === 'function') process.exit(2);
-    if (typeof loaded.default?.Pool !== 'function') process.exit(3);
+    const { createRequire } = await import('node:module');
+    const required = createRequire(new URL('package.json', import.meta.url))('pg');
+    const poolOf = value => value && typeof value.Pool === 'function' ? value.Pool : value && value.default ? poolOf(value.default) : undefined;
+    if (typeof poolOf(loaded) !== 'function' || typeof poolOf(required) !== 'function') process.exit(3);
     const pool = new loaded.default.Pool({ connectionString: process.env.FRONT_CLAW_TEST_URL });
     const client = await pool.connect();
     try { const row = await client.query('select 1 as ok'); if (row.rows[0].ok !== 1) process.exit(4); }
@@ -147,6 +149,7 @@ it('applies migration 007 twice and leaves existing public tables alone', async 
     'performance_people',
     'performance_revisions',
     'performance_targets',
+    'wecom_bot_bindings',
   ]);
   const columns = await client.query(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='appointments' ORDER BY column_name`);
   expect(columns.rows.map(row => row.column_name)).toEqual(['id', 'note']);
