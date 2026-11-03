@@ -144,7 +144,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
   publicSupportHashes[name].compiledHash=createHash('sha256').update(compiled).digest('hex');
   fs.writeFileSync(path.join(directory,'test-support',name+'.mjs'),compiled);
  }
- for(const name of ['wecom-bot-pilot','wecom-bot-preparation','wecom-bot-assembly','wecom-bot-sdk','workbench-access','manager-store'])compilePublic(name);
+ for(const name of ['wecom-bot-pilot','wecom-bot-preparation','wecom-bot-assembly','wecom-bot-sdk','workbench-access','manager-store','performance-open','wecom-bot-unified-handler'])compilePublic(name);
  compilePublic('workbench-opening');
  compilePublic('wecom-bot-task-store');
  if(options.frontagentExistingInput)for(const name of ['wecom-bot-bindings','native-bot-identity','wecom-bot-context'])compilePublic(name);

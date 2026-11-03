@@ -73,6 +73,10 @@ export async function prepareExistingFrontagentPilot(options){
   await authority.assertCurrent(issued);live();
   const fingerprint=()=>{live();return {botId,corpId,ownerId:descriptor.accountId,configVersion:String(binding.version),credentialFingerprint:digest(secret),workspaceFingerprint:digest(descriptor.workspaceJid)};};
   const f=fingerprint();
+  if(options.performanceStore){
+   const employee=descriptor.employee??{};
+   await options.performanceStore.savePerson({personId:descriptor.accountId,accountId:descriptor.accountId,memberId:binding.memberId,displayName:employee.employeeName||employee.name||'同事',storeId:descriptor.storeId,storeName:descriptor.storeName||'门店',tier:grant.roles.includes('manager')?'manager':'employee',roles:[...grant.roles],active:true});
+  }
   pilot=modules.createControlledRealWecomBotPilot({mode:'controlled-real-pilot',requestTimeoutMs:25000,
    admission:{mode:'controlled-real-pilot',environment:'local-test',runId,expiresAt,botId,corpId,memberId:binding.memberId,accountId:descriptor.accountId,tenantId:descriptor.tenantId,storeId:descriptor.storeId,roles:[...grant.roles],bindingVersion:binding.version,configVersion:f.configVersion,credentialFingerprint:f.credentialFingerprint,workspaceFingerprint:f.workspaceFingerprint},
    secret,identity,business:{scope:{tenant:descriptor.tenantId,store:descriptor.storeId,workspace:descriptor.homeJid},employees:[{...descriptor.employee,accountId:descriptor.accountId}],ledger,store:tasks,summaryReadOnly:true,...(typeof options.reportExtractor==='function'?{reportExtractor:options.reportExtractor}:{})},...(options.pendingSweep!==undefined?{pendingSweep:options.pendingSweep}:{}),
@@ -80,7 +84,7 @@ export async function prepareExistingFrontagentPilot(options){
    authorize:receipt=>{try{live();return !!receipt&&receipt.role==='marketing'&&Object.entries(actor).every(([key,value])=>receipt.actor?.[key]===value);}catch{return false;}},
    createIntake:execution=>modules.createControlledRealBotConversationNativePort({mode:'controlled-real-pilot',gate:execution.gate,native:db,readActor,execution}),
    createRoles:roleGate=>{const port=modules.createControlledRealRoleWorkspaceNativePort({mode:'controlled-real-pilot',gate:roleGate,native:db,templates:[],prepareOwnProfiles:forbidden,journalDirectory,readActor});return {readRoleWorkspace:port.readRoleWorkspace,prepareRoleWorkspace:forbidden};},
-   readFingerprint:fingerprint,...(options.onDelivery?{onDelivery:options.onDelivery}:{}),...(options.onOutcome?{onOutcome:options.onOutcome}:{})
+   readFingerprint:fingerprint,...(options.unifiedAssistant?{unifiedAssistant:options.unifiedAssistant}:{}),...(options.onDelivery?{onDelivery:options.onDelivery}:{}),...(options.onOutcome?{onOutcome:options.onOutcome}:{})
   });
   dbg('pilot_prepare_start',{});
   let prepared;try{prepared=await pilot.prepare();}catch(error){dbg('pilot_prepare_failed',{failure:pilot.failure?.(),status:pilot.status()});throw error;}

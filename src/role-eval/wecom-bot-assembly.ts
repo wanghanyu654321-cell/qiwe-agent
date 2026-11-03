@@ -38,6 +38,7 @@ export interface WecomBotAssemblyOptions {
   /** Deliberate synthetic port injection. A WSClient is never implicitly a synthetic sender. */
   sender: Parameters<typeof createBotSender>[0];
   requestTimeoutMs?: number; maxInFlight?: number;
+  unifiedAssistant?: BotReportOptions['unifiedAssistant'];
   onOutcome?(outcome: WecomBotAssemblyOutcome): void;
   executionBoundary?: WecomBotExecutionBoundary;
 }
@@ -184,7 +185,7 @@ function createAssembly(options:AssemblyOptions) {
         // Original services fence business writes with this request's authority/budget. Their
         // finalizers must still persist unknown outcomes for actions already attempted at abort.
         const createDelivery=(value:Omit<Parameters<typeof createBotDelivery>[0],'mode'>)=>mode==='controlled-real-pilot'?createControlledRealBotDelivery({...value,mode}):createBotDelivery({...value,mode});
-        const delivery = createDelivery({ authority, ledger: business.ledger, scope: business.scope, employees: business.employees,
+        const delivery = createDelivery({ authority, ledger: business.ledger, scope: business.scope, employees: business.employees, ...(options.unifiedAssistant ? {unifiedAssistant: options.unifiedAssistant} : {}),
           ...(business.artifacts ? {artifacts: business.artifacts} : {}), ...(tasks ? {tasks} : {}),...(conversations?{conversations}:{}), readEvent: () => {check(); return frame;}, sender});
         resources.push(() => delivery.close());
         wecomDebug('delivery_start', {elapsedMs: elapsed()});

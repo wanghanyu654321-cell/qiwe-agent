@@ -21,6 +21,8 @@ export interface BotReportOptions {
  employees:readonly {accountId:string;employeeId:string;employeeName:string}[];
  /** Already authenticated SDK callback snapshot, never an HTTP/client payload. Synchronous and bounded by caller. */
  readEvent():unknown;now?:()=>Date;
+ /** When set, every text message is handled by the single Front Claw assistant. */
+ unifiedAssistant?: { handleMessage(input: { memberId: string; text: string; signal?: AbortSignal; deadline?: number }): Promise<{ replies: readonly string[] }> };
  /** Trusted synchronous reservation; a persisted file result can short-circuit regeneration on replay. */
  beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):{replayState:'none'|'reserved'|'completed-report'|'completed-nonreport';cached?:BotReportResult}|void;
 }
@@ -143,9 +145,15 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
   const summaryReadView=(s:ReturnType<ManagerStore['summary']>):BotReportResult=>!s.entries.length?plan('summary',s.kind==='month'?'本月还没有已确认的报数':'这段时间还没有已确认的报数'):plan('summary',[`经营汇总（只读） ${s.period.start}至${s.period.end}`,'口径：销售成交额；仅含已确认报数，未确认的不计入。',`销售成交：${money(s.salesCents)}`,...(s.targetCents===0?['目标：未开始']:[`目标：${money(s.targetCents)}`,`达成率：${s.rate===null?'未知':(s.rate*100).toFixed(2)+'%'}`,`差额：${money(s.varianceCents)}`]),`期间覆盖：${s.coverage==='complete'?'完整':'部分，请核对缺报及跨期数据'}`,'试点阶段不提供快照和 Excel 导出。'].join('\n'));
   const fileView=(info:ManagerArtifact):BotReportResult=>({...plan('file',`文件：${info.filename}\n快照编号：${info.snapshotHash}\n查询文件 ${info.snapshotHash}`),snapshotId:info.snapshotHash,attachment:{...info}});
   let exportSnapshot:string|undefined;
+  let unifiedContent:string|undefined;
+  if(options.unifiedAssistant&&event.action.kind==='text'&&!reservedReply){
+   const unified=await options.unifiedAssistant.handleMessage({memberId:event.memberId,text:event.action.text,signal:input.signal,deadline:input.deadline});
+   unifiedContent=unified.replies.map(line=>line.trim()).filter(Boolean).join('\n')||'Front Claw：这次没有处理成。';
+  }
   let result:BotReportResult;
   try{
    result=await authority.withCurrent(context,checkActive=>{
+    if(unifiedContent!==undefined)return plan('pending',unifiedContent);
     if(reservedReply)return structuredClone(reservedReply);
     if(!conversations){const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay?.cached)return structuredClone(replay.cached);}
     if(conversationResult?.reply)return plan('needs-input',conversationResult.reply);

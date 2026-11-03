@@ -147,3 +147,14 @@ it.each(['subject','binding','native'] as const)('retains each recovery ticket u
  }finally{release();await pilot.idle();}
  expect(s.tickets()).toBe(0);expect(s.offline.sent).toHaveLength(sent);expect(s.queued).toEqual([id]);
 });
+
+it('opens the configured performance store during prepare and hides the connection secret', async () => {
+  const s = setup();
+  const secret = 'super-secret-not-logged';
+  const pilot = createWecomBotPilot({ ...s.options, env: { [ 'FRONT_CLAW_DATABASE_URL' ]: `postgres://frontclaw:${secret}@127.0.0.1:1/postgres` } });
+  cleanup.push(() => pilot.close());
+  const failure = await pilot.prepare().then(() => '', error => String(error));
+  expect(failure).toMatch(/FRONT_CLAW_DATABASE_UNAVAILABLE_/);
+  expect(failure).not.toContain(secret);
+  expect(failure).not.toContain('postgres://');
+});

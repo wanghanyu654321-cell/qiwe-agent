@@ -7,7 +7,7 @@ import {WorkbenchAccessStore} from '../../src/role-eval/workbench-access.js';
 import {createWecomBotContext} from '../../src/role-eval/wecom-bot-context.js';
 import {createBotReportHandler} from '../../src/role-eval/wecom-bot-handler.js';
 const cleanups:(()=>void)[]=[];afterEach(()=>{for(const close of cleanups.splice(0).reverse())close();});
-function setup(){
+function setup(unifiedAssistant?: {handleMessage(input:{memberId:string;text:string;signal?:AbortSignal;deadline?:number}):Promise<{replies:readonly string[]}>}){
  const dir=mkdtempSync(join(tmpdir(),'bot-report-flow-'));cleanups.push(()=>rmSync(dir,{recursive:true,force:true}));
  const ledger=new ManagerStore(join(dir,'existing.sqlite')),grants=new WorkbenchAccessStore(join(dir,'grants.sqlite'));
  cleanups.push(()=>ledger.close(),()=>grants.close());
@@ -22,11 +22,21 @@ function setup(){
  let frame:unknown;
  const text=(content='今天销售成交123.45元',msgid='text-1',who=member)=>frame={cmd:'aibot_msg_callback',headers:{req_id:'req-'+msgid},body:{aibotid:'bot',msgid,chattype:'single',from:{userid:who},msgtype:'text',text:{content}}};
  const card=(id:string,hash:string)=>frame={cmd:'aibot_event_callback',headers:{req_id:'req-card'},body:{aibotid:'bot',msgid:'card-1',chattype:'single',from:{userid:member},msgtype:'event',event:{eventtype:'template_card_event',task_id:'report-'+id+'-'+'c'.repeat(32),event_key:'confirm:'+hash,accountId:'admin',amountCents:1}}};
- const handler=createBotReportHandler({mode:'isolated-synthetic',authority,ledger,scope,employees:people,readEvent:()=>frame,now:()=>time});
+ const handler=createBotReportHandler({mode:'isolated-synthetic',authority,ledger,scope,employees:people,readEvent:()=>frame,now:()=>time,...(unifiedAssistant?{unifiedAssistant}:{})});
  const request=()=>({correlationId:'task',signal:new AbortController().signal,deadline:performance.now()+1000});
  const actor=(index=0)=>({...scope,employeeId:people[index]!.employeeId,employeeName:people[index]!.employeeName});
  return {ledger,grants,authority,handler,request,text,card,actor,scope,people,open,setFrame:(v:unknown)=>{frame=v;},getFrame:()=>frame,setTime:(v:Date)=>{time=v;},switchMember:()=>{member='member-b';account='b';},disable:()=>{nativeStatus='disabled';},enable:()=>{nativeStatus='active';},onNativeRead:(fn:(n:number)=>void)=>{afterRead=fn;}};
 }
+it('sends plain text through the unified assistant instead of picking a role',async()=>{
+ const seen:string[]=[];
+ const s=setup({handleMessage:async input=>{seen.push(input.memberId+' '+input.text);return {replies:['Front Claw：收到统一入口']};}});
+ s.text('帮我写一条朋友圈','chat-1');
+ const result=await s.handler.handle(s.request());
+ expect(seen).toEqual(['member-a 帮我写一条朋友圈']);
+ expect(result.status).toBe('pending');
+ expect(result.reportId).toBeUndefined();
+ expect(result.reply.body.stream.content).toBe('Front Claw：收到统一入口');
+});
 it('reports, confirms server amounts and queries the same persistent report without Web',async()=>{
  const s=setup();s.text();const pending=await s.handler.handle(s.request());
  expect(pending.status).toBe('pending');expect(pending.reply.body.template_card?.task_id).toContain('report-'+pending.reportId+'-');

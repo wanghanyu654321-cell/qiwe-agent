@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:pg": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "demo": "npm run build && node examples/local-identity.mjs",
@@ -19,11 +20,13 @@
   },
   "devDependencies": {
     "@types/node": "22.19.19",
+    "@types/pg": "8.11.11",
     "typescript": "5.9.3",
     "vitest": "4.1.12"
   },
   "dependencies": {
     "@wecom/aibot-node-sdk": "1.0.7",
-    "adm-zip": "0.6.1"
+    "adm-zip": "0.6.1",
+    "pg": "8.13.1"
   }
 }
