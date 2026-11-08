@@ -4,6 +4,7 @@ import childProcess from 'node:child_process';
 import {syncBuiltinESMExports} from 'node:module';
 import {admitControlledRealDockerRun,frontClawArgs,frontClawName,admitDockerControl,admitDockerShell,admitLocalDockerSpawn} from './real-container-boundary.mjs';
 import {inspectLocalDockerReceipt,translateLocalMounts,localDocker,localEndpoint} from './full-host-local-docker.mjs';
+import {connectRunnerDatabaseNetwork,disconnectRunnerDatabaseNetwork,withDatabaseEnvFile} from './front-claw-db-attach.mjs';
 
 let transportInstalled=false;
 // Installs the original Docker runner's transport only within the supervised
@@ -25,7 +26,8 @@ export function installControlledRealContainerTransport(options){
  if(receipt.version!==3||JSON.stringify(receipt.controlledRealPilot)!==JSON.stringify(scope))fail('SCOPE');
  const facts=inspectLocalDockerReceipt(receipt);
  const originals=Object.fromEntries(['spawn','exec','execFile','execFileSync','execSync','spawnSync','fork'].map(name=>[name,childProcess[name]]));
- const owned=new Set(),prefix='frontclaw-'+folder+'-';let expectedMounts,gate,started=false,active=false,exited=false,closed=false,child;
+ const owned=new Set(),attached=new Set(),prefix='frontclaw-'+folder+'-';let expectedMounts,gate,started=false,active=false,exited=false,closed=false,child;
+ const docker=(args)=>originals.execFileSync(localDocker,['--host',localEndpoint,...args],{encoding:'utf8',timeout:20000});
  const route=(command,args)=>['--host',localEndpoint,...admitDockerControl(command,frontClawArgs(args,prefix),owned,prefix)];
  const ports={
   execFileSync:(command,args,...rest)=>originals.execFileSync(localDocker,route(command,args),...rest),
@@ -39,7 +41,8 @@ export function installControlledRealContainerTransport(options){
    const identity=JSON.parse(originals.execFileSync(localDocker,['--host',localEndpoint,'info','--format','{{json .SecurityOptions}}'],{encoding:'utf8',timeout:20000}));
    if(!Array.isArray(identity)||identity.some(value=>/rootless|userns/i.test(value)))fail('IDENTITY');
    const admitted=admitControlledRealDockerRun(args,{root,preload,modelModule,image,runId:scope.runId,controlledRealPilot:scope,maxRequests:8,maxOutputTokens:1024,originalShell,expectedMounts,expectedIdentity:'direct',expectedUid:1000,expectedGid:1000,ownedContainerPrefix:prefix});
-   const translated=translateLocalMounts(admitted.args,facts.mountpoint);
+   let translated=translateLocalMounts(admitted.args,facts.mountpoint);
+   if(options.databaseEnvFile){try{translated=withDatabaseEnvFile(translated,options.databaseEnvFile);}catch(error){if(error?.message!=='FRONT_CLAW_DB_ENV_UNREADABLE'&&error?.code!=='ENOENT')throw error;}}
    // Reserve the current runner slot before any daemon side effect; unknown
    // failures cannot become automatic retries or stack a second live runner.
    started=true;exited=false;
@@ -47,7 +50,11 @@ export function installControlledRealContainerTransport(options){
    try{const stat=fs.fstatSync(fd);if(!stat.isFile()||stat.nlink!==1)fail('MANIFEST');fs.writeSync(fd,admitted.name+'\n');}finally{fs.closeSync(fd);}
    owned.add(admitted.name);
    child=originals.spawn(localDocker,['--host',localEndpoint,...translated],spawnOptions);
-   child.once('close',()=>{exited=true;started=false;owned.delete(admitted.name);});
+   if(options.databaseNetwork){
+    try{connectRunnerDatabaseNetwork({invoke:docker,runner:admitted.name,network:options.databaseNetwork});attached.add(admitted.name);}
+    catch{try{docker(['stop',admitted.name]);}catch{}throw Error('CONTROLLED_REAL_TRANSPORT_DB_NETWORK');}
+   }
+   child.once('close',()=>{exited=true;started=false;owned.delete(admitted.name);attached.delete(admitted.name);});
    return child;
   },
  };
@@ -70,6 +77,8 @@ export function installControlledRealContainerTransport(options){
   activate(value){if(!expectedMounts)fail('PREPARE');if(closed||active||!value||typeof value.phase!=='function'||value.phase()!=='ready'||Date.now()>=scope.expiresAt)fail('GATE');gate=value;active=true;},
   async close(){
    if(closed)return;active=false;
+   for(const name of attached){try{disconnectRunnerDatabaseNetwork({invoke:docker,runner:name,network:options.databaseNetwork});}catch{throw Error('CONTROLLED_REAL_TRANSPORT_DB_NETWORK');}}
+   attached.clear();
    if(child&&!exited){
     for(const name of owned)originals.execFileSync(localDocker,['--host',localEndpoint,...admitDockerControl('docker',['stop',name],owned,prefix)],{encoding:'utf8',timeout:20000});
     if(!exited)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('CONTROLLED_REAL_TRANSPORT_CLOSE_UNKNOWN')),10000);child.once('close',()=>{clearTimeout(timer);resolve();});});

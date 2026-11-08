@@ -147,3 +147,31 @@ it.each(['subject','binding','native'] as const)('retains each recovery ticket u
  }finally{release();await pilot.idle();}
  expect(s.tickets()).toBe(0);expect(s.offline.sent).toHaveLength(sent);expect(s.queued).toEqual([id]);
 });
+
+it('returns a sheet result from the startup store without selecting 内容营销', async () => {
+  const s = setup(), pilot = s.create();
+  await s.activate();
+  const started = performance.now();
+  await s.send('sheet', '27号\n李秋：98（员工）');
+  expect(performance.now() - started).toBeLessThan(15_000);
+  expect(s.queued).toEqual([]);
+  const echo = JSON.stringify(s.offline.sent.at(-1) ?? {});
+  expect(echo).toContain('还没入账');
+  expect(echo).not.toContain('收到，正在处理');
+  expect(echo).not.toContain('内容营销');
+  await s.send('confirm', '对');
+  expect(s.queued).toEqual([]);
+  expect(JSON.stringify(s.offline.sent.at(-1) ?? {})).toContain('已入账');
+  await pilot.close();
+});
+
+it('opens the configured performance store during prepare and hides the connection secret', async () => {
+  const s = setup();
+  const secret = 'super-secret-not-logged';
+  const pilot = createWecomBotPilot({ ...s.options, env: { [ 'FRONT_CLAW_DATABASE_URL' ]: `postgres://frontclaw:${secret}@127.0.0.1:1/postgres` } });
+  cleanup.push(() => pilot.close());
+  const failure = await pilot.prepare().then(() => '', error => String(error));
+  expect(failure).toMatch(/FRONT_CLAW_DATABASE_UNAVAILABLE_/);
+  expect(failure).not.toContain(secret);
+  expect(failure).not.toContain('postgres://');
+});

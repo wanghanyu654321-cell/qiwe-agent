@@ -1,6 +1,6 @@
 import type {WSClient} from '@wecom/aibot-node-sdk';
 import {AsyncLocalStorage} from 'node:async_hooks';
-import {createWecomBotPreparation,createControlledRealWecomBotPreparation,type WecomBotPreparationOptions,type WecomPreparationGate} from './wecom-bot-preparation.js';
+import {createWecomBotPreparation,createControlledRealWecomBotPreparation,type WecomBotPreparationOptions,type WecomPreparationGate,wecomDebug} from './wecom-bot-preparation.js';
 import {createWecomBotAssembly,createControlledRealWecomBotAssembly,type WecomBotAssemblyOptions} from './wecom-bot-assembly.js';
 import {createWecomBotContext,createControlledRealWecomBotContext,type WecomBotContextOptions,type BotContextRequest} from './wecom-bot-context.js';
 import {createBotSdkAdapter,createControlledRealBotSdkAdapter} from './wecom-bot-sdk.js';
@@ -11,6 +11,11 @@ import type {BotConversationActor,BotTaskStore} from './wecom-bot-task-store.js'
 
 import {startPendingReportSweeper,type PendingReportOwner} from './wecom-bot-task-store.js';
 import type {BotReportExtractor} from './wecom-bot-report-model.js';
+import {createWecomBotBindingReader} from './wecom-bot-bindings.js';
+import {bootFrontClaw, createStoreBusinessPort, FRONT_CLAW_DATABASE_URL, FRONT_CLAW_SQLITE_PATH, type FrontClawBoot} from './front-claw-boot.js';
+import {MemoryPerformanceStore} from './performance-store.js';
+import type {StoreBusinessPort} from './wecom-bot-handler.js';
+import {createWecomBotHandler, type SendResult} from './wecom-bot-unified-handler.js';
 export {createModelReportExtractor} from './wecom-bot-report-model.js';
 export interface WecomBotPilotExecution {
   /** Borrowed original queue identity. The pilot never controls its lifecycle. */
@@ -30,6 +35,8 @@ export interface WecomBotPilotOptions {
   business: Pick<WecomBotAssemblyOptions['businesses'][number], 'scope' | 'employees' | 'ledger'> & {store: BotTaskStore; reportExtractor?: BotReportExtractor; summaryReadOnly?: boolean};
   /** Pending-report reminder/expiry scheduler in this long-running process (default every 90 s). `false` disables it. */
   pendingSweep?: false | {intervalMs?: number; remindAfterMs?: number; endHour?: number; now?: () => Date};
+  /** Environment for Postgres and the optional SQLite directory copy. Defaults to process.env. */
+  env?: Record<string, string | undefined>;
   initializeExecution(options: {
     mode: 'isolated-synthetic';
     authorize(receipt: (BotConversationReceipt & {actor: BotConversationActor}) | undefined): boolean;
@@ -47,6 +54,8 @@ export interface WecomBotPilotOptions {
   requestTimeoutMs?: number;
   onOutcome?: WecomBotAssemblyOptions['onOutcome'];
   onDelivery?(receiptId: string, result: WecomBotPilotDelivery): void;
+  /** Single Front Claw assistant. Text messages skip role picking when this is set. */
+  unifiedAssistant?: NonNullable<import('./wecom-bot-handler.js').BotReportOptions['unifiedAssistant']>;
 }
 
 /** Concrete synthetic channel owner over the original host execution, authority and stores.
@@ -72,6 +81,10 @@ function createPilot(options:SharedPilotOptions) {
   const readSubject = options.readSubject.bind(options);
   const identity = {...options.identity, stores: structuredClone(options.identity.stores), roles: [...options.identity.roles],
     readBinding: options.identity.readBinding.bind(options.identity), readNative: options.identity.readNative.bind(options.identity)};
+  let unifiedAssistant = options.unifiedAssistant;
+  let frontClaw: FrontClawBoot | undefined;
+  let storePort: StoreBusinessPort | undefined;
+  const deliver: { current: (input: { toPersonId: string; text: string }) => Promise<SendResult> } = { current: async () => 'unknown' };
   const business = {...options.business, scope: structuredClone(options.business.scope), employees: structuredClone(options.business.employees)};
   let stopped = false, admitted = () => false;
   let preparation: ReturnType<typeof createWecomBotPreparation> | undefined;
@@ -164,7 +177,14 @@ function createPilot(options:SharedPilotOptions) {
           authority = createContext({...identity, botId, corpId,
             readSubject: scope => track(readSubject(scope), recoveryReads.getStore()), readBinding: (subject, scope) => track(identity.readBinding(subject, scope), recoveryReads.getStore()), readNative: (id, scope) => track(identity.readNative(id, scope), recoveryReads.getStore())});
           delivery = createBotConversationDelivery({authority, ledger: business.ledger, sender, intake, gate: deliveryGate, scope: business.scope, employees: business.employees});
-          const assemblyOptions={botId, corpId, client, identity,
+          if (!storePort) {
+            if (real && process.env.QIWE_CONTROLLED_REAL_PILOT === '1') throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE_URL');
+            const memory = new MemoryPerformanceStore();
+            const memoryHandler = createWecomBotHandler({mode: 'isolated-synthetic', store: memory, now: () => new Date(), resolve: memberId => memory.getPersonByMember(memberId), send: message => deliver.current(message), model: {complete: async () => ({type: 'chat', text: 'Front Claw 在。'})}});
+            storePort = createStoreBusinessPort(memory, memoryHandler);
+            wecomDebug('performance_store', {driver: 'memory', durable: false});
+          }
+          const assemblyOptions={botId, corpId, client, identity, ...(unifiedAssistant ? {unifiedAssistant} : {}), storeAssistant: storePort,
             businesses: [{scope: business.scope, employees: business.employees, ledger: business.ledger, conversations: {store: business.store, native: roles, intake, deliveryGate: execution.gate, ...(business.reportExtractor ? {reportExtractor: business.reportExtractor} : {}), ...(business.summaryReadOnly ? {summaryReadOnly: true} : {})}}], sender: {sdk}, executionBoundary: boundary, ...(requestTimeoutMs !== undefined ? {requestTimeoutMs} : {}), ...(onOutcome ? {onOutcome} : {})};
           assembly=real?createControlledRealWecomBotAssembly({...assemblyOptions,mode:'controlled-real-pilot',memberId:real.memberId}):createWecomBotAssembly({...assemblyOptions,mode:'isolated-synthetic'});
           const pendingReports = business.store.pendingReports, sweep = options.pendingSweep;
@@ -177,6 +197,18 @@ function createPilot(options:SharedPilotOptions) {
                 if (outcome.state !== 'accepted') throw Error('pending_notice_failed');
               }});
           }
+          if (frontClaw && sender) {
+            const notify = sender;
+            deliver.current = async ({ toPersonId, text }) => {
+              const person = await frontClaw!.store.getPerson(toPersonId);
+              if (!person) return 'not_sent';
+              try {
+                const outcome = await notify.notify(person.memberId, text, { signal: AbortSignal.timeout(10000), deadline: performance.now() + 10000 }, async () => { if (!active()) throw Error('pilot_not_active'); });
+                return outcome.state === 'accepted' ? 'sent' : 'unknown';
+              } catch { return 'unknown'; }
+            };
+            frontClaw.startMaintenance();
+          }
           return {close: stopOwned, idle};
         } catch (error) {
           try {stopOwned();} catch (cleanupError) {throw new AggregateError([error, cleanupError], 'pilot_assembly_cleanup_failed');}
@@ -187,8 +219,42 @@ function createPilot(options:SharedPilotOptions) {
     preparation=real?createControlledRealWecomBotPreparation({...preparationOptions,mode:'controlled-real-pilot',botId,secret:real.secret}):createWecomBotPreparation({...preparationOptions,mode:'isolated-synthetic',createClient:createClient!,connect:connect!,disconnect:disconnect!});
   } catch (error) {stopped = true; throw error;}
   const owner = preparation;
-  return Object.freeze({prepare: owner.prepare, activate: owner.activate, status: owner.status, failure: owner.failure,
-    idle, recover, close: () => {stopped = true; return owner.close();}});
+  async function ensureFrontClaw(): Promise<void> {
+    if (frontClaw || unifiedAssistant) return;
+    const env = options.env ?? process.env;
+    const url = env[FRONT_CLAW_DATABASE_URL]?.trim() ?? '';
+    const sqlitePath = env[FRONT_CLAW_SQLITE_PATH]?.trim() ?? '';
+    if (!url && !sqlitePath) return;
+    frontClaw = await bootFrontClaw({ env, now: () => new Date(), send: message => deliver.current(message), model: { complete: async () => ({ type: 'chat', text: 'Front Claw 在。' }) } });
+    storePort = createStoreBusinessPort(frontClaw.store, frontClaw.handler);
+    wecomDebug('performance_store', {driver: frontClaw.driver});
+    if (url && real) {
+      const employee = business.employees[0];
+      if (employee) await storePort.remember({
+        personId: employee.employeeId || employee.accountId, accountId: employee.accountId, memberId: real.memberId, displayName: employee.employeeName,
+        storeId: business.scope.store, storeName: employee.storeName || business.scope.store, tier: identity.roles.includes('manager') ? 'manager' : 'employee', roles: identity.roles,
+      });
+    }
+    if ((await frontClaw.bindings.listBindings()).length) {
+      const original = identity.readBinding;
+      identity.readBinding = async (subject, scope) => {
+        const rows = await frontClaw!.bindings.listBindings();
+        if (!rows.length) return original(subject, scope);
+        return createWecomBotBindingReader(async () => rows)(subject, scope);
+      };
+    }
+  }
+  return Object.freeze({
+    prepare: () => {
+      const env = options.env ?? process.env;
+      if (real && process.env.QIWE_CONTROLLED_REAL_PILOT === '1' && !env[FRONT_CLAW_DATABASE_URL]?.trim()) return Promise.reject(Error('FRONT_CLAW_DATABASE_UNAVAILABLE_URL'));
+      const configured = !!(env[FRONT_CLAW_DATABASE_URL]?.trim() || env[FRONT_CLAW_SQLITE_PATH]?.trim());
+      if (!configured || unifiedAssistant || frontClaw) return owner.prepare();
+      return ensureFrontClaw().then(() => owner.prepare());
+    },
+    activate: owner.activate, status: owner.status, failure: owner.failure,
+    idle, recover, close: async () => { stopped = true; try { return await owner.close(); } finally { await frontClaw?.close(); } },
+  });
 }
 
 

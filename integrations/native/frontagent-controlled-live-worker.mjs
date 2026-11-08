@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {installControlledRealContainerTransport} from './controlled-real-container-transport.mjs';
 import {restoreExistingFrontagentHost} from './frontagent-pilot-restoration.mjs';
 import {prepareExistingFrontagentPilot} from './frontagent-controlled-pilot.mjs';
+import {loadFrontClawDatabaseEnv,frontClawDbNetwork,frontClawDatabaseEnvFile} from './front-claw-db-attach.mjs';
 
 const dbg=(event,fields={})=>{if(process.env.WECOM_DEBUG==='1')try{console.log('WECOM_DEBUG '+JSON.stringify({t:new Date().toISOString(),event,...fields}));}catch{}};
 const fail=code=>{throw Error('FRONTAGENT_LIVE_'+code);};
@@ -77,11 +78,17 @@ export async function startControlledLiveWorker(options){
   // The original main owns scheduler, Web, native DB and final process exit.
   signalOriginal:()=>{if(host){if(!process.listenerCount('SIGTERM'))throw Error('missing original handler');process.emit('SIGTERM');}}
  });
- const shutdown=()=>{if(timer)clearTimeout(timer);return closeResources();};
+ const shutdown=async()=>{if(timer)clearTimeout(timer);return closeResources();};
  try{
   checkProvider();
+  const databaseEnvFile=frontClawDatabaseEnvFile();
+  const databaseUrl=process.env.FRONT_CLAW_DATABASE_URL||loadFrontClawDatabaseEnv(databaseEnvFile);
+  if(databaseUrl)process.env.FRONT_CLAW_DATABASE_URL=databaseUrl;
+  if(!process.env.FRONT_CLAW_DATABASE_URL?.trim())throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE_URL');
+  // The performance store is opened by the role-eval pilot. This worker does not import
+  // compiled siblings from integrations/native; that directory is absent on the live base.
   await preloadOriginalRestorationBoundary(root);
-  transport=installControlledRealContainerTransport(transportOptions);
+  transport=installControlledRealContainerTransport({...transportOptions,databaseNetwork:frontClawDbNetwork(),databaseEnvFile});
   const load=relative=>import(pathToFileURL(path.join(root,relative)).href);
   const db=await load('src/db.js'),config=await load('src/config.js'),context=await load('src/web-context.js');
   await load('src/web.js');
@@ -113,7 +120,7 @@ export async function startControlledLiveWorker(options){
    return current;};
   dbg('provision_files',{bindingsFile:fs.existsSync(bindingFile),approvedFile:fs.existsSync(approvedFile)});
   const modules={...bindings,...botContext,...botPilot,...roleOverlay,...conversationOverlay};
-  pilot=await prepareExistingFrontagentPilot({descriptor,gate:host.fullHostBootGate,db,host,grants,ledger,tasks,
+   pilot=await prepareExistingFrontagentPilot({descriptor,gate:host.fullHostBootGate,db,host,grants,ledger,tasks,
    readBindings:()=>JSON.parse(fs.readFileSync(bindingFile,'utf8')),readApproved:()=>JSON.parse(fs.readFileSync(approvedFile,'utf8')),
    readCredentials:checkedCredentials,runId:scope.runId,expiresAt:scope.expiresAt,journalDirectory:path.join(root,'unused-existing-role-journal'),modules,
    ...(typeof botPilot.createModelReportExtractor==='function'?{reportExtractor:botPilot.createModelReportExtractor({baseUrl:model.baseUrl,model:model.model,readApiKey:()=>{const m=readModelCredentials();return m&&m.apiKey===model.apiKey?m.apiKey:'';}})}:{}),
