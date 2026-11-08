@@ -1,11 +1,12 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { WorkbenchRole } from './workbench-access.js';
-import type {
-  AppointmentPayload, Draft, EntryPatch, LedgerEntry, MissingItem, Notification, Person, ReportDraftItem, ReportPayload,
+import {
+  appointmentLineId, confirmEntryId, type Appointment, type AppointmentPayload, type Draft, type EntryPatch, type LedgerEntry, type MissingItem, type Notification, type Person, type ReportDraftItem, type ReportPayload,
 } from './performance-store.js';
 import type { PerformanceStore } from './performance-store.js';
 import { matchPerson } from './people-match.js';
-import { parseAppointmentUtterance, stagePendingAppointment, confirmAppointment, validateAppointmentFields, type AppointmentRequest } from './appointments.js';
+import { parseAppointmentUtterance, stagePendingAppointment, validateAppointmentFields, type AppointmentRequest } from './appointments.js';
 import { parseEntryLine, parseReportText, validateReportFields, type ParsedReport } from './report-parse.js';
 import {
   businessDate, DEFAULT_BUSINESS_CUTOFF, DEFAULT_TIME_ZONE, monthKey, REMINDER_DELAY_MS, shiftMonth, zonedDateTime,
@@ -39,7 +40,7 @@ export interface WecomBotHandlerOptions {
   onOutbound?: (text: string) => void;
 }
 
-export interface HandleResult { entry: 'unified'; replies: string[]; modelCalled: boolean; }
+export interface HandleResult { entry: 'unified'; replies: string[]; modelCalled: boolean; ledgerSettled?: boolean; }
 
 const ASK = `${FRONT_CLAW}：这句还缺日期、金额或员工，请补全后再发。我不会猜。`;
 const UNBOUND = `${FRONT_CLAW}：还没绑定你的身份，我先不办。请让管理员绑定后再发。`;
@@ -133,6 +134,12 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
   const timeZone = options.timeZone ?? DEFAULT_TIME_ZONE;
   const tools = createAssistantTools({ store: options.store, now: options.now, cutoff, timeZone });
   const businessDay = () => businessDate(options.now(), cutoff, timeZone);
+  const STOPPED = `${FRONT_CLAW}：这次没处理完，没有入账。请再发一次。`;
+  const turn = new AsyncLocalStorage<{ signal: AbortSignal; deadline: number }>();
+  const writable = () => {
+    const current = turn.getStore();
+    return !!current && !current.signal.aborted && performance.now() < current.deadline;
+  };
 
   async function forbiddenTokens(): Promise<string[]> {
     const tokens = new Set<string>();
@@ -157,7 +164,11 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
     } catch {
       result = 'unknown';
     }
-    await options.store.updateNotificationStatus(notificationId, result, result === 'sent' ? options.now().toISOString() : null);
+    try {
+      await options.store.updateNotificationStatus(notificationId, result, result === 'sent' ? options.now().toISOString() : null);
+    } catch {
+      return 'unknown';
+    }
     return result;
   }
 
@@ -166,10 +177,18 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
     return person?.active ? person : null;
   }
 
-  async function pushManagers(storeId: string, actorId: string, kind: Notification['kind'], body: string, relatedId: string): Promise<void> {
+  async function pushManagers(storeId: string, actorId: string, kind: Notification['kind'], body: string, relatedId: string): Promise<SendResult> {
     const managers = (await options.store.listPeople()).filter(person => person.active && person.storeId === storeId && (person.tier === 'manager' || person.tier === 'owner'));
     const others = managers.filter(person => person.personId !== actorId);
-    for (const manager of (others.length ? others : managers)) await notify(kind, manager.personId, body, relatedId);
+    const targets = others.length ? others : managers;
+    if (!targets.length) return 'not_sent';
+    let worst: SendResult = 'sent';
+    for (const manager of targets) {
+      const result = await notify(kind, manager.personId, body, relatedId);
+      if (result === 'unknown') worst = 'unknown';
+      else if (result === 'not_sent' && worst === 'sent') worst = 'not_sent';
+    }
+    return worst;
   }
 
   function noticeState(result: SendResult): 'sent' | 'unknown' | 'none' {
@@ -178,8 +197,134 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
     return 'none';
   }
 
+  function entriesFromDraft(draft: Draft): LedgerEntry[] {
+    if (draft.payload.type !== 'report') return [];
+    const base = Date.parse(draft.createdAt);
+    return draft.payload.added.flatMap((item, index) => {
+      if (!item.employeeId) return [];
+      return [{
+        entryId: confirmEntryId(draft.draftId, index),
+        storeId: draft.storeId,
+        businessDay: draft.businessDay,
+        customerName: item.customer,
+        amount: item.amount,
+        amountType: '业绩' as const,
+        ownerPersonId: item.employeeId,
+        ownerName: item.employeeName,
+        reporterPersonId: draft.reporterPersonId,
+        note: item.note,
+        status: 'recorded' as const,
+        disputed: false,
+        createdAt: new Date(base + index).toISOString(),
+      }];
+    });
+  }
+
+  async function finishClaimed(draft: Draft): Promise<string> {
+    if (draft.payload.type !== 'report') return `${FRONT_CLAW}：这张不是报数。`;
+    const { added, missing, skipped } = draft.payload;
+    const next: Draft = missing.length
+      ? { ...draft, payload: { type: 'report', added: [], missing, skipped: skipped + added.length }, status: 'pending', closedAt: null }
+      : { ...draft, status: 'confirmed', closedAt: options.now().toISOString() };
+    await options.store.commitConfirmingDraft(next, entriesFromDraft(draft));
+    if (missing.length) return `${FRONT_CLAW}：已入账 ${added.length} 笔。没出现的先不删。`;
+    return `${FRONT_CLAW}：已入账 ${added.filter(item => item.employeeId).length} 笔。`;
+  }
+
+  function appointmentsFromDraft(draft: Draft): Appointment[] {
+    if (draft.payload.type !== 'appointment') return [];
+    const base = Date.parse(draft.createdAt);
+    return draft.payload.items.map((item, index) => stagePendingAppointment({
+      ...item,
+      appointmentId: appointmentLineId(draft.draftId, index),
+      storeId: draft.storeId,
+      employeePersonId: draft.reporterPersonId,
+      createdAt: new Date(base + index).toISOString(),
+    }));
+  }
+
+  async function finishAppointment(draft: Draft): Promise<string> {
+    if (draft.payload.type !== 'appointment') return `${FRONT_CLAW}：这张不是预约。`;
+    const next: Draft = { ...draft, status: 'confirmed', closedAt: options.now().toISOString() };
+    const result = await options.store.commitConfirmingAppointments(next, appointmentsFromDraft(draft));
+    if (result.claimed) {
+      const listed = await appointmentList(draft.storeId);
+      const notice = await pushManagers(draft.storeId, draft.reporterPersonId, 'appointment', listed.text, draft.draftId);
+      return `${FRONT_CLAW}：预约已提交 ${result.total} 笔，等店长确认。${noticeText(notice)}`;
+    }
+    return `${FRONT_CLAW}：预约已提交 ${result.total} 笔，等店长确认。`;
+  }
+
+  function noticeText(result: SendResult): string {
+    if (result === 'sent') return '店长通知已记录为送达。';
+    if (result === 'not_sent') return '店长通知未送达。';
+    return '店长通知结果未知，没有自动重发。';
+  }
+
+  async function appointmentList(storeId: string): Promise<{ text: string; ids: string[] }> {
+    const pending = await options.store.listAppointments({ storeId, status: 'pending_manager' });
+    const people = await options.store.listPeople();
+    const ids = pending.map(item => item.appointmentId);
+    for (const manager of people.filter(person => person.active && person.storeId === storeId && (person.tier === 'manager' || person.tier === 'owner'))) {
+      await options.store.setConfig(`appointment-view:${manager.personId}`, JSON.stringify(ids));
+    }
+    const lines = [`${FRONT_CLAW} 待确认预约：`];
+    pending.forEach((item, index) => {
+      const employee = people.find(person => person.personId === item.employeePersonId);
+      lines.push(`${index + 1}. ${employee?.displayName ?? '同事'} ${item.customerName} ${item.whenText}${item.note ? ` ${item.note}` : ''} 口令 ${item.appointmentId.slice(0, 8)}`);
+    });
+    lines.push('回复「确认预约 1」只确认这次看到的第1笔。');
+    return { text: lines.join('\n'), ids };
+  }
+
+  async function settleConfirming(): Promise<void> {
+    for (const draft of await options.store.listDrafts({ status: 'confirming' })) {
+      const person = await options.store.getPerson(draft.reporterPersonId);
+      if (!person?.active || person.storeId !== draft.storeId || person.personId !== draft.reporterPersonId) continue;
+      if (draft.kind === 'report') await finishClaimed(draft);
+      else if (draft.kind === 'appointment') await finishAppointment(draft);
+    }
+  }
+
+  async function explainLedger(actor: Person): Promise<string> {
+    const current = await fresh(actor.accountId);
+    if (!current?.active || current.personId !== actor.personId || current.storeId !== actor.storeId) return `${FRONT_CLAW}：当前身份不能查这家店的入账。`;
+    const drafts = (await options.store.listDrafts({ kind: 'report' })).filter(draft => draft.reporterPersonId === current.personId && draft.storeId === current.storeId);
+    if (drafts.some(draft => draft.status === 'confirming')) return `${FRONT_CLAW}：这张还在确认中。当前身份不能代入账。`;
+    const confirmed = drafts.filter(draft => draft.status === 'confirmed' && draft.payload.type === 'report').sort((left, right) => (left.closedAt ?? '').localeCompare(right.closedAt ?? ''));
+    const last = confirmed[confirmed.length - 1];
+    if (!last || last.payload.type !== 'report') return `${FRONT_CLAW}：没有可查的入账。`;
+    const count = last.payload.added.filter(item => item.employeeId).length;
+    return `${FRONT_CLAW}：最近一次已入账 ${count} 笔。`;
+  }
+
+  async function explainAppointments(actor: Person): Promise<string> {
+    const current = await fresh(actor.accountId);
+    if (!current?.active || current.personId !== actor.personId || current.storeId !== actor.storeId) return `${FRONT_CLAW}：当前身份不能查这家店的预约。`;
+    const confirming = (await options.store.listDrafts({ status: 'confirming', kind: 'appointment' })).some(draft => draft.reporterPersonId === current.personId && draft.storeId === current.storeId);
+    if (confirming) return `${FRONT_CLAW}：这张预约还在确认中。当前身份不能代提交。`;
+    const rows = await options.store.listAppointments({ storeId: current.storeId, employeePersonId: current.personId });
+    if (!rows.length) return `${FRONT_CLAW}：没有可查的预约。`;
+    const waiting = rows.filter(row => row.status === 'pending_manager').length;
+    const confirmed = rows.filter(row => row.status === 'confirmed').length;
+    const drafts = (await options.store.listDrafts({ kind: 'appointment' })).filter(draft => draft.reporterPersonId === current.personId && draft.storeId === current.storeId);
+    const notices = (await options.store.listNotifications()).filter(notice => notice.kind === 'appointment' && drafts.some(draft => draft.draftId === notice.relatedId));
+    const latest = notices.sort((left, right) => left.createdAt.localeCompare(right.createdAt)).at(-1);
+    const notice = !latest ? '还没有店长通知记录。' : latest.status === 'sent' ? '店长通知已记录为送达。' : latest.status === 'not_sent' ? '店长通知未送达。' : '店长通知结果未知，没有自动重发。';
+    return `${FRONT_CLAW}：预约 ${rows.length} 笔，等店长确认 ${waiting} 笔，店长已确认 ${confirmed} 笔。${notice}`;
+  }
+
+  async function settleOpenNotifications(): Promise<void> {
+    for (const notice of await options.store.listNotifications()) {
+      if (notice.status !== 'pending') continue;
+      await options.store.updateNotificationStatus(notice.notificationId, 'unknown', null);
+    }
+  }
+
   async function runMaintenance(): Promise<void> {
     const now = options.now();
+    await settleOpenNotifications();
+    await settleConfirming();
     for (const draft of await options.store.listDrafts({ status: 'pending', kind: 'report' })) {
       if (Date.parse(draft.expiresAt) <= now.getTime()) {
         draft.status = 'void';
@@ -222,6 +367,11 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
   async function stageReport(accountId: string, report: ParsedReport): Promise<string> {
     const actor = await fresh(accountId);
     if (!actor) return UNBOUND;
+    const confirming = (await options.store.listDrafts({ status: 'confirming', kind: 'report' })).find(draft => draft.reporterPersonId === actor.personId && draft.storeId === actor.storeId);
+    if (confirming) {
+      if (!actor.active) return `${FRONT_CLAW}：这张还在确认中。当前身份不能代入账。`;
+      await finishClaimed(confirming);
+    }
     const open = await options.store.getOpenDraft(actor.personId);
     if (open && open.kind === 'appointment') return `${FRONT_CLAW}：还有预约没确认。先回复「对」或「取消」。`;
     const people = await options.store.listPeople();
@@ -261,6 +411,7 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
       createdAt: open?.createdAt ?? options.now().toISOString(),
       closedAt: null,
     };
+    if (!writable()) return STOPPED;
     await options.store.saveDraft(draft);
     return echoReport(storeName, report.businessDay, diff.added, diff.missing, diff.skipped);
   }
@@ -268,8 +419,21 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
   async function stageAppointment(accountId: string, item: AppointmentRequest): Promise<string> {
     const actor = await fresh(accountId);
     if (!actor) return UNBOUND;
+    const confirming = (await options.store.listDrafts({ status: 'confirming', kind: 'appointment' })).find(draft => draft.reporterPersonId === actor.personId && draft.storeId === actor.storeId);
+    if (confirming) {
+      if (!actor.active) return `${FRONT_CLAW}：这张预约还在确认中。当前身份不能代提交。`;
+      await finishAppointment(confirming);
+    }
+    const existing = await options.store.listAppointments({ storeId: actor.storeId, employeePersonId: actor.personId });
+    const same = existing.find(row => row.customerName === item.customer && row.whenText === item.whenText);
+    if (same) return same.status === 'confirmed'
+      ? `${FRONT_CLAW}：${item.customer} ${item.whenText} 店长已确认，没有重复提交。`
+      : `${FRONT_CLAW}：${item.customer} ${item.whenText} 已经提交过，等店长确认。没有重复提交。`;
     const open = await options.store.getOpenDraft(actor.personId);
     if (open && open.kind === 'report') return `${FRONT_CLAW}：还有一张没确认的报数。先回复「对」或「取消」。`;
+    if (open?.payload.type === 'appointment' && open.payload.items.some(row => row.customer === item.customer && row.whenText === item.whenText)) {
+      return `${FRONT_CLAW}：${item.customer} ${item.whenText} 已经在这张待确认预约里。`;
+    }
     const items = open?.payload.type === 'appointment' ? [...open.payload.items, item] : [item];
     const submitted = businessDay();
     const draft: Draft = {
@@ -286,6 +450,7 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
       createdAt: open?.createdAt ?? options.now().toISOString(),
       closedAt: null,
     };
+    if (!writable()) return STOPPED;
     await options.store.saveDraft(draft);
     return echoAppointment(items);
   }
@@ -294,78 +459,66 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
     const current = await fresh(actor.accountId);
     if (!current) return UNBOUND;
     if (current.storeId !== draft.storeId) return `${FRONT_CLAW}：你已经不在这家店，这张不能入账。`;
-    if (draft.payload.type === 'appointment') return confirmAppointmentDraft(current, draft);
-    const { added, missing, skipped } = draft.payload;
-    if (added.some(item => !item.employeeId)) return `${FRONT_CLAW}：还有员工没对上，回复「1 是姓名」。我不会猜。`;
-    if (!added.length) return `${FRONT_CLAW}：没有要入账的新业绩。没出现的先不删。`;
-    const createdAt = options.now().getTime();
-    await options.store.insertEntries(added.flatMap((item, index) => {
-      if (!item.employeeId) return [];
-      return [{
-        entryId: randomUUID(),
-        storeId: draft.storeId,
-        businessDay: draft.businessDay,
-        customerName: item.customer,
-        amount: item.amount,
-        amountType: '业绩' as const,
-        ownerPersonId: item.employeeId,
-        ownerName: item.employeeName,
-        reporterPersonId: current.personId,
-        note: item.note,
-        status: 'recorded' as const,
-        disputed: false,
-        createdAt: new Date(createdAt + index).toISOString(),
-      }];
-    }));
-    if (missing.length) {
-      draft.payload = { type: 'report', added: [], missing, skipped: skipped + added.length };
-      await options.store.saveDraft(draft);
-      return `${FRONT_CLAW}：已入账 ${added.length} 笔。没出现的先不删。`;
+    if (draft.payload.type === 'report' && draft.payload.added.some(item => !item.employeeId)) return `${FRONT_CLAW}：还有员工没对上，回复「1 是姓名」。我不会猜。`;
+    if (draft.payload.type === 'report' && !draft.payload.added.length) return `${FRONT_CLAW}：没有要入账的新业绩。没出现的先不删。`;
+    if (!writable()) return STOPPED;
+    const claimed = await options.store.claimPendingDraft(draft.draftId);
+    if (!claimed) {
+      const currentDraft = await options.store.getDraft(draft.draftId);
+      if (currentDraft && currentDraft.storeId === current.storeId && (currentDraft.status === 'confirming' || currentDraft.status === 'confirmed')) {
+        if (currentDraft.payload.type === 'appointment') {
+          if (currentDraft.status === 'confirming') {
+            const submitted = await finishAppointment(currentDraft);
+            return submitted.includes('没有重复') ? submitted : `${submitted}没有重复提交。`;
+          }
+          return `${FRONT_CLAW}：预约已提交 ${currentDraft.payload.items.length} 笔，等店长确认。没有重复提交。`;
+        }
+        if (currentDraft.payload.type === 'report') {
+          if (currentDraft.status === 'confirming') await finishClaimed(currentDraft);
+          const count = currentDraft.payload.added.filter(item => item.employeeId).length;
+          return `${FRONT_CLAW}：已入账 ${count} 笔。没有重复入账。`;
+        }
+      }
+      return `${FRONT_CLAW}：这张已经处理过，没有重复入账。`;
     }
-    draft.status = 'confirmed';
-    draft.closedAt = options.now().toISOString();
-    draft.payload = { type: 'report', added, missing, skipped };
-    await options.store.saveDraft(draft);
-    return `${FRONT_CLAW}：已入账 ${added.length} 笔。`;
+    if (claimed.payload.type === 'appointment') return finishAppointment(claimed);
+    return finishClaimed(claimed);
   }
 
-  async function confirmAppointmentDraft(actor: Person, draft: Draft): Promise<string> {
-    const payload = draft.payload as AppointmentPayload;
-    const createdAt = options.now().getTime();
-    for (const [index, item] of payload.items.entries()) {
-      await options.store.saveAppointment(stagePendingAppointment({
-        ...item,
-        appointmentId: randomUUID(),
-        storeId: draft.storeId,
-        employeePersonId: actor.personId,
-        createdAt: new Date(createdAt + index).toISOString(),
-      }));
-    }
-    draft.status = 'confirmed';
-    draft.closedAt = options.now().toISOString();
-    await options.store.saveDraft(draft);
-    const pending = await options.store.listAppointments({ storeId: draft.storeId, status: 'pending_manager' });
-    const people = await options.store.listPeople();
-    const lines = [`${FRONT_CLAW} 待确认预约：`];
-    pending.forEach((item, index) => {
-      const employee = people.find(person => person.personId === item.employeePersonId);
-      lines.push(`${index + 1}. ${employee?.displayName ?? '同事'} ${item.customerName} ${item.whenText}${item.note ? ` ${item.note}` : ''}`);
-    });
-    lines.push('回复「确认预约 1」。');
-    await pushManagers(draft.storeId, actor.personId, 'appointment', lines.join('\n'), draft.draftId);
-    return `${FRONT_CLAW}：预约已提交，等店长确认。`;
+  async function viewedAppointmentIds(personId: string): Promise<string[] | null> {
+    const raw = await options.store.getConfig(`appointment-view:${personId}`);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed) || parsed.some(item => typeof item !== 'string')) return null;
+      return parsed as string[];
+    } catch { return null; }
   }
 
-  async function managerConfirm(actor: Person, index: number): Promise<string> {
+  async function managerConfirm(actor: Person, selection: { index?: number; token?: string }): Promise<string> {
     const current = await fresh(actor.accountId);
     if (!current || (current.tier !== 'manager' && current.tier !== 'owner')) return `${FRONT_CLAW}：这个只有店长能确认。`;
-    const pending = await options.store.listAppointments({ storeId: current.storeId, status: 'pending_manager' });
-    const chosen = pending[index - 1];
-    if (!chosen) return `${FRONT_CLAW}：没有这一笔预约。`;
-    const next = confirmAppointment(chosen);
-    await options.store.saveAppointment(next);
-    await notify('appointment_confirmed', next.employeePersonId, `${FRONT_CLAW}：店长已确认${next.customerName}的预约，请告诉顾客。`, next.appointmentId);
-    return `${FRONT_CLAW}：已确认${next.customerName}的预约。`;
+    const viewed = await viewedAppointmentIds(current.personId);
+    const inStore = await options.store.listAppointments({ storeId: current.storeId });
+    let appointmentId: string | undefined;
+    if (selection.token) {
+      const token = selection.token.toLowerCase();
+      const matches = inStore.filter(row => row.appointmentId.startsWith(token));
+      if (matches.length !== 1) return `${FRONT_CLAW}：这个口令对不上你看到的一笔预约。请发送「预约列表」。我不会猜下一笔。`;
+      appointmentId = matches[0]!.appointmentId;
+      if (selection.index && viewed?.[selection.index - 1] !== appointmentId) return `${FRONT_CLAW}：列表已经变了。请发送「预约列表」再确认。我不会猜下一笔。`;
+    } else if (selection.index) {
+      appointmentId = viewed?.[selection.index - 1];
+      if (!appointmentId) return `${FRONT_CLAW}：还没有你看过的这一笔。请发送「预约列表」。我不会猜下一笔。`;
+    } else return `${FRONT_CLAW}：要确认哪一笔？请发送「预约列表」。`;
+    const chosen = inStore.find(row => row.appointmentId === appointmentId);
+    if (!chosen || chosen.storeId !== current.storeId) return `${FRONT_CLAW}：这一笔不在你现在的门店。请发送「预约列表」。我不会猜下一笔。`;
+    if (chosen.status === 'confirmed') return `${FRONT_CLAW}：${chosen.customerName}的预约已经确认过。请发送「预约列表」查看还没确认的。我不会确认下一笔。`;
+    const outcome = await options.store.confirmPendingAppointment(chosen.appointmentId);
+    if (outcome === 'already') return `${FRONT_CLAW}：${chosen.customerName}的预约已经确认过。请发送「预约列表」查看还没确认的。我不会确认下一笔。`;
+    if (outcome !== 'confirmed') return `${FRONT_CLAW}：这一笔已经不在。请发送「预约列表」。我不会猜下一笔。`;
+    const told = await notify('appointment_confirmed', chosen.employeePersonId, `${FRONT_CLAW}：店长已确认${chosen.customerName}的预约，请告诉顾客。`, chosen.appointmentId);
+    return `${FRONT_CLAW}：已确认${chosen.customerName}的预约。${told === 'sent' ? '已通知预约人。' : told === 'not_sent' ? '预约人通知未送达。' : '预约人通知结果未知，没有自动重发。'}`;
   }
 
   async function correctable(actor: Person): Promise<LedgerEntry[]> {
@@ -538,7 +691,7 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
     if (output.name === 'confirm_appointment') {
       const index = output.fields.index;
       if (Object.keys(output.fields).some(key => key !== 'index') || typeof index !== 'number' || !Number.isInteger(index)) return `${FRONT_CLAW}：要确认哪一笔？回复「确认预约 1」。`;
-      return managerConfirm(current, index);
+      return managerConfirm(current, { index });
     }
     return `${FRONT_CLAW}：这个我不能办。`;
   }
@@ -551,7 +704,11 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
       options.onOutbound?.(clean);
       replies.push(clean);
     };
-    const finish = () => ({ entry: 'unified' as const, replies, modelCalled });
+    const finish = () => {
+      const text = replies.join('\n');
+      const ledgerSettled = /已入账|记过了|没有重复入账|预约已提交|店长已确认|没有重复提交|没有重复确认/.test(text) && !text.includes('没有入账');
+      return { entry: 'unified' as const, replies, modelCalled, ...(ledgerSettled ? { ledgerSettled: true as const } : {}) };
+    };
     const resolved = await options.resolve(input.memberId);
     const actor = resolved?.active ? await fresh(resolved.accountId) : null;
     if (!actor || actor.memberId !== input.memberId) {
@@ -559,6 +716,22 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
       return finish();
     }
     const text = input.text.trim();
+    if (text === '入账结果') { say(await explainLedger(actor)); return finish(); }
+    if (text === '预约结果') { say(await explainAppointments(actor)); return finish(); }
+    if (text === '预约列表') {
+      const current = await fresh(actor.accountId);
+      if (!current || (current.tier !== 'manager' && current.tier !== 'owner')) { say(`${FRONT_CLAW}：预约列表只有店长能确认。`); return finish(); }
+      say((await appointmentList(current.storeId)).text);
+      return finish();
+    }
+    const openBefore = await options.store.getOpenDraft(actor.personId);
+    if (!openBefore && (text === '对' || text === '全部确认')) {
+      const explained = await explainLedger(actor);
+      if (explained.includes('已入账')) { say(explained.replace(/。$/, '。没有重复入账。')); return finish(); }
+      const booking = await explainAppointments(actor);
+      if (!booking.includes('没有可查的预约')) { say(booking.includes('没有重复') ? booking : `${booking}没有重复提交。`); return finish(); }
+    }
+    if (!writable()) { say(STOPPED); return finish(); }
     if (isClosedCommand(text)) {
       say(CLOSED);
       return finish();
@@ -587,9 +760,11 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
       say(await applyCorrection(actor, Number(correction[1]), (correction[2] ?? '').trim()));
       return finish();
     }
-    const appointmentConfirm = /^确认预约\s*(\d+)$/.exec(text);
-    if (appointmentConfirm?.[1]) {
-      say(await managerConfirm(actor, Number(appointmentConfirm[1])));
+    const appointmentConfirm = /^确认预约\s+(?:(\d+)(?:\s+([0-9a-fA-F]{6,64}))?|([0-9a-fA-F]{6,64}))$/.exec(text);
+    if (appointmentConfirm) {
+      const index = appointmentConfirm[1] ? Number(appointmentConfirm[1]) : undefined;
+      const token = appointmentConfirm[2] ?? appointmentConfirm[3];
+      say(await managerConfirm(actor, { ...(index ? { index } : {}), ...(token ? { token } : {}) }));
       return finish();
     }
     const exact = matchExactTool(text);
@@ -605,7 +780,8 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
     const target = parseTargetUtterance(text);
     if (target) {
       const periodMonth = target.which === 'next' ? shiftMonth(monthKey(businessDay()), 1) : monthKey(businessDay());
-      say((await tools.setTarget(actor.accountId, { personName: target.name, amount: target.amount, periodMonth })).reply);
+      const personName = target.name || actor.displayName;
+      say((await tools.setTarget(actor.accountId, { personName, amount: target.amount, periodMonth })).reply);
       return finish();
     }
     const appointment = parseAppointmentUtterance(text);
@@ -618,11 +794,7 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
       say(await stageReport(actor.accountId, parsed.report));
       return finish();
     }
-    if (input.signal.aborted) return finish();
-    if (performance.now() >= input.deadline) {
-      say(`${FRONT_CLAW}：这次处理超时了，请再发一次。`);
-      return finish();
-    }
+    if (input.signal.aborted || performance.now() >= input.deadline) { say(STOPPED); return finish(); }
     say('收到，正在处理');
     modelCalled = true;
     const current = await fresh(actor.accountId);
@@ -650,9 +822,12 @@ export function createWecomBotHandler(options: WecomBotHandlerOptions) {
     async handleMessage(input: { memberId: string; text: string; signal?: AbortSignal; deadline?: number }): Promise<HandleResult> {
       const signal = input.signal ?? new AbortController().signal;
       const deadline = input.deadline ?? performance.now() + 30_000;
-      if (signal.aborted) return { entry: 'unified', replies: [], modelCalled: false };
-      await runMaintenance();
-      return handleUnified({ memberId: input.memberId, text: input.text, signal, deadline }, await forbiddenTokens());
+      const budget = { signal, deadline };
+      return turn.run(budget, async () => {
+        if ((signal.aborted || performance.now() >= deadline) && input.text.trim() !== '入账结果') return { entry: 'unified' as const, replies: [STOPPED], modelCalled: false };
+        await runMaintenance();
+        return await handleUnified({ memberId: input.memberId, text: input.text, signal, deadline }, await forbiddenTokens());
+      });
     },
   };
 }

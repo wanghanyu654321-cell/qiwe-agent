@@ -7,9 +7,32 @@ const ident = String.raw`(?:\w+\.)?\w+`;
 /** Executes the narrow SQL shape used by the Postgres store. Not a server. */
 export class MemorySql implements SqlClient {
   private tables = new Map<string, Row[]>();
+  private snapshot: Map<string, Row[]> | null = null;
+
+  async transaction<T>(work: (query: SqlClient['query']) => Promise<T>): Promise<T> {
+    await this.query('BEGIN');
+    try {
+      const result = await work((sql, params) => this.query(sql, params ?? []));
+      await this.query('COMMIT');
+      return result;
+    } catch (error) {
+      await this.query('ROLLBACK');
+      throw error;
+    }
+  }
 
   async query<T = Row>(sql: string, params: readonly unknown[] = []): Promise<{ rows: T[] }> {
     const compact = sql.replace(/\s+/g, ' ').trim();
+    if (/^BEGIN$/i.test(compact)) {
+      this.snapshot = new Map([...this.tables].map(([name, rows]) => [name, rows.map(row => ({ ...row }))]));
+      return { rows: [] };
+    }
+    if (/^COMMIT$/i.test(compact)) { this.snapshot = null; return { rows: [] }; }
+    if (/^ROLLBACK$/i.test(compact)) {
+      if (this.snapshot) this.tables = this.snapshot;
+      this.snapshot = null;
+      return { rows: [] };
+    }
     if (/^CREATE SCHEMA\b/i.test(compact)) return { rows: [] };
     if (/^CREATE TABLE/i.test(compact)) {
       const name = new RegExp(String.raw`CREATE TABLE IF NOT EXISTS (${ident})`, 'i').exec(compact)?.[1];
@@ -31,7 +54,7 @@ export class MemorySql implements SqlClient {
   }
 
   private insert(sql: string, params: readonly unknown[]): Row {
-    const match = new RegExp(String.raw`^INSERT INTO (${ident}) \(([^)]+)\) VALUES \(([^)]+)\)(?: ON CONFLICT \(([^)]+)\) DO UPDATE SET (.+))?$`, 'i').exec(sql);
+    const match = new RegExp(String.raw`^INSERT INTO (${ident}) \(([^)]+)\) VALUES \(([^)]+)\)(?: ON CONFLICT \(([^)]+)\) DO (NOTHING|UPDATE SET (.+)))?$`, 'i').exec(sql);
     if (!match || !match[1] || !match[2]) throw Error(sql);
     const table = this.rows(match[1]);
     const columns = match[2].split(',').map(column => column.trim());
@@ -41,8 +64,9 @@ export class MemorySql implements SqlClient {
       const keys = match[4].split(',').map(key => key.trim());
       const index = table.findIndex(existing => keys.every(key => existing[key] === row[key]));
       if (index >= 0) {
+        if (match[5] === 'NOTHING') return { ...table[index] };
         const next = { ...table[index] };
-        for (const assignment of match[5]?.matchAll(/(\w+)=EXCLUDED\.(\w+)/g) ?? []) {
+        for (const assignment of match[6]?.matchAll(/(\w+)=EXCLUDED\.(\w+)/g) ?? []) {
           const column = assignment[1];
           const source = assignment[2];
           if (column && source) next[column] = row[source];

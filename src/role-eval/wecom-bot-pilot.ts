@@ -1,6 +1,6 @@
 import type {WSClient} from '@wecom/aibot-node-sdk';
 import {AsyncLocalStorage} from 'node:async_hooks';
-import {createWecomBotPreparation,createControlledRealWecomBotPreparation,type WecomBotPreparationOptions,type WecomPreparationGate} from './wecom-bot-preparation.js';
+import {createWecomBotPreparation,createControlledRealWecomBotPreparation,type WecomBotPreparationOptions,type WecomPreparationGate,wecomDebug} from './wecom-bot-preparation.js';
 import {createWecomBotAssembly,createControlledRealWecomBotAssembly,type WecomBotAssemblyOptions} from './wecom-bot-assembly.js';
 import {createWecomBotContext,createControlledRealWecomBotContext,type WecomBotContextOptions,type BotContextRequest} from './wecom-bot-context.js';
 import {createBotSdkAdapter,createControlledRealBotSdkAdapter} from './wecom-bot-sdk.js';
@@ -12,8 +12,10 @@ import type {BotConversationActor,BotTaskStore} from './wecom-bot-task-store.js'
 import {startPendingReportSweeper,type PendingReportOwner} from './wecom-bot-task-store.js';
 import type {BotReportExtractor} from './wecom-bot-report-model.js';
 import {createWecomBotBindingReader} from './wecom-bot-bindings.js';
-import {bootFrontClaw, FRONT_CLAW_DATABASE_URL, FRONT_CLAW_SQLITE_PATH, type FrontClawBoot} from './front-claw-boot.js';
-import type {SendResult} from './wecom-bot-unified-handler.js';
+import {bootFrontClaw, createStoreBusinessPort, FRONT_CLAW_DATABASE_URL, FRONT_CLAW_SQLITE_PATH, type FrontClawBoot} from './front-claw-boot.js';
+import {MemoryPerformanceStore} from './performance-store.js';
+import type {StoreBusinessPort} from './wecom-bot-handler.js';
+import {createWecomBotHandler, type SendResult} from './wecom-bot-unified-handler.js';
 export {createModelReportExtractor} from './wecom-bot-report-model.js';
 export interface WecomBotPilotExecution {
   /** Borrowed original queue identity. The pilot never controls its lifecycle. */
@@ -81,6 +83,7 @@ function createPilot(options:SharedPilotOptions) {
     readBinding: options.identity.readBinding.bind(options.identity), readNative: options.identity.readNative.bind(options.identity)};
   let unifiedAssistant = options.unifiedAssistant;
   let frontClaw: FrontClawBoot | undefined;
+  let storePort: StoreBusinessPort | undefined;
   const deliver: { current: (input: { toPersonId: string; text: string }) => Promise<SendResult> } = { current: async () => 'unknown' };
   const business = {...options.business, scope: structuredClone(options.business.scope), employees: structuredClone(options.business.employees)};
   let stopped = false, admitted = () => false;
@@ -174,7 +177,14 @@ function createPilot(options:SharedPilotOptions) {
           authority = createContext({...identity, botId, corpId,
             readSubject: scope => track(readSubject(scope), recoveryReads.getStore()), readBinding: (subject, scope) => track(identity.readBinding(subject, scope), recoveryReads.getStore()), readNative: (id, scope) => track(identity.readNative(id, scope), recoveryReads.getStore())});
           delivery = createBotConversationDelivery({authority, ledger: business.ledger, sender, intake, gate: deliveryGate, scope: business.scope, employees: business.employees});
-          const assemblyOptions={botId, corpId, client, identity, ...(unifiedAssistant ? {unifiedAssistant} : {}),
+          if (!storePort) {
+            if (real && process.env.QIWE_CONTROLLED_REAL_PILOT === '1') throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE_URL');
+            const memory = new MemoryPerformanceStore();
+            const memoryHandler = createWecomBotHandler({mode: 'isolated-synthetic', store: memory, now: () => new Date(), resolve: memberId => memory.getPersonByMember(memberId), send: message => deliver.current(message), model: {complete: async () => ({type: 'chat', text: 'Front Claw 在。'})}});
+            storePort = createStoreBusinessPort(memory, memoryHandler);
+            wecomDebug('performance_store', {driver: 'memory', durable: false});
+          }
+          const assemblyOptions={botId, corpId, client, identity, ...(unifiedAssistant ? {unifiedAssistant} : {}), storeAssistant: storePort,
             businesses: [{scope: business.scope, employees: business.employees, ledger: business.ledger, conversations: {store: business.store, native: roles, intake, deliveryGate: execution.gate, ...(business.reportExtractor ? {reportExtractor: business.reportExtractor} : {}), ...(business.summaryReadOnly ? {summaryReadOnly: true} : {})}}], sender: {sdk}, executionBoundary: boundary, ...(requestTimeoutMs !== undefined ? {requestTimeoutMs} : {}), ...(onOutcome ? {onOutcome} : {})};
           assembly=real?createControlledRealWecomBotAssembly({...assemblyOptions,mode:'controlled-real-pilot',memberId:real.memberId}):createWecomBotAssembly({...assemblyOptions,mode:'isolated-synthetic'});
           const pendingReports = business.store.pendingReports, sweep = options.pendingSweep;
@@ -216,15 +226,14 @@ function createPilot(options:SharedPilotOptions) {
     const sqlitePath = env[FRONT_CLAW_SQLITE_PATH]?.trim() ?? '';
     if (!url && !sqlitePath) return;
     frontClaw = await bootFrontClaw({ env, now: () => new Date(), send: message => deliver.current(message), model: { complete: async () => ({ type: 'chat', text: 'Front Claw 在。' }) } });
-    if (url) {
-      unifiedAssistant = frontClaw.handler;
-      if (real) {
-        const employee = business.employees[0];
-        if (employee) await frontClaw.store.savePerson({
-          personId: employee.accountId, accountId: employee.accountId, memberId: real.memberId, displayName: employee.employeeName,
-          storeId: business.scope.store, storeName: business.scope.store, tier: identity.roles.includes('manager') ? 'manager' : 'employee', roles: [...identity.roles], active: true,
-        });
-      }
+    storePort = createStoreBusinessPort(frontClaw.store, frontClaw.handler);
+    wecomDebug('performance_store', {driver: frontClaw.driver});
+    if (url && real) {
+      const employee = business.employees[0];
+      if (employee) await storePort.remember({
+        personId: employee.employeeId || employee.accountId, accountId: employee.accountId, memberId: real.memberId, displayName: employee.employeeName,
+        storeId: business.scope.store, storeName: employee.storeName || business.scope.store, tier: identity.roles.includes('manager') ? 'manager' : 'employee', roles: identity.roles,
+      });
     }
     if ((await frontClaw.bindings.listBindings()).length) {
       const original = identity.readBinding;
@@ -238,6 +247,7 @@ function createPilot(options:SharedPilotOptions) {
   return Object.freeze({
     prepare: () => {
       const env = options.env ?? process.env;
+      if (real && process.env.QIWE_CONTROLLED_REAL_PILOT === '1' && !env[FRONT_CLAW_DATABASE_URL]?.trim()) return Promise.reject(Error('FRONT_CLAW_DATABASE_UNAVAILABLE_URL'));
       const configured = !!(env[FRONT_CLAW_DATABASE_URL]?.trim() || env[FRONT_CLAW_SQLITE_PATH]?.trim());
       if (!configured || unifiedAssistant || frontClaw) return owner.prepare();
       return ensureFrontClaw().then(() => owner.prepare());

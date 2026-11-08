@@ -1,7 +1,15 @@
 /** pg 8 is CJS. Node ESM exposes Pool only on `default`; `require('pg')` exposes Pool directly. */
 
+export interface PgPoolClient {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
+  release: () => void;
+}
 export interface PgPoolConstructor {
-  new (config: { connectionString: string }): { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>; end: () => Promise<void> };
+  new (config: { connectionString: string }): {
+    query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
+    connect: () => Promise<PgPoolClient>;
+    end: () => Promise<void>;
+  };
 }
 
 export function resolvePgPool(loaded: unknown): PgPoolConstructor | undefined {

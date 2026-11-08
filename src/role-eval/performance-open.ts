@@ -61,6 +61,24 @@ export async function openPerformanceStore(env: Record<string, string | undefine
       const result = await pool.query(sql, params ? [...params] : []);
       return { rows: result.rows as T[] };
     },
+    async transaction<T>(work: (query: SqlClient['query']) => Promise<T>): Promise<T> {
+      const held = await pool.connect();
+      const query: SqlClient['query'] = async <Row = Record<string, unknown>>(sql: string, params?: readonly unknown[]) => {
+        const result = await held.query(sql, params ? [...params] : []);
+        return { rows: result.rows as Row[] };
+      };
+      try {
+        await held.query('BEGIN');
+        const result = await work(query);
+        await held.query('COMMIT');
+        return result;
+      } catch (error) {
+        await held.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        held.release();
+      }
+    },
   };
   try {
     await migratePerformance(client, readPerformanceMigration());

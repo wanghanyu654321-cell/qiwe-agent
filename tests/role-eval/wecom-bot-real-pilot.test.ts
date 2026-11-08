@@ -52,6 +52,18 @@ function setup(){
  const activate=async()=>{const p=pilot.prepare();await vi.waitFor(()=>expect(client().connectCalls).toBe(1));client().emit('authenticated');await p;ready=true;expect(pilot.activate()).toBe(true);};
  return {options,create,client,send,activate,gate,grants,queued,records,results,outcomes,deliveries,readBinding,prepareRoleWorkspace,native,execution,store,complete:(ids:string[])=>complete(ids),authorize:(r:any)=>authorize(r),ready:()=>{ready=true;}};
 }
+it('refuses the live launcher before opening a socket when the database url is absent', async () => {
+  const previous = process.env.QIWE_CONTROLLED_REAL_PILOT;
+  process.env.QIWE_CONTROLLED_REAL_PILOT = '1';
+  try {
+    const s = setup();
+    expect(() => s.create()).toThrow('FRONT_CLAW_DATABASE_UNAVAILABLE_URL');
+    expect(captured.clients.at(-1)?.connectCalls ?? 0).toBe(0);
+  } finally {
+    if (previous === undefined) delete process.env.QIWE_CONTROLLED_REAL_PILOT;
+    else process.env.QIWE_CONTROLLED_REAL_PILOT = previous;
+  }
+});
 it('rejects incomplete admission before creating SDK or binding original execution',()=>{
  const s=setup();s.options.admission.memberId='';expect(s.create).toThrow('invalid_real_pilot_admission');expect(captured.clients).toEqual([]);
 });

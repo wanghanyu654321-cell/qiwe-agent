@@ -7,6 +7,8 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { Client } from 'pg';
 import { WORKBENCH_ROLES, type WorkbenchRole } from '../../src/role-eval/workbench-access.js';
 import type { PerformanceStore, Person } from '../../src/role-eval/performance-store.js';
+import { appointmentLineId, confirmEntryId } from '../../src/role-eval/performance-store.js';
+import { createPostgresPerformanceStore, type SqlClient } from '../../src/role-eval/performance-postgres.js';
 import { FRONT_CLAW_DATABASE_URL, openPerformanceStore, type OpenedPerformanceStore } from '../../src/role-eval/performance-open.js';
 import { createWecomBotHandler } from '../../src/role-eval/wecom-bot-unified-handler.js';
 
@@ -102,6 +104,22 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cluster?.stop();
+});
+
+it('lets only one Postgres claim move a pending draft to confirming', async () => {
+  const opened = await open(cluster.url);
+  const draftId = 'draft-claim-once';
+  await opened.store.saveDraft({
+    draftId, reporterPersonId: 'person-claim', storeId: 'store-ming', businessDay: '2026-10-27',
+    expiresAt: '2026-10-27T15:00:00.000Z', kind: 'report',
+    payload: { type: 'report', added: [{ customer: '李欣', amount: 1, employeeName: '小周', employeeId: 'person-claim', note: '', amountType: '业绩' }], missing: [], skipped: 0 },
+    status: 'pending', reminder: 'none', voidNotice: 'none', createdAt: '2026-10-27T02:00:00.000Z', closedAt: null,
+  });
+  const [first, second] = await Promise.all([opened.store.claimPendingDraft(draftId), opened.store.claimPendingDraft(draftId)]);
+  expect([first, second].filter(row => row !== null)).toHaveLength(1);
+  expect(await opened.store.claimPendingDraft(draftId)).toBeNull();
+  expect((await opened.store.getDraft(draftId))?.status).toBe('confirming');
+  await opened.close();
 });
 
 it('opens Postgres through Node ESM pg.default.Pool and openPerformanceStore', async () => {
@@ -259,4 +277,194 @@ it('keeps an unconfirmed sheet across restart and fires reminder and void once',
   await again.handler.runMaintenance();
   expect(again.sent).toHaveLength(0);
   await sixth.close();
+});
+
+it('rolls back a confirming insert that fails before commit and retries it once on Postgres', async () => {
+  const draftId = 'draft-rollback-once';
+  const personId = 'person-rollback';
+  const seeded = await open(cluster.url);
+  await seeded.store.saveDraft({
+    draftId, reporterPersonId: personId, storeId: 'store-ming', businessDay: '2026-10-27',
+    expiresAt: '2026-10-27T15:00:00.000Z', kind: 'report',
+    payload: { type: 'report', added: [
+      { customer: '回滚甲', amount: 11, employeeName: '回滚', employeeId: personId, note: '', amountType: '业绩' },
+      { customer: '回滚乙', amount: 12, employeeName: '回滚', employeeId: personId, note: '', amountType: '业绩' },
+    ], missing: [], skipped: 0 },
+    status: 'confirming', reminder: 'none', voidNotice: 'none', createdAt: '2026-10-27T02:00:00.000Z', closedAt: null,
+  });
+  await seeded.close();
+  const client = new Client({ connectionString: cluster.url });
+  await client.connect();
+  let fail = true;
+  const sql: SqlClient = {
+    async query(text, params) {
+      const result = await client.query(text, params ? [...params] : []);
+      return { rows: result.rows };
+    },
+    async transaction(work) {
+      await client.query('BEGIN');
+      try {
+        const result = await work(async (text, params) => {
+          if (fail && text.includes('performance_entries')) { fail = false; throw Error('injected_before_commit'); }
+          const result = await client.query(text, params ? [...params] : []);
+          return { rows: result.rows };
+        });
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    },
+  };
+  const store = createPostgresPerformanceStore(sql);
+  const draft = await store.getDraft(draftId);
+  const entries = [0, 1].map(index => ({
+    entryId: confirmEntryId(draftId, index), storeId: 'store-ming', businessDay: '2026-10-27',
+    customerName: index === 0 ? '回滚甲' : '回滚乙', amount: index === 0 ? 11 : 12, amountType: '业绩' as const,
+    ownerPersonId: personId, ownerName: '回滚', reporterPersonId: personId, note: '', status: 'recorded' as const,
+    disputed: false, createdAt: new Date(Date.parse('2026-10-27T02:00:00.000Z') + index).toISOString(),
+  }));
+  const next = { ...draft!, status: 'confirmed' as const, closedAt: '2026-10-27T03:00:00.000Z' };
+  await expect(store.commitConfirmingDraft(next, entries)).rejects.toThrow('injected_before_commit');
+  expect(await store.getDraft(draftId)).toMatchObject({ status: 'confirming' });
+  expect(await store.listEntries({ reporterPersonId: personId })).toEqual([]);
+  expect(await store.commitConfirmingDraft(next, entries)).toBe(2);
+  expect(await store.commitConfirmingDraft(next, entries)).toBe(2);
+  expect(await store.listEntries({ reporterPersonId: personId, status: 'recorded' })).toHaveLength(2);
+  expect(await store.getDraft(draftId)).toMatchObject({ status: 'confirmed' });
+  await client.end();
+});
+
+it('finishes one Postgres confirm after a restart and from two overlapping replies', async () => {
+  const crash = await open(cluster.url);
+  await crash.store.savePerson(person({ personId: 'person-crash', accountId: 'acct-crash', memberId: 'member-crash', displayName: '崩溃员', tier: 'employee' }));
+  const crashed = bind(crash.store, () => new Date('2026-10-27T10:00:00+08:00'));
+  await crashed.handler.handleMessage({ memberId: 'member-crash', text: '27号明川店\n金梅：40（崩溃员）' });
+  const pending = await crash.store.getOpenDraft('person-crash');
+  expect(await crash.store.claimPendingDraft(pending!.draftId)).toMatchObject({ status: 'confirming' });
+  expect(await crash.store.listEntries({ reporterPersonId: 'person-crash' })).toEqual([]);
+  await crash.close();
+  const resumed = await open(cluster.url);
+  const session = bind(resumed.store, () => new Date('2026-10-27T10:05:00+08:00'));
+  await session.handler.runMaintenance();
+  expect(await resumed.store.listEntries({ reporterPersonId: 'person-crash', status: 'recorded' })).toHaveLength(1);
+  await session.handler.runMaintenance();
+  expect(await resumed.store.listEntries({ reporterPersonId: 'person-crash', status: 'recorded' })).toHaveLength(1);
+  const looked = await session.handler.handleMessage({ memberId: 'member-crash', text: '入账结果' });
+  expect(looked.replies.join('\n')).toContain('已入账 1 笔');
+  expect(looked.replies.join('\n')).not.toContain('没有入账');
+  await resumed.close();
+
+  const raced = await open(cluster.url);
+  await raced.store.savePerson(person({ personId: 'person-race', accountId: 'acct-race', memberId: 'member-race', displayName: '并发员', tier: 'employee' }));
+  const race = bind(raced.store, () => new Date('2026-10-27T11:00:00+08:00'));
+  await race.handler.handleMessage({ memberId: 'member-race', text: '27号明川店\n周琪：70（并发员）\n周琪：80（并发员）' });
+  await Promise.all([
+    race.handler.handleMessage({ memberId: 'member-race', text: '对' }),
+    race.handler.handleMessage({ memberId: 'member-race', text: '对' }),
+  ]);
+  expect(await raced.store.listEntries({ reporterPersonId: 'person-race', status: 'recorded' })).toHaveLength(2);
+  const repeat = await race.handler.handleMessage({ memberId: 'member-race', text: '入账结果' });
+  expect(repeat.replies.join('\n')).toContain('已入账 2 笔');
+  expect(await raced.store.listEntries({ reporterPersonId: 'person-race', status: 'recorded' })).toHaveLength(2);
+  await raced.close();
+});
+
+it('submits one appointment through a Postgres transaction, restart and two overlapping confirms', async () => {
+  const draftId = 'draft-appointment-rollback';
+  const personId = 'person-appointment-rollback';
+  const seeded = await open(cluster.url);
+  await seeded.store.saveDraft({
+    draftId, reporterPersonId: personId, storeId: 'store-ming', businessDay: '2026-10-27',
+    expiresAt: '2026-10-27T15:00:00.000Z', kind: 'appointment',
+    payload: { type: 'appointment', items: [{ customer: '李欣', whenText: '15:00', note: '' }] },
+    status: 'confirming', reminder: 'none', voidNotice: 'none', createdAt: '2026-10-27T02:00:00.000Z', closedAt: null,
+  });
+  await seeded.close();
+  const client = new Client({ connectionString: cluster.url });
+  await client.connect();
+  let fail = true;
+  const sql: SqlClient = {
+    async query(text, params) {
+      const result = await client.query(text, params ? [...params] : []);
+      return { rows: result.rows };
+    },
+    async transaction(work) {
+      await client.query('BEGIN');
+      try {
+        const result = await work(async (text, params) => {
+          if (fail && text.includes('performance_appointments') && text.includes('INSERT')) { fail = false; throw Error('injected_before_commit'); }
+          const result = await client.query(text, params ? [...params] : []);
+          return { rows: result.rows };
+        });
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      }
+    },
+  };
+  const store = createPostgresPerformanceStore(sql);
+  const appointment = {
+    appointmentId: appointmentLineId(draftId, 0), storeId: 'store-ming', employeePersonId: personId,
+    customerName: '李欣', whenText: '15:00', note: '', status: 'pending_manager' as const, createdAt: '2026-10-27T02:00:00.000Z',
+  };
+  const next = { ...(await store.getDraft(draftId))!, status: 'confirmed' as const, closedAt: '2026-10-27T03:00:00.000Z' };
+  await expect(store.commitConfirmingAppointments(next, [appointment])).rejects.toThrow('injected_before_commit');
+  expect(await store.listAppointments({ employeePersonId: personId })).toEqual([]);
+  expect(await store.getDraft(draftId)).toMatchObject({ status: 'confirming' });
+  expect((await store.commitConfirmingAppointments(next, [appointment])).total).toBe(1);
+  expect(await store.confirmPendingAppointment(appointment.appointmentId)).toBe('confirmed');
+  expect((await store.commitConfirmingAppointments(next, [{ ...appointment, status: 'pending_manager' }])).claimed).toBe(false);
+  expect(await store.listAppointments({ employeePersonId: personId, status: 'confirmed' })).toHaveLength(1);
+  expect(await store.confirmPendingAppointment(appointment.appointmentId)).toBe('already');
+  await client.end();
+
+  const crash = await open(cluster.url);
+  await crash.store.savePerson(person({ personId: 'person-appt', accountId: 'acct-appt', memberId: 'member-appt', displayName: '预约员', tier: 'employee' }));
+  await crash.store.savePerson(person({ personId: 'person-appt-mgr', accountId: 'acct-appt-mgr', memberId: 'member-appt-mgr', displayName: '预约店长', tier: 'manager' }));
+  const crashed = bind(crash.store, () => new Date('2026-10-27T12:00:00+08:00'));
+  await crashed.handler.handleMessage({ memberId: 'member-appt', text: '预约 李欣 15:00' });
+  const pending = await crash.store.getOpenDraft('person-appt');
+  expect(await crash.store.claimPendingDraft(pending!.draftId)).toMatchObject({ status: 'confirming' });
+  expect(await crash.store.listAppointments({ employeePersonId: 'person-appt' })).toEqual([]);
+  await crash.close();
+  const resumed = await open(cluster.url);
+  const session = bind(resumed.store, () => new Date('2026-10-27T12:05:00+08:00'));
+  await session.handler.runMaintenance();
+  expect(await resumed.store.listAppointments({ employeePersonId: 'person-appt', status: 'pending_manager' })).toHaveLength(1);
+  expect(await resumed.store.listAppointments({ employeePersonId: 'person-appt', status: 'confirmed' })).toEqual([]);
+  await session.handler.runMaintenance();
+  expect(await resumed.store.listAppointments({ employeePersonId: 'person-appt' })).toHaveLength(1);
+  const looked = await session.handler.handleMessage({ memberId: 'member-appt', text: '预约结果' });
+  expect(looked.replies.join('\n')).toContain('等店长确认 1');
+  await session.handler.handleMessage({ memberId: 'member-appt', text: '预约 赵芳 16:00' });
+  await session.handler.handleMessage({ memberId: 'member-appt', text: '对' });
+  const other = bind(resumed.store, () => new Date('2026-10-27T12:06:00+08:00'));
+  const replies = await Promise.all([
+    session.handler.handleMessage({ memberId: 'member-appt-mgr', text: '确认预约 1' }),
+    other.handler.handleMessage({ memberId: 'member-appt-mgr', text: '确认预约 1' }),
+  ]);
+  const confirmed = await resumed.store.listAppointments({ employeePersonId: 'person-appt', status: 'confirmed' });
+  const waiting = await resumed.store.listAppointments({ employeePersonId: 'person-appt', status: 'pending_manager' });
+  expect(confirmed.map(row => row.customerName)).toEqual(['李欣']);
+  expect(waiting.map(row => row.customerName)).toEqual(['赵芳']);
+  expect(replies.map(reply => reply.replies.join('\n')).some(text => text.includes('已经确认过') || text.includes('已确认李欣'))).toBe(true);
+  expect(replies.map(reply => reply.replies.join('\n')).some(text => text.includes('已确认赵芳'))).toBe(false);
+  await resumed.close();
+
+  const raced = await open(cluster.url);
+  await raced.store.savePerson(person({ personId: 'person-appt-race', accountId: 'acct-appt-race', memberId: 'member-appt-race', displayName: '预约并发', tier: 'employee' }));
+  const left = bind(raced.store, () => new Date('2026-10-27T13:00:00+08:00'));
+  const right = bind(raced.store, () => new Date('2026-10-27T13:00:00+08:00'));
+  await left.handler.handleMessage({ memberId: 'member-appt-race', text: '预约 周琪 16:00' });
+  await Promise.all([
+    left.handler.handleMessage({ memberId: 'member-appt-race', text: '对' }),
+    right.handler.handleMessage({ memberId: 'member-appt-race', text: '对' }),
+  ]);
+  expect(await raced.store.listAppointments({ employeePersonId: 'person-appt-race', status: 'pending_manager' })).toHaveLength(1);
+  expect(await raced.store.listAppointments({ employeePersonId: 'person-appt-race', status: 'confirmed' })).toEqual([]);
+  await raced.close();
 });

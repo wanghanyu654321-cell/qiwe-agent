@@ -39,6 +39,7 @@ export interface WecomBotAssemblyOptions {
   sender: Parameters<typeof createBotSender>[0];
   requestTimeoutMs?: number; maxInFlight?: number;
   unifiedAssistant?: BotReportOptions['unifiedAssistant'];
+  storeAssistant?: BotReportOptions['storeAssistant'];
   onOutcome?(outcome: WecomBotAssemblyOutcome): void;
   executionBoundary?: WecomBotExecutionBoundary;
 }
@@ -185,11 +186,19 @@ function createAssembly(options:AssemblyOptions) {
         // Original services fence business writes with this request's authority/budget. Their
         // finalizers must still persist unknown outcomes for actions already attempted at abort.
         const createDelivery=(value:Omit<Parameters<typeof createBotDelivery>[0],'mode'>)=>mode==='controlled-real-pilot'?createControlledRealBotDelivery({...value,mode}):createBotDelivery({...value,mode});
-        const delivery = createDelivery({ authority, ledger: business.ledger, scope: business.scope, employees: business.employees, ...(options.unifiedAssistant ? {unifiedAssistant: options.unifiedAssistant} : {}),
+        const delivery = createDelivery({ authority, ledger: business.ledger, scope: business.scope, employees: business.employees, ...(options.unifiedAssistant ? {unifiedAssistant: options.unifiedAssistant} : {}), ...(options.storeAssistant ? {storeAssistant: options.storeAssistant} : {}),
           ...(business.artifacts ? {artifacts: business.artifacts} : {}), ...(tasks ? {tasks} : {}),...(conversations?{conversations}:{}), readEvent: () => {check(); return frame;}, sender});
         resources.push(() => delivery.close());
         wecomDebug('delivery_start', {elapsedMs: elapsed()});
-        const result = await delivery.handle(scope); check();
+        const result = await delivery.handle(scope);
+        const budgetEnded = controller.signal.aborted || performance.now() >= deadline;
+        if (result.result.ledgerSettled && budgetEnded) {
+          if (closed || capturedEpoch !== epoch || !authenticated || !connected()) throw Error('session_invalidated');
+          wecomDebug('delivery_done', {elapsedMs: elapsed()});
+          observe({state: 'handled', detail: 'ledger_settled', event: metadata, result});
+          return;
+        }
+        check();
         wecomDebug('delivery_done', {elapsedMs: elapsed()});
         observe({state: 'handled', detail: 'event_handled', event: metadata, result});
       } catch (error) {

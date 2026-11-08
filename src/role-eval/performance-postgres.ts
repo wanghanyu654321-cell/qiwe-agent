@@ -8,6 +8,8 @@ import { PERFORMANCE_MIGRATION_SQL, PERFORMANCE_SCHEMA } from './performance-mig
 
 export interface SqlClient {
   query<T = Record<string, unknown>>(sql: string, params?: readonly unknown[]): Promise<{ rows: T[] }>;
+  /** One connection. A thrown error rolls the statements back. */
+  transaction<T>(work: (query: SqlClient['query']) => Promise<T>): Promise<T>;
 }
 
 const relation = (name: string) => `${PERFORMANCE_SCHEMA}.${name}`;
@@ -214,6 +216,65 @@ export function createPostgresPerformanceStore(client: SqlClient): PerformanceSt
         ? await many(`SELECT * FROM ${relation('performance_targets')}`)
         : await many(`SELECT * FROM ${relation('performance_targets')} WHERE store_id=$1`, [storeId]);
       return rows.map(targetFrom);
+    },
+    async claimPendingDraft(draftId) {
+      const { rows } = await client.query(
+        `UPDATE ${relation('performance_drafts')} SET status=$1 WHERE draft_id=$2 AND status=$3 RETURNING *`,
+        ['confirming', draftId, 'pending'],
+      );
+      return rows[0] ? draftFrom(rows[0]) : null;
+    },
+    async commitConfirmingDraft(draft, entries) {
+      return client.transaction(async query => {
+        for (const entry of entries) {
+          await query(
+            `INSERT INTO ${relation('performance_entries')} (entry_id, store_id, business_day, customer_name, amount, amount_type, owner_person_id, owner_name, reporter_person_id, note, status, disputed, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (entry_id) DO NOTHING`,
+            [entry.entryId, entry.storeId, entry.businessDay, entry.customerName, entry.amount, entry.amountType, entry.ownerPersonId, entry.ownerName, entry.reporterPersonId, entry.note, entry.status, entry.disputed, entry.createdAt],
+          );
+        }
+        await query(
+          `UPDATE ${relation('performance_drafts')} SET status=$1, payload_json=$2, closed_at=$3 WHERE draft_id=$4 AND status=$5`,
+          [draft.status, JSON.stringify(draft.payload), draft.closedAt, draft.draftId, 'confirming'],
+        );
+        let total = 0;
+        for (const entry of entries) {
+          const found = await query(`SELECT * FROM ${relation('performance_entries')} WHERE entry_id=$1`, [entry.entryId]);
+          if (found.rows.length) total += 1;
+        }
+        return total;
+      });
+    },
+    async commitConfirmingAppointments(draft, appointments) {
+      return client.transaction(async query => {
+        for (const appointment of appointments) {
+          await query(
+            `INSERT INTO ${relation('performance_appointments')} (appointment_id, store_id, employee_person_id, customer_name, when_text, note, status, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (appointment_id) DO NOTHING`,
+            [appointment.appointmentId, appointment.storeId, appointment.employeePersonId, appointment.customerName, appointment.whenText, appointment.note, appointment.status, appointment.createdAt],
+          );
+        }
+        const updated = await query(
+          `UPDATE ${relation('performance_drafts')} SET status=$1, payload_json=$2, closed_at=$3 WHERE draft_id=$4 AND status=$5 RETURNING draft_id`,
+          [draft.status, JSON.stringify(draft.payload), draft.closedAt, draft.draftId, 'confirming'],
+        );
+        let total = 0;
+        for (const appointment of appointments) {
+          const found = await query(`SELECT * FROM ${relation('performance_appointments')} WHERE appointment_id=$1`, [appointment.appointmentId]);
+          if (found.rows.length) total += 1;
+        }
+        return { total, claimed: updated.rows.length === 1 };
+      });
+    },
+    async confirmPendingAppointment(appointmentId) {
+      const updated = await client.query(
+        `UPDATE ${relation('performance_appointments')} SET status=$1 WHERE appointment_id=$2 AND status=$3 RETURNING appointment_id`,
+        ['confirmed', appointmentId, 'pending_manager'],
+      );
+      if (updated.rows.length === 1) return 'confirmed';
+      const row = await one(`SELECT * FROM ${relation('performance_appointments')} WHERE appointment_id=$1`, [appointmentId]);
+      if (!row) return 'missing';
+      return text(row.status) === 'confirmed' ? 'already' : 'missing';
     },
     async claimDraftNotice(draftId, field) {
       const column = field === 'reminder' ? 'reminder' : 'void_notice';

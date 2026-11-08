@@ -5,7 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {installControlledRealContainerTransport} from './controlled-real-container-transport.mjs';
 import {restoreExistingFrontagentHost} from './frontagent-pilot-restoration.mjs';
 import {prepareExistingFrontagentPilot} from './frontagent-controlled-pilot.mjs';
-import {loadFrontClawDatabaseEnv,frontClawDbNetwork,FRONT_CLAW_DB_ENV_FILE} from './front-claw-db-attach.mjs';
+import {loadFrontClawDatabaseEnv,frontClawDbNetwork,frontClawDatabaseEnvFile} from './front-claw-db-attach.mjs';
 
 const dbg=(event,fields={})=>{if(process.env.WECOM_DEBUG==='1')try{console.log('WECOM_DEBUG '+JSON.stringify({t:new Date().toISOString(),event,...fields}));}catch{}};
 const fail=code=>{throw Error('FRONTAGENT_LIVE_'+code);};
@@ -81,12 +81,14 @@ export async function startControlledLiveWorker(options){
  const shutdown=async()=>{if(timer)clearTimeout(timer);return closeResources();};
  try{
   checkProvider();
-  const databaseUrl=process.env.FRONT_CLAW_DATABASE_URL||loadFrontClawDatabaseEnv();
+  const databaseEnvFile=frontClawDatabaseEnvFile();
+  const databaseUrl=process.env.FRONT_CLAW_DATABASE_URL||loadFrontClawDatabaseEnv(databaseEnvFile);
   if(databaseUrl)process.env.FRONT_CLAW_DATABASE_URL=databaseUrl;
+  if(!process.env.FRONT_CLAW_DATABASE_URL?.trim())throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE_URL');
   // The performance store is opened by the role-eval pilot. This worker does not import
   // compiled siblings from integrations/native; that directory is absent on the live base.
   await preloadOriginalRestorationBoundary(root);
-  transport=installControlledRealContainerTransport({...transportOptions,databaseNetwork:frontClawDbNetwork(),databaseEnvFile:FRONT_CLAW_DB_ENV_FILE});
+  transport=installControlledRealContainerTransport({...transportOptions,databaseNetwork:frontClawDbNetwork(),databaseEnvFile});
   const load=relative=>import(pathToFileURL(path.join(root,relative)).href);
   const db=await load('src/db.js'),config=await load('src/config.js'),context=await load('src/web-context.js');
   await load('src/web.js');

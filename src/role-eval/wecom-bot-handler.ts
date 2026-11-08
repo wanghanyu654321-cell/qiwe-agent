@@ -12,21 +12,49 @@ import type {PendingReportOwner} from './wecom-bot-task-store.js';
 import {looksLikeReport,validateExtractedReport} from './wecom-bot-report-model.js';
 import {REPORT_GUIDE,isShortConfirm,looksLikeReportAttempt,parseSummaryIntent} from './wecom-bot-intents.js';
 import {auditUnrecognizedReport,SUMMARY_DENIED,botToolAllowed,createBotReportTools,isCompleteReport,tryParseReport,withSupersedes} from './wecom-bot-report-tools.js';
+import {parseReportText} from './report-parse.js';
+import {matchExactTool, parseTargetUtterance} from './assistant-commands.js';
+import {parseAppointmentUtterance} from './appointments.js';
+import type {WorkbenchRole} from './workbench-access.js';
+/** Store echo and confirm must finish inside the inbound request. An ack is not the result. */
+export const STORE_RESULT_BUDGET_MS=15_000;
+export interface StoreBusinessActor {memberId:string;accountId:string;personId:string;displayName:string;storeId:string;storeName:string;tier:'employee'|'manager'|'owner';roles:readonly WorkbenchRole[];}
+/** The store opened at startup. Sheet text and its confirmations write here, not into a role chat. */
+export interface StoreBusinessPort {
+ remember(actor:StoreBusinessActor):Promise<void>;
+ hasOpenDraft(memberId:string):Promise<boolean>;
+ handleMessage(input:{memberId:string;text:string;signal?:AbortSignal;deadline?:number}):Promise<{replies:readonly string[];ledgerSettled?:boolean}>;
+}
+/** Store business the unified handler already owns. Role-topic chat stays on the granted workspace. */
+export function isStoreUtterance(text:string,businessDay:string):boolean{
+ const trimmed=text.trim();
+ if(!trimmed)return false;
+ if(parseReportText(trimmed,businessDay).status!=='none')return true;
+ if(matchExactTool(trimmed)||parseTargetUtterance(trimmed)||parseAppointmentUtterance(trimmed))return true;
+ if(/^确认预约(?:\s+\d+|\s+[0-9a-f]{6,64})/i.test(trimmed)||/^预约(?:\s|$)/.test(trimmed)||trimmed==='入账结果'||trimmed==='预约结果'||trimmed==='预约列表')return true;
+ return /^(?:你好|您好|在吗|hi|hello)[!！。.~～]*$/i.test(trimmed);
+}
+export function isStoreFollowUp(text:string):boolean{
+ const trimmed=text.trim();
+ return trimmed==='全部确认'||trimmed==='取消'||isShortConfirm(trimmed)||/^改\s*\d+/.test(trimmed)||/^删\s*\d+$/.test(trimmed)||/^\d+\s*是\s+\S+$/.test(trimmed);
+}
 export interface BotReportOptions {
  mode:'isolated-synthetic';authority:ReturnType<typeof createWecomBotContext>;ledger:ManagerStore;
  artifacts?:ManagerArtifactStore;
  tasks?:ReturnType<typeof createBotTasks>;
  conversations?:ReturnType<typeof createBotConversations>;
  scope:{tenant:string;store:string;workspace:string};
- employees:readonly {accountId:string;employeeId:string;employeeName:string}[];
+ employees:readonly {accountId:string;employeeId:string;employeeName:string;storeName?:string}[];
  /** Already authenticated SDK callback snapshot, never an HTTP/client payload. Synchronous and bounded by caller. */
  readEvent():unknown;now?:()=>Date;
  /** When set, every text message is handled by the single Front Claw assistant. */
  unifiedAssistant?: { handleMessage(input: { memberId: string; text: string; signal?: AbortSignal; deadline?: number }): Promise<{ replies: readonly string[] }> };
+ /** Sheet reports and their 对/改/删. Uses the store from prepare/openPerformanceStore when that ran. */
+ storeAssistant?: StoreBusinessPort;
  /** Trusted synchronous reservation; a persisted file result can short-circuit regeneration on replay. */
  beforeWork?(value:{context:WecomBotContext;event:Readonly<BotEvent>;actor:Readonly<StaffContext>},checkActive:()=>void):{replayState:'none'|'reserved'|'completed-report'|'completed-nonreport';cached?:BotReportResult}|void;
 }
-export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file'|'task';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;taskId?:string;taskStatus?:string;reply:BotReplyPlan;}
+export interface BotReportResult {status:'pending'|'confirmed'|'needs-input'|'not-found'|'conflict'|'summary'|'file'|'task';reportId?:string;snapshotId?:string;attachment?:BotReplyAttachment;taskId?:string;taskStatus?:string;ledgerSettled?:true;reply:BotReplyPlan;}
 export interface BotReplyExecution {beforeReply?:(scope:BotReadScope)=>Promise<void>;context:WecomBotContext;event:BotEvent;actor:StaffContext;result:BotReportResult;}
 export function createBotReportHandler(options:BotReportOptions){
  if(options.mode!=='isolated-synthetic')throw Error('invalid_report_catalog');
@@ -81,7 +109,29 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
   // Natural-language summary request (manager-only, read-only); never sent to the model or the report path.
   const nlSummary=conversations&&event.action.kind==='text'&&!taskCommand?parseSummaryIntent(event.action.text.trim(),businessDay):undefined;
   let reportAction:{kind:'confirm'}|{kind:'report';text:string}|{kind:'revise-help'}|{kind:'guide'}|undefined;
-  if(reportTools&&!reservedReply&&!taskCommand&&!nlSummary&&event.action.kind==='text'&&context.roles.length>0){
+  const rawText=event.action.kind==='text'?event.action.text.trim():'';
+  const managerOpen=pendingReports?.current(pendingOwner,nowAt);
+  const storeUtterance=!!rawText&&!taskCommand&&!reservedReply&&!managerOpen&&(isStoreUtterance(rawText,businessDay)||isStoreFollowUp(rawText));
+  let storeTurn=false,storeContent:string|undefined,storeResultAfterBudget=false,ledgerSettled=false;
+  if(options.storeAssistant&&!options.unifiedAssistant&&storeUtterance){
+   storeTurn=true;
+   const budgetDeadline=Math.min(input.deadline,performance.now()+STORE_RESULT_BUDGET_MS);
+   if(input.signal.aborted||performance.now()>=budgetDeadline)storeContent='Front Claw：这次没处理完，没有入账。请再发一次。';
+   else{
+    const child=new AbortController(),abort=()=>child.abort();
+    const timer=setTimeout(abort,Math.max(0,budgetDeadline-performance.now()));
+    const onParent=()=>abort();
+    input.signal.addEventListener('abort',onParent);
+    try{
+     const listed=employees.find(employee=>employee.accountId===context.identity.accountId);
+     if(!child.signal.aborted)await options.storeAssistant.remember({memberId:event.memberId,accountId:context.identity.accountId,personId:actor.employeeId,displayName:actor.employeeName,storeId:scope.store,storeName:listed?.storeName||scope.store,tier:context.roles.includes('manager')?'manager':'employee',roles:context.roles});
+     const handled=child.signal.aborted&&rawText!=='入账结果'?{replies:['Front Claw：这次没处理完，没有入账。请再发一次。']}:await options.storeAssistant.handleMessage({memberId:event.memberId,text:rawText,signal:child.signal,deadline:budgetDeadline});
+     storeContent=handled.replies.map(line=>line.trim()).filter(Boolean).join('\n')||'Front Claw：这次没有处理成。';
+     ledgerSettled=handled.ledgerSettled===true;
+    }finally{clearTimeout(timer);input.signal.removeEventListener('abort',onParent);}
+   }
+  }
+  if(!storeTurn&&reportTools&&!reservedReply&&!taskCommand&&!nlSummary&&event.action.kind==='text'&&context.roles.length>0){
    const raw=event.action.text.trim(),open=pendingReports!.current(pendingOwner,nowAt),revise=/^改(?:$|[\s:：]+([\s\S]*)$)/.exec(raw);
    if(open&&isShortConfirm(raw))reportAction={kind:'confirm'};
    else if(open&&revise){const rest=(revise[1]??'').trim(),parsed=rest?tryParseReport(rest,businessDay):undefined;reportAction=parsed&&isCompleteReport(parsed)?{kind:'report',text:rest}:{kind:'revise-help'};}
@@ -106,7 +156,7 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
     }
    }
   }
-  const conversationResult=reportAction||nlSummary?undefined:await conversations?.route(context,event,input,reservation?.replayState??'none');
+  const conversationResult=storeTurn||reportAction||nlSummary?undefined:await conversations?.route(context,event,input,reservation?.replayState??'none');
   // With role conversations enabled, unrouted plain text gets a hint instead of a silent denial. Manager is
   // no longer a bypass: it only grants the summary tool. Explicit commands still reach their handlers.
   const plainText=event.action.kind==='text'?event.action.text.trim():'';
@@ -116,7 +166,7 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
   const summaryReplayDenied=!!conversations&&!!reservedReply&&!!managerCommand&&managerCommand.kind!=='correction'&&managerCommand.kind!=='invalid'&&!botToolAllowed('get_summary',context.roles);
   const selectHint=!!conversations&&!taskCommand&&!conversationResult&&!reportAction&&event.action.kind==='text'&&!explicitCommand&&context.roles.length>0&&!reservedReply;
   if(summaryReplayDenied||taskCommand&&!context.roles.includes(taskCommand.role)||conversations&&!context.roles.length||!conversations&&(!taskCommand&&!conversationResult&&!context.roles.includes('manager')||conversationResult?.reportText&&!context.roles.includes('manager')))throw Error('access_denied');
-  const plan=(status:BotReportResult['status'],content:string,report?:StaffReport,card=false):BotReportResult=>({status,...(report?{reportId:report.id}:{}),reply:{reqId:event.reqId,body:{msgtype:(card=card&&options.mode!=='controlled-real-pilot')?'stream_with_template_card':'stream',stream:{id:hash('report-reply|'+event.reqId),finish:true,content},...(card&&report?{template_card:{card_type:'button_interaction' as const,main_title:{title:'核对本人报数'},task_id:'report-'+report.id+'-'+hash(JSON.stringify([context.channel.corpId,event.botId,event.memberId,event.messageId,event.reqId])).slice(0,32),button_list:[{text:'确认入账',key:'confirm:'+report.hash,style:1 as const}]}}:{})}}});
+  const plan=(status:BotReportResult['status'],content:string,report?:StaffReport,card=false):BotReportResult=>({status,...(report?{reportId:report.id}:{}),...(ledgerSettled?{ledgerSettled:true as const}:{}),reply:{reqId:event.reqId,body:{msgtype:(card=card&&options.mode!=='controlled-real-pilot')?'stream_with_template_card':'stream',stream:{id:hash('report-reply|'+event.reqId),finish:true,content},...(card&&report?{template_card:{card_type:'button_interaction' as const,main_title:{title:'核对本人报数'},task_id:'report-'+report.id+'-'+hash(JSON.stringify([context.channel.corpId,event.botId,event.memberId,event.messageId,event.reqId])).slice(0,32),button_list:[{text:'确认入账',key:'confirm:'+report.hash,style:1 as const}]}}:{})}}});
   const yuan=(cents:number)=>{const abs=Math.abs(cents),whole=String(Math.trunc(abs/100)).replace(/\B(?=(\d{3})+(?!\d))/g,','),frac=abs%100;return (cents<0?'-':'')+whole+(frac?'.'+String(frac).padStart(2,'0'):'')+' 元';};
   const day=(d:string)=>d===businessDay?'今天':`${Number(d.slice(5,7))}月${Number(d.slice(8,10))}日`;
   const span=(a:string,b:string)=>a===b?day(a):a.slice(0,7)===businessDay.slice(0,7)&&a.endsWith('-01')&&b.slice(0,7)===a.slice(0,7)&&Number(b.slice(8))>=28?'本月':`${day(a)}至${day(b)}`;
@@ -146,13 +196,14 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
   const fileView=(info:ManagerArtifact):BotReportResult=>({...plan('file',`文件：${info.filename}\n快照编号：${info.snapshotHash}\n查询文件 ${info.snapshotHash}`),snapshotId:info.snapshotHash,attachment:{...info}});
   let exportSnapshot:string|undefined;
   let unifiedContent:string|undefined;
-  if(options.unifiedAssistant&&event.action.kind==='text'&&!reservedReply){
+  if(!storeTurn&&options.unifiedAssistant&&event.action.kind==='text'&&!reservedReply){
    const unified=await options.unifiedAssistant.handleMessage({memberId:event.memberId,text:event.action.text,signal:input.signal,deadline:input.deadline});
    unifiedContent=unified.replies.map(line=>line.trim()).filter(Boolean).join('\n')||'Front Claw：这次没有处理成。';
   }
   let result:BotReportResult;
   try{
    result=await authority.withCurrent(context,checkActive=>{
+    if(storeContent!==undefined)return plan('pending',storeContent);
     if(unifiedContent!==undefined)return plan('pending',unifiedContent);
     if(reservedReply)return structuredClone(reservedReply);
     if(!conversations){const replay=beforeWork?.({context,event:structuredClone(event),actor:{...actor}},checkActive);checkActive();if(replay?.cached)return structuredClone(replay.cached);}
@@ -204,7 +255,8 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
    }));}
   }catch(error){
    const code=error instanceof Error?error.message:'';
-   if(['task_conflict','task_attempt_conflict','task_reference_changed','task_command_conflict'].includes(code))result=plan('conflict','任务来源或原引用冲突，未重新执行。请核对岗位与原任务编号并查询，必要时联系管理员。');
+   if(storeContent!==undefined&&(code==='authority_cancelled'||code==='authority_timeout')){result=plan('pending',storeContent);storeResultAfterBudget=true;}
+   else if(['task_conflict','task_attempt_conflict','task_reference_changed','task_command_conflict'].includes(code))result=plan('conflict','任务来源或原引用冲突，未重新执行。请核对岗位与原任务编号并查询，必要时联系管理员。');
    else if(['message_conflict','overlapping_report','confirmation_conflict','correction_conflict','report_version_conflict'].includes(code))result=plan('conflict','该消息或期间与已有记录冲突，未重复入账。请查询原报告，使用当前有效报告编号与明细序号发起更正。');
    else if(code==='invalid_correction_reference')result=plan('needs-input','请核对本人已确认报告的完整编号、明细序号和新金额。');
    else if(code==='snapshot_changed')result=plan('conflict','原汇总之后账本已变化，未发送文件。请重新发送经营汇总指令，按新快照导出；旧汇总仍可查询。');
@@ -219,6 +271,7 @@ function createReportHandler(options:Omit<BotReportOptions,'mode'>&{mode:'isolat
     button_list:[{text:'核对结果',key:'confirm:'+event.action.hash,style:1}]}};
   }
   // A committed report survives response failure. Do not roll it back or mark it delivered.
-  await authority.assertCurrent(context);issued.set(result,{context,event:structuredClone(event),actor:{...actor},result:structuredClone(result),...(conversationResult&&conversations?.beforeReply(conversationResult)?{beforeReply:conversations.beforeReply(conversationResult)!}:{})});return result;
+  // A store confirm that already finished keeps its ledger result when the request budget ends.
+  if(!storeResultAfterBudget)await authority.assertCurrent(context);issued.set(result,{context,event:structuredClone(event),actor:{...actor},result:structuredClone(result),...(conversationResult&&conversations?.beforeReply(conversationResult)?{beforeReply:conversations.beforeReply(conversationResult)!}:{})});return result;
  }};
 }

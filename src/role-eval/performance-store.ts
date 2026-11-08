@@ -1,4 +1,14 @@
+import { createHash } from 'node:crypto';
 import type { WorkbenchRole } from './workbench-access.js';
+
+/** Stable ledger id for one confirmed draft line. A replay inserts the same row. */
+export function confirmEntryId(draftId: string, index: number): string {
+  return createHash('sha256').update(`front-claw-confirm\n${draftId}\n${index}`).digest('hex');
+}
+/** Stable id for one appointment line on an employee-confirmed draft. A replay does not create another row. */
+export function appointmentLineId(draftId: string, index: number): string {
+  return createHash('sha256').update(`front-claw-appointment\n${draftId}\n${index}`).digest('hex');
+}
 
 export type Tier = 'employee' | 'manager' | 'owner';
 
@@ -92,7 +102,7 @@ export interface Draft {
   expiresAt: string;
   kind: 'report' | 'appointment';
   payload: DraftPayload;
-  status: 'pending' | 'confirmed' | 'void';
+  status: 'pending' | 'confirming' | 'confirmed' | 'void';
   reminder: 'none' | 'claimed' | 'sent' | 'unknown';
   voidNotice: 'none' | 'claimed' | 'sent' | 'unknown';
   createdAt: string;
@@ -150,6 +160,21 @@ export interface PerformanceStore {
   saveDraft(draft: Draft): Promise<void>;
   /** One caller wins the none -> claimed transition. A lost claim must not send. */
   claimDraftNotice(draftId: string, field: 'reminder' | 'voidNotice'): Promise<boolean>;
+  /** One caller moves a pending draft to confirming. A lost claim must not insert again. */
+  claimPendingDraft(draftId: string): Promise<Draft | null>;
+  /**
+   * Insert these entries and store the draft's next status in one step.
+   * Repeating the same entry ids does not add rows. The draft update runs only while it is confirming.
+   */
+  commitConfirmingDraft(draft: Draft, entries: readonly LedgerEntry[]): Promise<number>;
+  /**
+   * Insert employee-submitted appointments and store the draft's next status.
+   * Existing ids stay as they are, including a manager confirmation already recorded.
+   * claimed is true only for the caller that moved the draft out of confirming.
+   */
+  commitConfirmingAppointments(draft: Draft, appointments: readonly Appointment[]): Promise<{ total: number; claimed: boolean }>;
+  /** Move one pending_manager row to confirmed. A second call does not create a row. */
+  confirmPendingAppointment(appointmentId: string): Promise<'confirmed' | 'already' | 'missing'>;
   getDraft(draftId: string): Promise<Draft | null>;
   getOpenDraft(reporterPersonId: string): Promise<Draft | null>;
   listDrafts(filter?: { status?: Draft['status']; kind?: Draft['kind'] }): Promise<Draft[]>;
@@ -278,6 +303,43 @@ export class MemoryPerformanceStore implements PerformanceStore {
     if (!draft || draft[field] !== 'none') return false;
     draft[field] = 'claimed';
     return true;
+  }
+  async claimPendingDraft(draftId: string): Promise<Draft | null> {
+    const draft = this.drafts.find(row => row.draftId === draftId);
+    if (!draft || draft.status !== 'pending') return null;
+    draft.status = 'confirming';
+    return clone(draft);
+  }
+  async commitConfirmingDraft(draft: Draft, entries: readonly LedgerEntry[]): Promise<number> {
+    const current = this.drafts.find(row => row.draftId === draft.draftId);
+    if (current?.status === 'confirming') {
+      for (const entry of entries) {
+        if (!this.entries.some(row => row.entryId === entry.entryId)) this.entries.push(clone(entry));
+      }
+      const index = this.drafts.findIndex(row => row.draftId === draft.draftId);
+      this.drafts[index] = clone(draft);
+    }
+    return entries.filter(entry => this.entries.some(row => row.entryId === entry.entryId)).length;
+  }
+  async commitConfirmingAppointments(draft: Draft, appointments: readonly Appointment[]): Promise<{ total: number; claimed: boolean }> {
+    const current = this.drafts.find(row => row.draftId === draft.draftId);
+    const claimed = current?.status === 'confirming';
+    if (claimed) {
+      for (const appointment of appointments) {
+        if (!this.appointments.some(row => row.appointmentId === appointment.appointmentId)) this.appointments.push(clone(appointment));
+      }
+      const index = this.drafts.findIndex(row => row.draftId === draft.draftId);
+      this.drafts[index] = clone(draft);
+    }
+    return { total: appointments.filter(appointment => this.appointments.some(row => row.appointmentId === appointment.appointmentId)).length, claimed };
+  }
+  async confirmPendingAppointment(appointmentId: string): Promise<'confirmed' | 'already' | 'missing'> {
+    const row = this.appointments.find(appointment => appointment.appointmentId === appointmentId);
+    if (!row) return 'missing';
+    if (row.status === 'confirmed') return 'already';
+    if (row.status !== 'pending_manager') return 'missing';
+    row.status = 'confirmed';
+    return 'confirmed';
   }
   async getDraft(draftId: string): Promise<Draft | null> {
     return clone(this.drafts.find(row => row.draftId === draftId) ?? null);

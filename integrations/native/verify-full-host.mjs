@@ -150,7 +150,7 @@ directory=fs.mkdtempSync(path.join(os.tmpdir(),'qiwe-full-host-'));
  if(options.frontagentExistingInput)for(const name of ['wecom-bot-bindings','native-bot-identity','wecom-bot-context'])compilePublic(name);
  fs.copyFileSync(path.join(here,'role-workspace-overlay.mjs'),path.join(directory,'test-support/role-workspace-overlay.mjs'));
  fs.copyFileSync(path.join(here,'conversation-overlay.mjs'),path.join(directory,'test-support/conversation-overlay.mjs'));
- if(options.controlledRealPilot)for(const name of ['frontagent-controlled-pilot.mjs','frontagent-pilot-restoration.mjs','frontagent-controlled-live-worker.mjs','frontagent-controlled-live-entry.mjs','controlled-real-container-transport.mjs','real-container-boundary.mjs','full-host-local-docker.mjs'])fs.copyFileSync(path.join(here,name),path.join(directory,'test-support',name));
+ if(options.controlledRealPilot)for(const name of ['frontagent-controlled-pilot.mjs','frontagent-pilot-restoration.mjs','frontagent-controlled-live-worker.mjs','frontagent-controlled-live-entry.mjs','front-claw-db-attach.mjs','controlled-real-container-transport.mjs','real-container-boundary.mjs','full-host-local-docker.mjs'])fs.copyFileSync(path.join(here,name),path.join(directory,'test-support',name));
  compilePublic('offline-bot-sdk',path.join(project,'tests/fixtures/offline-bot-sdk.ts'));
  // Test-only observational exports. Original main() call and catch stay intact.
  fs.appendFileSync(path.join(directory,'src/index.ts'),'\nexport { queue as fullHostQueue, appointmentBootGate as fullHostBootGate };\n');

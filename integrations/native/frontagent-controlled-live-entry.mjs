@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {connectRunnerDatabaseNetwork,disconnectRunnerDatabaseNetwork,loadFrontClawDatabaseEnv} from './front-claw-db-attach.mjs';
+import {connectRunnerDatabaseNetwork,disconnectRunnerDatabaseNetwork,frontClawDatabaseEnvFile,loadFrontClawDatabaseEnv} from './front-claw-db-attach.mjs';
 
 export function validatePilotPrivateInput(value){
  const invalid=()=>{throw Error('CONTROLLED_REAL_PRIVATE_INPUT_INVALID');};
@@ -48,8 +48,9 @@ function dockerInvoke(args){
 }
 async function main(){
  if(process.platform!=='linux'||process.env.QIWE_CONTROLLED_REAL_PILOT!=='1')throw Error('CONTROLLED_REAL_ENTRY_FORBIDDEN');
- const fromFile=loadFrontClawDatabaseEnv();
+ const fromFile=loadFrontClawDatabaseEnv(frontClawDatabaseEnvFile());
  if(fromFile&&!process.env.FRONT_CLAW_DATABASE_URL)process.env.FRONT_CLAW_DATABASE_URL=fromFile;
+ if(!process.env.FRONT_CLAW_DATABASE_URL?.trim())throw Error('FRONT_CLAW_DATABASE_UNAVAILABLE_URL');
  const runner=process.env.QIWE_LOCAL_DOCKER_HOST;
  if(runner)connectRunnerDatabaseNetwork({invoke:dockerInvoke,runner});
  const scope=JSON.parse(process.env.QIWE_CONTROLLED_REAL_SCOPE??'null');

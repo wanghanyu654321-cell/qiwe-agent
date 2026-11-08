@@ -37,7 +37,7 @@ function createDelivery(options:DeliveryOptions){
  return {
  async handle(request:BotContextRequest):Promise<BotDeliveryResult>{
   checkOpen();const input={signal:request.signal,deadline:request.deadline,correlationId:request.correlationId},result=await handler.handle(input);
-  return handler.consumeReply(result,async value=>{
+  try{return await handler.consumeReply(result,async value=>{
    const {context,event,actor}=value;
    const readReportDelivery=()=>value.result.reportId?ledger.getReport(actor,value.result.reportId)?.delivery:undefined;
    const report=value.result.reportId?ledger.getReport(actor,value.result.reportId):undefined;
@@ -67,7 +67,11 @@ function createDelivery(options:DeliveryOptions){
    let reportDelivery=confirmation&&report?.delivery?{...report.delivery,state:delivery.state,attempt:claim.reportAttempt!,apiErrorCode:delivery.apiErrorCode,msgid:delivery.msgid,detail:delivery.detail,...(delivery.ackReqId?{ackReqId:delivery.ackReqId}:{})}:undefined;
    try{reportDelivery=readReportDelivery();}catch{deferred=true;}
    return {result,delivery,...(reportDelivery?{reportDelivery}:{}),...(deferred?{deferred:true}:{})};
-  });
+  });}catch(error){
+   const code=error instanceof Error?error.message:'';
+   if(result.ledgerSettled&&(code==='authority_timeout'||code==='authority_cancelled'))return {result,delivery:null,deferred:true};
+   throw error;
+  }
  },
  async recover(request:BotContextRequest,id:string):Promise<{delivery:ReportDelivery;deferred?:boolean;suppressed?:boolean}>{
   checkOpen();const input={signal:request.signal,deadline:request.deadline,correlationId:request.correlationId};

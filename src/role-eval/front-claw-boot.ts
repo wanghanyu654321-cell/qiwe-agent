@@ -2,7 +2,9 @@ import { statSync } from 'node:fs';
 import path from 'node:path';
 import { applyDirectoryMigration, readSqliteDirectory } from './directory-store.js';
 import { FRONT_CLAW_DATABASE_URL, openPerformanceStore, type OpenedPerformanceStore } from './performance-open.js';
+import type { PerformanceStore } from './performance-store.js';
 import { createWecomBotHandler, type WecomBotHandlerOptions } from './wecom-bot-unified-handler.js';
+import type { StoreBusinessActor, StoreBusinessPort } from './wecom-bot-handler.js';
 
 /** Base SQLite file holding employee bindings and people aliases. Optional. */
 export const FRONT_CLAW_SQLITE_PATH = 'FRONT_CLAW_SQLITE_PATH';
@@ -76,6 +78,24 @@ export async function bootFrontClaw(options: {
       timer = undefined;
       await opened.close();
     },
+  };
+}
+
+/** Bind sheet/confirm calls to one already opened store. prepare() passes the store from openPerformanceStore. */
+export function createStoreBusinessPort(store: PerformanceStore, handler: ReturnType<typeof createWecomBotHandler>): StoreBusinessPort {
+  return {
+    async remember(actor: StoreBusinessActor) {
+      await store.savePerson({
+        personId: actor.personId, accountId: actor.accountId, memberId: actor.memberId, displayName: actor.displayName,
+        storeId: actor.storeId, storeName: actor.storeName, tier: actor.tier, roles: [...actor.roles], active: true,
+      });
+    },
+    async hasOpenDraft(memberId) {
+      const person = await store.getPersonByMember(memberId);
+      if (!person) return false;
+      return !!(await store.getOpenDraft(person.personId));
+    },
+    handleMessage: input => handler.handleMessage(input),
   };
 }
 
